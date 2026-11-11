@@ -316,7 +316,7 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter):
             return
         if isinstance(vd.init, ast.StrLit) and isinstance(vd.type, ast.ArrayType):
             raw = vd.init.value.encode("utf-8", "surrogateescape") + b"\0"
-            n = 0 if vd.type.size is None else int(vd.type.size.value)
+            n = 0 if vd.type.size is None else self._arrlen(vd.type, vd)
             if len(raw) > n:
                 self._err(vd.init, "string initializer longer than char[{}] (§4)"
                           .format(n), "initializer")
@@ -324,13 +324,16 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter):
                 self._e("movq ${}, %rax".format(b))
                 self._e("movb %al, {}(%rbp)".format(off + i))
             return
+        if isinstance(vd.type, ast.ArrayType):
+            self._err(vd, "array initializer must be a brace list or string "
+                      "literal (§4)", type(vd.init).__name__)
         self._emit_expr(vd.init)
         self._store(ty, "{}(%rbp)".format(off), at=vd)
 
     def _init_local(self, off: int, ty: ast.Node, init: ast.InitList, at) -> None:
         if isinstance(ty, ast.ArrayType):
             esz = self._size(ty.inner, at)
-            n = int(ty.size.value) if ty.size is not None else len(init.items)
+            n = self._arrlen(ty, at) if ty.size is not None else len(init.items)
             if len(init.items) > n:
                 self._err(at, "too many initializers for {} elements (§4)"
                           .format(n), "initializer")

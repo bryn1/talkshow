@@ -19,12 +19,28 @@ KEYWORDS = frozenset({
 
 DIGITS = set("0123456789")
 HEX_DIGITS = set("0123456789abcdefABCDEF")
+OCT_DIGITS = set("01234567")
 ID_START = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_")
 ID_CHARS = ID_START | DIGITS
 
-# Pinned escape set (§3): \n \t \\ \" \0 \xHH; \uOOO is octal (plain \0 form);
-# \' is accepted inside char literals only.
-_SIMPLE_ESCAPES = {"n": "\n", "t": "\t", "\\": "\\", '"': '"', "0": "\0"}
+# Pinned escape set (§3): \n \t \\ \" \0ddd \xHH. \' is accepted inside char
+# literals only. Anything else — including \u — is an unknown escape.
+_SIMPLE_ESCAPES = {"n": "\n", "t": "\t", "\\": "\\", '"': '"'}
+
+
+def _esc_byte(v: int) -> str:
+    """An escape's byte value 0-255 as one character. Values >= 0x80 stay a
+    SINGLE byte: they are carried as their surrogate-escape code point so
+    encode("utf-8", "surrogateescape") in the emitters yields one byte — the
+    C rule (gcc: \\x80 is byte 0x80, never re-encoded as UTF-8)."""
+    return chr(v) if v < 0x80 else chr(0xDC00 + v)
+
+
+def char_value(s: str) -> int:
+    """Char-literal int value; maps an escape byte carried as a surrogate
+    (see _esc_byte) back to its 0-255 value."""
+    o = ord(s)
+    return o - 0xDC00 if 0xDC80 <= o <= 0xDCFF else o
 
 _PUNCT = [
     "<<=", ">>=", "...",
@@ -220,15 +236,15 @@ class Lexer:
                         raise DiagError("lex", src.file, src.line, i + 1,
                                         "'\\x' escape needs at least one hex digit",
                                         text[i:k + 1])
-                    buf.append(chr(int(text[j:k], 16)))
+                    buf.append(_esc_byte(int(text[j:k], 16)))
                     i = k
                     continue
-                if e == "u":
-                    j = i + 2
+                if e == "0":                   # \0ddd: leading \0 + up to 3
+                    j = i + 2                  # octal digits (C rule, §3)
                     k = j
-                    while k < n and text[k] in "01234567" and k - j < 3:
+                    while k < n and text[k] in OCT_DIGITS and k - j < 3:
                         k += 1
-                    buf.append(chr(int(text[j:k], 8) if k > j else 0))
+                    buf.append(_esc_byte(int("0" + text[j:k], 8) & 0xFF))
                     i = k
                     continue
                 if quote == "'" and e == "'":
@@ -255,7 +271,7 @@ class Lexer:
             if len(s) > 1:
                 raise DiagError("lex", src.file, src.line, col,
                                 "char literal too long", raw)
-            toks.append(Token("char", raw, src.file, src.line, col, ord(s)))
+            toks.append(Token("char", raw, src.file, src.line, col, char_value(s)))
         return i
 
 

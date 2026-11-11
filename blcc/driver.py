@@ -94,6 +94,13 @@ def main(argv: List[str]) -> int:
     except DiagError as exc:
         sys.stderr.write(str(exc) + "\n")
         return 2
+    except Exception as exc:            # §2/§8 belt: a raw traceback is NEVER
+        # a permitted compiler behaviour — every internal fault becomes a
+        # §8-format diagnostic, exit 2, and NOTHING is emitted.
+        sys.stderr.write("{}:0:0: asm: internal compiler error, found "
+                         "'{}: {}'\n".format(in_path, type(exc).__name__,
+                                             str(exc).replace("'", "")))
+        return 2
 
     os.makedirs(TMP_DIR, exist_ok=True)
     stem = os.path.basename(out_path) or "out"

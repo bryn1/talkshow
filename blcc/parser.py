@@ -14,10 +14,11 @@ from typing import Dict, List, Optional, Tuple
 from blcc import ast
 from blcc.lexer import DiagError, Lexer, SourceLine, Token, TokenStream
 from blcc.expr_parser import ExprParser
+from blcc.runtime import BUILTINS as _RUNTIME_BUILTINS
 
-# §6 implicit builtins: always callable, never re-declarable.
-BUILTINS = frozenset({"_sys_write", "_sys_exit", "_sys_open", "_sys_read",
-                      "strlen", "strcmp"})
+# §6 implicit builtins: always callable, never re-declarable. The NAME set is
+# DERIVED from blcc/runtime.py's BUILTINS — one table, no mirrored list (P3-4).
+BUILTINS = frozenset(_RUNTIME_BUILTINS)
 
 _TYPE_KW = ("char", "short", "int", "long", "void")
 _DECL_START_KW = _TYPE_KW + ("const", "struct", "enum", "static", "typedef",

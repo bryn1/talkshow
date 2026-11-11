@@ -14,9 +14,9 @@ instruction itself. write=1, open=2, read=0, exit=60.
 """
 from __future__ import annotations
 
-# name -> (argc, return-kind). §6-pinned signatures, always in scope; the
-# parser already refuses user re-declaration (blcc.parser.BUILTINS mirrors
-# these names from the grammar side).
+# name -> (argc, return-kind). §6-pinned signatures, always in scope; this is
+# the ONE builtin table — blcc/parser.py DERIVES its re-declaration guard
+# (parser.BUILTINS) from these names (P3-4: one mechanism, one source).
 BUILTINS = {
     "_sys_write": (3, "long"),   # long _sys_write(long fd, const char *buf, long len)
     "_sys_exit": (1, "void"),    # void _sys_exit(long code) — never returns

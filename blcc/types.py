@@ -39,8 +39,64 @@ class TypeMap:
             esz = self._size(ty.inner, at)
             if ty.size is None:        # parameter: decays to pointer (§4)
                 return 8
-            return esz * int(ty.size.value)
+            return esz * self._arrlen(ty, at)
         self._err(at or self.tu, "cannot size this type", type(ty).__name__)
+
+    # -- constant-folded array sizes (P1-2: §4 sizes are expressions) ------------
+
+    def _fold_const(self, n, at) -> int:
+        """Constant-fold an array-size expression (§4: integer literals, enum
+        constants, + - * / % and parentheses; gcc's C rules)."""
+        if isinstance(n, ast.IntLit):
+            return n.value
+        if isinstance(n, ast.CharLit):
+            return n.value - 256 if n.value > 127 else n.value
+        if isinstance(n, ast.Ident) and n.name in self.enums:
+            return self.enums[n.name]
+        if isinstance(n, ast.Unary) and n.op in ("-", "+"):
+            v = self._fold_const(n.operand, at)
+            return -v if n.op == "-" else v
+        if isinstance(n, ast.Binary) and n.op in ("+", "-", "*", "/", "%"):
+            a = self._fold_const(n.left, at)
+            b = self._fold_const(n.right, at)
+            if n.op == "+":
+                return a + b
+            if n.op == "-":
+                return a - b
+            if n.op == "*":
+                return a * b
+            if b == 0:
+                self._err(at or n, "array size expression divides by zero (§4)",
+                          n.op)
+            q = abs(a) // abs(b)                 # C: truncate toward zero
+            if (a < 0) != (b < 0):
+                q = -q
+            return q if n.op == "/" else a - b * q
+        self._err(at or n, "array size must be a compile-time constant "
+                  "expression (§4: literals, enum constants, + - * /)",
+                  type(n).__name__)
+
+    def _arrlen(self, ty: ast.ArrayType, at) -> int:
+        return self._fold_const(ty.size, at)
+
+    # -- alignments (P2-2: natural C layout, never a flat 8) ----------------------
+
+    def _align(self, ty: ast.Node, at=None) -> int:
+        """alignof: scalars/pointers by size, arrays by element, structs by
+        their widest member (recursive)."""
+        if isinstance(ty, ast.BuiltinType):
+            return max(TYPE_SIZE[ty.name], 1)
+        if isinstance(ty, ast.PtrType):
+            return 8
+        if isinstance(ty, ast.ArrayType):
+            return self._align(ty.inner, at)
+        if isinstance(ty, ast.StructType):
+            members = self.structs.get(ty.tag)
+            if not members:
+                self._err(at or ty, "undefined struct '{}' — only fully defined "
+                          "structs are in the subset (§4)".format(ty.tag), ty.tag)
+            return max([self._align(m.type, at) for m in members] + [1])
+        return 8
 
     def _decay(self, ty: ast.Node) -> ast.Node:
         if isinstance(ty, ast.ArrayType):
@@ -52,15 +108,19 @@ class TypeMap:
         if not members:
             self._err(at or ty, "undefined struct '{}' — only fully defined "
                       "structs are in the subset (§4)".format(ty.tag), ty.tag)
+        # Natural C layout (P2-2): each member aligns to its own alignment;
+        # the struct's align is the widest member's; size rounds to that.
         off = 0
+        align = 1
         offsets: Dict[str, int] = {}
         for m in members:
             msz = self._size(m.type, at or ty)
-            align = min(max(msz, 1), 8)
-            off = (off + align - 1) // align * align
+            mal = self._align(m.type, at or ty)
+            align = max(align, mal)
+            off = (off + mal - 1) // mal * mal
             offsets[m.name] = off
             off += msz
-        return offsets, _roundup8(off)
+        return offsets, (off + align - 1) // align * align
 
     # -- type-of-expression (only what addressing widths need) --------------------
 
@@ -68,7 +128,13 @@ class TypeMap:
         return ast.BuiltinType(n.file, n.line, n.col, "int")
 
     def _ty(self, n: ast.Node) -> ast.Node:
-        if isinstance(n, (ast.IntLit, ast.CharLit)):
+        if isinstance(n, ast.IntLit):
+            # §4: an unsuffixed decimal literal is int when it fits, else
+            # long — the type sizeof and the usual conversions must see.
+            if -2 ** 31 <= n.value < 2 ** 31:
+                return self._int(n)
+            return ast.BuiltinType(n.file, n.line, n.col, "long")
+        if isinstance(n, ast.CharLit):
             return self._int(n)
         if isinstance(n, ast.StrLit):
             return ast.PtrType(n.file, n.line, n.col,
@@ -127,6 +193,14 @@ class TypeMap:
         if n.op not in ("+", "-") and (lp or rp):
             self._err(n, "'{}' with a pointer operand is not in the subset (§4)"
                       .format(n.op), n.op)
+        if n.op in ("<<", ">>"):
+            # C: a shift's result type is its promoted LEFT operand alone.
+            if isinstance(lt, ast.BuiltinType) and lt.name == "long":
+                return lt
+            return self._int(n)
+        if isinstance(lt, ast.BuiltinType) and isinstance(rt, ast.BuiltinType) \
+                and TYPE_SIZE[lt.name] < 8 and TYPE_SIZE[rt.name] < 8:
+            return self._int(n)      # int (or narrower) op int -> int (§4)
         return ast.BuiltinType(n.file, n.line, n.col, "long")
 
     def _ident_ty(self, n: ast.Ident) -> ast.Node:

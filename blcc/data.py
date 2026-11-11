@@ -53,7 +53,7 @@ class DataEmitter:
             return [("q", v[1])]
         if isinstance(ty, ast.ArrayType):
             esz = self._size(ty.inner, at)
-            n = 0 if ty.size is None else int(ty.size.value)
+            n = 0 if ty.size is None else self._arrlen(ty, at)
             if isinstance(init, ast.StrLit):
                 raw = init.value.encode("utf-8", "surrogateescape") + b"\0"
                 if ty.size is not None and len(raw) > n:

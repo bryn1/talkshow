@@ -77,6 +77,7 @@ class ExprEmitter:
         elif n.op == "-":
             self._emit_expr(n.operand)
             self._e("negq %rax")
+            self._narrow_int(self._ty(n))  # int negation wraps in 32 bits (§4)
         elif n.op == "+":
             self._emit_expr(n.operand)
         elif n.op == "~":
@@ -132,12 +133,23 @@ class ExprEmitter:
             self._e("movl %eax, %eax")                 # narrow to 32-bit (§4)
             self._e("movslq %eax, %rax")               # re-intern sign (§4 v3)
 
+    def _narrow_int(self, ty: ast.Node) -> None:
+        """§4 v3: an int-typed arithmetic result re-interns through its
+        32-bit slot — the wrap matches gcc; long/pointer results stay 64-bit."""
+        if isinstance(ty, ast.BuiltinType) and ty.name == "int":
+            self._e("movl %eax, %eax")
+            self._e("movslq %eax, %rax")
+
     def _ex_select(self, n) -> None:
         self._emit_addr(n)
+        if isinstance(self._ty(n), ast.ArrayType):
+            return                         # member array decays to address (§4)
         self._load(self._ty(n), "(%rax)", at=n)
 
     def _ex_index(self, n) -> None:
         self._emit_addr(n)
+        if isinstance(self._ty(n), ast.ArrayType):
+            return                         # nested row decays to address (§4)
         self._load(self._ty(n), "(%rax)", at=n)
 
     def _ex_assign(self, n) -> None:
@@ -190,6 +202,7 @@ class ExprEmitter:
             self._e("imulq {}, %rax".format(t0))
         else:
             self._e("{} {}, %rax".format(_ARITH[op], t0))
+        self._narrow_int(self._ty(n))       # compound result keeps target type
         self._e("movq {}, %rdx".format(t1))
         self._store(ty, "(%rdx)", at=n)
         self._unt(2)
@@ -217,6 +230,7 @@ class ExprEmitter:
             self._unt(2)
         else:
             self._unt()
+        self._narrow_int(self._ty(n.operand))   # ++/-- result keeps its type
 
     def _short_circuit(self, n) -> None:
         l_out = self._label("sc")
@@ -268,6 +282,7 @@ class ExprEmitter:
             self._e("movq {}, %rax".format(t))
             self._unt()
             self._e("{} %cl, %rax".format("shlq" if op == "<<" else "sarq"))
+            self._narrow_int(self._ty(n))
             return
         self._emit_expr(n.left)
         t = self._t()
@@ -280,6 +295,7 @@ class ExprEmitter:
             self._e("cmpq %rcx, %rax")
             self._e("{} %cl".format(_SETCC[op]))   # %cl: right, then result
             self._e("movzbq %cl, %rax")
+            return                             # 0/1 result: already interned
         elif op == "*":
             self._e("imulq %rcx, %rax")
         elif op in ("/", "%"):
@@ -289,6 +305,7 @@ class ExprEmitter:
                 self._e("movq %rdx, %rax")
         else:
             self._e("{} %rcx, %rax".format(_ARITH[op]))
+        self._narrow_int(self._ty(n))
 
     def _ptr_add(self, n, op, elem_ty) -> None:
         lt = self._decay(self._ty(n.left))
