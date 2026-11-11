@@ -1,0 +1,18 @@
+__pycache__/
+*.pyc
+.tmp/
+
+# MC 11840: a run's DURABLE evidence is committed, its bulk stays host-local. Pattern + rationale: workspace-convention SKILL.md §Durable evidence under .audits/ — edit there, never here.
+.audits/**
+!.audits/*/
+!.audits/*/*.md
+!.audits/*/out/
+!.audits/*/out/*.md
+!.audits/*/out/*.sh
+!.audits/*/out/logs/
+!.audits/*/out/logs/gate-*.log
+!.audits/*/out/frames/
+!.audits/*/out/frames/*/
+!.audits/*/out/frames/*/*.png
+!.audits/*/evidence/
+!.audits/*/evidence/*.md
