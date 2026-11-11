@@ -21,7 +21,7 @@ EXPECTED = {
     "loop.c": (b"55\n", 55),
     "fib.c": (b"fib(20)=6765\n", 0),
     "array.c": (b"140\n", 0),
-    "strings.c": (b"ccbl\n", 0),                    # §7-pinned byte string
+    "strings.c": (b"cclb\n", 0),                    # §7 v3: byte-reversal (gcc)
     "struct.c": (b"7\n", 0),
     "grid.c": (b"#####\n" * 5, 0),
     "switch.c": (b"zero\none\ntwo\nmany\nmany\n", 0),

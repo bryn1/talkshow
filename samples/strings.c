@@ -1,8 +1,6 @@
-/* blcc sample 6 (§7): copy "blcc" into char buf[16] via strlen + byte loop,
-   then print it "reversed". §7 pins stdout to the exact bytes "ccbl\n" — that
-   is the two halves of "blcc" printed back-to-front (the byte-reverse of
-   "blcc" would be "cclb"; the pinned bytes in the contract win).
-   stdout "ccbl\n", exit 0. */
+/* blcc sample 6 (§7, contract v3): copy "blcc" into char buf[16] via strlen +
+   byte loop, reverse the buffer with a two-index swap loop, print it.
+   gcc ground truth: stdout "cclb\n", exit 0. */
 #include "print.h"
 
 int main(void) {
@@ -12,13 +10,17 @@ int main(void) {
     for (long i = 0; i < n; i = i + 1) {
         buf[i] = src[i];
     }
-    long h = n / 2;
-    for (long i = h; i < n; i = i + 1) {
-        pchar(buf[i]);
+    buf[n] = 0;                 /* terminate for pstr/strlen */
+    long a = 0;
+    long b = n - 1;
+    while (a < b) {
+        char t = buf[a];
+        buf[a] = buf[b];
+        buf[b] = t;
+        a = a + 1;
+        b = b - 1;
     }
-    for (long i = 0; i < h; i = i + 1) {
-        pchar(buf[i]);
-    }
+    pstr(buf);
     pstr(NL);
     _sys_exit(0);
 }
