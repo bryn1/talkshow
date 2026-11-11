@@ -1,4 +1,4 @@
-# blcc — Architecture Contract (v2, 2026-11-11, MC 12406) — repo git history is the version store
+# blcc — Architecture Contract (v3, 2026-11-11, MC 12406) — repo git history is the version store
 
 Executable contract: code children implement EXACTLY this; the closing Architect verifies reality against it.
 Project: /home/claudecode/Blaha/c-compiler/ (session plane). Host: Ubuntu 22.04 x86-64, Python 3.10.12 (no 3.11+ syntax).
@@ -37,7 +37,7 @@ Rejected: JIT/bytecode middle-end, LLVM/lli, third-party parsers, a second runti
 
 ## 4. C subset (pinned)
 - Types: `char` `short` `int` `long` `void`; sizes 1/2/4/8, all 8 for pointers; `_Bool` out. Structs; arrays (fixed size; `T a[]` only with init list or as parameter); `typedef`; `enum` constants (int-valued).
-- Interning: char/short sign-extend to 64-bit on load/store, int zero-extends; codegen uses movsx/movsxd/movzx per width — pinned so two coders emit identical asm.
+- Interning (v3: pinned to the landed implementation — the old "int zero-extends" was WRONG; a negative int re-interned zero-extended cannot survive 64-bit ops, which §7's pins demand). All values live in 64-bit slots; per-width: char/short load `movsbq`/`movswq`; int load `movl mem,%eax` + `movslq %eax,%rax` (re-intern sign-extended); int result narrowed to 32-bit via `movl %eax,%eax`; long `movq`; stores `movb/movw/movl/movq`; unsigned byte/char operand contexts `movzbq`, runtime byte loops `movzbl`; division `cqto`+`idivq`. Pinned so two coders emit identical asm.
 - Storage: globals (initializers = integer/char/address-of-global constants; 0 → `.bss`, non-zero → `.data`), locals. Only storage class keyword accepted: `static` at file scope (same as non-static there); `static` inside a function → diagnostic.
 - Functions: prototypes, definitions, calls, recursion, `main(int argc, char **argv)` (other mains allowed as ordinary functions). No default argument promotions beyond the interning rule.
 - Operators: `+ - * / %` (signed; x86 idq semantics pinned — `/` and `%` truncate toward zero; sample 2 exists to pin that), unary `-`; `& | ^ ~ << >>` (shift count from operand's own width); `!`; `== != < <= > >=`; `&& ||` (short-circuit); compound `+= -= *= /= %= &= |= ^= <<= >>=`; `++ --` prefix+postfix; `sizeof` types+expressions (compile-time); casts among the 4 int types and pointer↔pointer / pointer↔long; `&` `*`.
@@ -71,7 +71,7 @@ Source-style contract for all samples: they use ONLY §4+§6; the ONLY permitted
 | 3 | loop.c | sum 1..10 → `55\n` | 55 |
 | 4 | fib.c | `fib(20)=6765\n` | 0 |
 | 5 | array.c | `int a[8]` filled `a[i]=i*i`, summed via pointer walk `*(p+i)` → `140\n` | 0 |
-| 6 | strings.c | `char buf[16]`: copy `"blcc"` (via strlen+byte loop), write reversed → `ccbl\n` | 0 |
+| 6 | strings.c | `char buf[16]`: copy `"blcc"` (via strlen+byte loop), byte-reversal swap loop, write reversed → `cclb\n` (gcc reference run printed `c c l b \n`) | 0 |
 | 7 | struct.c | `struct point{int x;int y;}` global `{3,4}` + `struct point *p=&pt`; `p->y + pt.x` → `7\n` | 0 |
 | 8 | grid.c | 5×5 `#` grid (nested for) → `#####\n` ×5 | 0 |
 | 9 | hostname.c | `_sys_open("/etc/hostname",0)`, `_sys_read` (buf 128), `_sys_write(1,…)` verbatim bytes | 0 |
@@ -79,7 +79,7 @@ Source-style contract for all samples: they use ONLY §4+§6; the ONLY permitted
 | 11 | switch.c | loop 0..4, switch {0:`zero\n` 1:`one\n` 2:`two\n` default:`many\n`} → `zero\none\ntwo\nmany\nmany\n` | 0 |
 | 12 | globmix.c | global `int g` (+1 twice in `bump()`), local 19 + g → `21\n` | 21 |
 
-Pinned: exit codes ≥256 truncate per `exit(n & 0xff)` (all pinned codes are < 256 — this rule only guards samples). Tests run every sample twice: no args, and with one arg `hi`. argv.c then prints `argc=2\nhi\n` exit 2; the no-arg run prints `argc=1\n` exit 1 — that exact pair is the argv contract. hostname.c asserts stdout == first bytes of /etc/hostname up to 128 (content-derived assertion, not a literal).
+Pinned: exit codes ≥256 truncate per `exit(n & 0xff)` (all pinned codes are < 256 — this rule only guards samples). Tests run every sample twice: no args, and with one arg `hi`. argv.c then prints `argc=2\nhi\n` exit 2; the no-arg run prints `argc=1\n` exit 1 — that exact pair is the argv contract. hostname.c asserts stdout == first bytes of /etc/hostname up to 128 (content-derived assertion, not a literal). Samples 2 and 6 exist so a wrong pinned expectation cannot survive an independent ground truth.
 
 ## 8. Diagnostics contract
 - Compile error: `file:line:col: <phase>: <message>, found '<token-or-construct>'` on stderr, exit 2. Phases: `lex` / `pp` / `parse` / `sema` / `asm`.
