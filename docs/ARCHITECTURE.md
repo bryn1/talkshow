@@ -1,4 +1,4 @@
-# blcc — Architecture Contract (v1, 2026-11-11, MC 12406)
+# blcc — Architecture Contract (v2, 2026-11-11, MC 12406) — repo git history is the version store
 
 Executable contract: code children implement EXACTLY this; the closing Architect verifies reality against it.
 Project: /home/claudecode/Blaha/c-compiler/ (session plane). Host: Ubuntu 22.04 x86-64, Python 3.10.12 (no 3.11+ syntax).
@@ -40,7 +40,7 @@ Rejected: JIT/bytecode middle-end, LLVM/lli, third-party parsers, a second runti
 - Interning: char/short sign-extend to 64-bit on load/store, int zero-extends; codegen uses movsx/movsxd/movzx per width — pinned so two coders emit identical asm.
 - Storage: globals (initializers = integer/char/address-of-global constants; 0 → `.bss`, non-zero → `.data`), locals. Only storage class keyword accepted: `static` at file scope (same as non-static there); `static` inside a function → diagnostic.
 - Functions: prototypes, definitions, calls, recursion, `main(int argc, char **argv)` (other mains allowed as ordinary functions). No default argument promotions beyond the interning rule.
-- Operators: `+ - * / %` (signed; x86 idq semantics pinned), unary `-`; `& | ^ ~ << >>` (shift count from operand's own width); `!`; `== != < <= > >=`; `&& ||` (short-circuit); compound `+= -= *= /= %= &= |= ^= <<= >>=`; `++ --` prefix+postfix; `sizeof` types+expressions (compile-time); casts among the 4 int types and pointer↔pointer / pointer↔long; `&` `*`.
+- Operators: `+ - * / %` (signed; x86 idq semantics pinned — `/` and `%` truncate toward zero; sample 2 exists to pin that), unary `-`; `& | ^ ~ << >>` (shift count from operand's own width); `!`; `== != < <= > >=`; `&& ||` (short-circuit); compound `+= -= *= /= %= &= |= ^= <<= >>=`; `++ --` prefix+postfix; `sizeof` types+expressions (compile-time); casts among the 4 int types and pointer↔pointer / pointer↔long; `&` `*`.
 - Control: `if`/`else`, `while`, `do…while`, `for` (declaration or expression init; both empty allowed), `break`, `continue`, `return`, nested blocks.
 - `switch`/`case`/`default` IS IN the subset (pinned — do not re-litigate): integer controlling expr, compile-time-constant labels, codegen emits a compare chain (jump table allowed as a refinement only when all case values are dense and contiguous), C fall-through semantics preserved, `break` exits the switch.
 - Strings: literals → byte arrays in `.rodata`, type `char *`; same escape set as lexer.
@@ -67,7 +67,7 @@ Source-style contract for all samples: they use ONLY §4+§6; the ONLY permitted
 | # | File | Expected stdout (exact bytes) | Exit |
 |---|---|---|---|
 | 1 | hello.c | `Hello, Linux from blcc\n` | 0 |
-| 2 | arith.c | `(2+3)*4 - 6/3 + (7%5) - (-9/2)` = 25 → `25\n` | 25 |
+| 2 | arith.c | `(2+3)*4 - 6/3 + (7%5) - (-9/2) + 7 % -2` = 25 → `25\n` (gcc reference run: -9/2=-4, 7%-2=1, truncation toward zero) | 25 |
 | 3 | loop.c | sum 1..10 → `55\n` | 55 |
 | 4 | fib.c | `fib(20)=6765\n` | 0 |
 | 5 | array.c | `int a[8]` filled `a[i]=i*i`, summed via pointer walk `*(p+i)` → `140\n` | 0 |
