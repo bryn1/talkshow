@@ -1,0 +1,5 @@
+#!/bin/sh
+# Thin exec wrapper (ARCHITECTURE.md §2): forwards every argument to
+# python3 -m blcc, working from any directory.
+here=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+PYTHONPATH="$here${PYTHONPATH:+:$PYTHONPATH}" exec python3 -m blcc "$@"
