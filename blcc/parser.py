@@ -1,5 +1,5 @@
-# LINES: the declaration grammar and the §5 construct diagnostics it must
-# enforce are one concern; splitting them would duplicate the scope logic.
+# LINES reason: the declaration grammar and the §5 construct diagnostics it
+# must enforce are one concern; splitting them would duplicate the scope logic.
 """Declarations + statements parser for blcc (ARCHITECTURE.md §3) + light sema.
 
 Concerns: scopes/symbols, the declaration grammar (functions, variables,

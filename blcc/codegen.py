@@ -1,5 +1,6 @@
-# LINES: the function/statement tree walk also binds frames, temps and local
-# inits; splitting it further would duplicate the walk (§3 concern boundary).
+# LINES reason: the function/statement tree walk also binds frames, temps and
+# local inits; splitting it further would duplicate the walk (§3 concern
+# boundary).
 """Module-level emission of blcc's x86-64 emitter (ARCHITECTURE.md §3/§4/§6):
 collection pass, per-function frames, statements, the switch compare chain,
 and global .rodata/.data/.bss (§4: zero -> .bss, non-zero -> .data).

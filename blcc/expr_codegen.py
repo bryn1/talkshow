@@ -129,7 +129,8 @@ class ExprEmitter:
         elif isinstance(ty, ast.BuiltinType) and ty.name == "short":
             self._e("movswq %ax, %rax")
         elif isinstance(ty, ast.BuiltinType) and ty.name == "int":
-            self._e("movl %eax, %eax")
+            self._e("movl %eax, %eax")                 # narrow to 32-bit (§4)
+            self._e("movslq %eax, %rax")               # re-intern sign (§4 v3)
 
     def _ex_select(self, n) -> None:
         self._emit_addr(n)
@@ -220,16 +221,18 @@ class ExprEmitter:
     def _short_circuit(self, n) -> None:
         l_out = self._label("sc")
         if n.op == "&&":
-            self._emit_expr(n.left)
-            self._e("testq %rax, %rax")
-            self._e("je {}".format(l_out))
+            l_false = self._label("scfalse")   # F1: zero path needs its own
+            self._emit_expr(n.left)            # label; the true path jumps
+            self._e("testq %rax, %rax")        # over the xorl to l_out
+            self._e("je {}".format(l_false))
             self._emit_expr(n.right)
             self._e("testq %rax, %rax")
             self._e("setne %al")
             self._e("movzbq %al, %rax")
             self._e("jmp {}".format(l_out))
-            self.fn.lines.append("{}:".format(l_out))
+            self.fn.lines.append("{}:".format(l_false))
             self._e("xorl %eax, %eax")
+            self.fn.lines.append("{}:".format(l_out))
         else:
             l_true = self._label("sctrue")
             self._emit_expr(n.left)

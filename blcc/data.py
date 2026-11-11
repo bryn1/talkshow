@@ -1,7 +1,8 @@
 """Global data emission for blcc (ARCHITECTURE.md §4): constant evaluation of
-file-scope initializers (integer/char constants, address-of-global, string
-literals, brace lists) and their .data/.bss assembly lines — all-zero objects
-go to .bss, the rest to .data. Mixin of blcc.codegen.Codegen, which provides
+file-scope initializers (integer/char constants, address-of-global, brace
+lists; a string literal is a §5-style diagnostic naming the construct) and
+their .data/.bss assembly lines — all-zero objects go to .bss, the rest to
+.data. Mixin of blcc.codegen.Codegen, which provides
 globals/enums/structs/strings tables plus _size/_decay/_struct_layout/_err/
 _str_label (strings interning stays on Codegen with the rodata pool)."""
 from __future__ import annotations
@@ -13,7 +14,7 @@ from blcc import ast
 
 class DataEmitter:
     def _const(self, n: ast.Node):
-        """-> int | ('lab', label) for address-of-global / string constants."""
+        """-> int | ('lab', label) for address-of-global constants."""
         if isinstance(n, ast.IntLit):
             return n.value
         if isinstance(n, ast.CharLit):
@@ -28,7 +29,10 @@ class DataEmitter:
             if isinstance(n.operand, ast.Ident) and n.operand.name in self.globals:
                 return ("lab", n.operand.name)
         if isinstance(n, ast.StrLit):
-            return ("lab", self._str_label(n.value))
+            self._err(n, "'string literal in global initializer' is not in the "
+                      "§4 set (integer/char constant or address-of-global; "
+                      "string bytes belong in a char array initializer)",
+                      "string literal")
         self._err(n, "global initializer must be an integer/char constant or "
                   "address-of-global (§4)", type(n).__name__)
 
@@ -87,10 +91,12 @@ class DataEmitter:
 
     def _emit_global(self, vd: ast.VarDecl):
         items = self._bytes_of(vd.type, vd.init, vd)
+        # .align precedes the label (.data AND .bss): a label written before
+        # its padding binds to the pre-padding address, not to the bytes.
         if all(k == "b" and v == 0 for k, v in items):
-            return "bss", ["{}:".format(vd.name), "    .align 8",
+            return "bss", ["    .align 8", "{}:".format(vd.name),
                            "    .zero {}".format(len(items))]
-        lines = ["{}:".format(vd.name), "    .align 8"]
+        lines = ["    .align 8", "{}:".format(vd.name)]
         acc: List[int] = []
 
         def flush():
