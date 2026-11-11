@@ -1,0 +1,227 @@
+"""Expression parser for blcc (ARCHITECTURE.md §3).
+
+Precedence climbing + casts + unary, producing ast expression nodes. The
+parent Parser injects the hooks this grammar half needs (typedef test, type
+parsing, callable lookup, light type-of-expression) so this module never
+imports parser.py. §5 constructs met in expressions raise loud diagnostics.
+"""
+from __future__ import annotations
+
+from typing import Callable, Optional
+
+from blcc import ast
+from blcc.lexer import DiagError
+
+BINARY_PREC = {
+    "||": 1, "&&": 2,
+    "|": 3, "^": 4, "&": 5,
+    "==": 6, "!=": 6,
+    "<": 7, "<=": 7, ">": 7, ">=": 7,
+    "<<": 8, ">>": 8,
+    "+": 9, "-": 9,
+    "*": 10, "/": 10, "%": 10,
+}
+COMPOUND_ASSIGN_OPS = frozenset(
+    {"+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>="})
+_UNARY_PUNCT = frozenset({"-", "+", "!", "~", "&", "*"})
+_CAST_KW = frozenset(
+    {"char", "short", "int", "long", "void", "const", "struct", "enum",
+     "float", "double", "unsigned"})
+_LVALUE_KINDS = (ast.Ident, ast.Index, ast.Select)
+
+
+class ExprParser:
+    """Operates on a TokenStream shared with the owning Parser."""
+
+    def __init__(self, stream, is_typename: Callable[[str], bool],
+                 parse_type: Callable[[], ast.Node],
+                 callable_known: Callable[[str], bool],
+                 expr_type: Callable[[ast.Node], Optional[ast.Node]]):
+        self.s = stream
+        self.is_typename = is_typename
+        self.parse_type = parse_type
+        self.callable_known = callable_known
+        self.expr_type = expr_type
+
+    # -- entry: assignment level (right-associative) ------------------------
+
+    def parse_expression(self) -> ast.Node:
+        left = self.parse_binary(0)
+        t = self.s.peek()
+        if t.kind == "punct":
+            if t.text == "?":
+                raise DiagError(
+                    "parse", t.file, t.line, t.col,
+                    "'?:' conditional operator is not in the subset (§4)", "?")
+            if t.text == "=" or t.text in COMPOUND_ASSIGN_OPS:
+                self.s.next()
+                value = self.parse_expression()
+                self._check_lvalue(left, t, "assignment")
+                if self._struct_type(left) is not None:
+                    raise DiagError(
+                        "sema", t.file, t.line, t.col,
+                        "'struct assignment' is not in the subset (§5) — "
+                        "assign member by member", t.text)
+                if t.text == "=":
+                    return ast.Assign(left.file, left.line, left.col,
+                                      left, value)
+                return ast.AssignOp(left.file, left.line, left.col,
+                                    t.text, left, value)
+        return left
+
+    # -- binary: precedence climbing, left-associative -----------------------
+
+    def parse_binary(self, min_prec: int) -> ast.Node:
+        left = self.parse_unary()
+        while True:
+            t = self.s.peek()
+            if t.kind != "punct" or t.text not in BINARY_PREC:
+                return left
+            prec = BINARY_PREC[t.text]
+            if prec < min_prec:
+                return left
+            self.s.next()
+            right = self.parse_binary(prec + 1)
+            if t.text in ("==", "!="):
+                if self._struct_type(left) or self._struct_type(right):
+                    raise DiagError(
+                        "sema", t.file, t.line, t.col,
+                        "'struct comparison' is not in the subset (§5)",
+                        t.text)
+            left = ast.Binary(t.file, t.line, t.col, t.text, left, right)
+
+    # -- unary, casts, sizeof, inc/dec ----------------------------------------
+
+    def parse_unary(self) -> ast.Node:
+        t = self.s.peek()
+        if t.kind == "punct" and t.text in _UNARY_PUNCT:
+            self.s.next()
+            return ast.Unary(t.file, t.line, t.col, t.text,
+                             self.parse_unary())
+        if t.kind == "punct" and t.text in ("++", "--"):
+            self.s.next()
+            operand = self.parse_unary()
+            self._check_lvalue(operand, t, "'{}'".format(t.text))
+            return ast.IncDec(t.file, t.line, t.col, t.text, operand, True)
+        if t.kind == "kw" and t.text == "sizeof":
+            return self.parse_sizeof()
+        if t.kind == "punct" and t.text == "(" and self._starts_type(1):
+            self.s.next()
+            typ = self.parse_type()
+            self.s.expect_punct(")")
+            operand = self.parse_unary()
+            return ast.Cast(t.file, t.line, t.col, typ, operand)
+        return self.parse_postfix()
+
+    def parse_sizeof(self) -> ast.Node:
+        t = self.s.next()  # 'sizeof'
+        if self.s.accept_punct("("):
+            if self._starts_type(0):
+                typ = self.parse_type()
+                self.s.expect_punct(")")
+                return ast.Sizeof(t.file, t.line, t.col, typ, None)
+            expr = self.parse_expression()
+            self.s.expect_punct(")")
+            return ast.Sizeof(t.file, t.line, t.col, None, expr)
+        if self._starts_type(0):
+            typ = self.parse_type()
+            return ast.Sizeof(t.file, t.line, t.col, typ, None)
+        # 'sizeof x' (no parens): only a bare operand; anything past it is a
+        # loud parse error, never silently mis-sized.
+        return ast.Sizeof(t.file, t.line, t.col, None, self.parse_primary())
+
+    # -- postfix chain: call, subscript, member, ++/-- -------------------------
+
+    def parse_postfix(self) -> ast.Node:
+        node = self.parse_primary()
+        while True:
+            t = self.s.peek()
+            if t.kind != "punct":
+                return node
+            if t.text == "(":
+                args = self._parse_call_args(t)
+                if not isinstance(node, ast.Ident):
+                    raise DiagError(
+                        "sema", t.file, t.line, t.col,
+                        "'function pointer' calls are not in the subset (§5) "
+                        "— only named calls of declared functions or the §6 "
+                        "builtins", "call")
+                if not self.callable_known(node.name):
+                    raise DiagError(
+                        "sema", t.file, t.line, t.col,
+                        "no declaration for callable '{}' — not a declared "
+                        "function or §6 builtin".format(node.name), node.name)
+                node = ast.Call(t.file, t.line, t.col, node, args)
+            elif t.text == "[":
+                self.s.next()
+                index = self.parse_expression()
+                self.s.expect_punct("]")
+                node = ast.Index(t.file, t.line, t.col, node, index)
+            elif t.text in (".", "->"):
+                self.s.next()
+                member = self.s.expect_id()
+                node = ast.Select(t.file, t.line, t.col, node,
+                                  member.text, t.text == "->")
+            elif t.text in ("++", "--"):
+                self.s.next()
+                self._check_lvalue(node, t, "'{}'".format(t.text))
+                node = ast.IncDec(t.file, t.line, t.col, t.text, node, False)
+            else:
+                return node
+
+    def _parse_call_args(self, open_tok) -> tuple:
+        self.s.expect_punct("(")
+        args = []
+        if not self.s.accept_punct(")"):
+            while True:
+                t = self.s.peek()
+                if t.kind == "punct" and t.text == "...":
+                    raise DiagError(
+                        "sema", t.file, t.line, t.col,
+                        "'variadic' calls are not in the subset (§5)", "...")
+                args.append(self.parse_expression())
+                if self.s.accept_punct(","):
+                    continue
+                self.s.expect_punct(")")
+                break
+        return tuple(args)
+
+    # -- primary ----------------------------------------------------------------
+
+    def parse_primary(self) -> ast.Node:
+        t = self.s.next()
+        if t.kind == "int":
+            return ast.IntLit(t.file, t.line, t.col, t.value)
+        if t.kind == "char":
+            return ast.CharLit(t.file, t.line, t.col, t.value)
+        if t.kind == "str":
+            return ast.StrLit(t.file, t.line, t.col, t.value)
+        if t.kind == "id":
+            return ast.Ident(t.file, t.line, t.col, t.text)
+        if t.kind == "punct" and t.text == "(":
+            expr = self.parse_expression()
+            self.s.expect_punct(")")
+            return expr
+        raise DiagError("parse", t.file, t.line, t.col,
+                        "expected an expression", t.text)
+
+    # -- helpers ------------------------------------------------------------------
+
+    def _starts_type(self, k: int) -> bool:
+        t = self.s.peek(k)
+        if t.kind == "kw":
+            return t.text in _CAST_KW
+        return t.kind == "id" and self.is_typename(t.text)
+
+    def _check_lvalue(self, node: ast.Node, tok, context: str) -> None:
+        ok = isinstance(node, _LVALUE_KINDS) or (
+            isinstance(node, ast.Unary) and node.op == "*")
+        if not ok:
+            raise DiagError(
+                "parse", tok.file, tok.line, tok.col,
+                "cannot apply {} to a non-l-value expression".format(context),
+                type(node).__name__)
+
+    def _struct_type(self, node: ast.Node):
+        ty = self.expr_type(node)
+        return ty if isinstance(ty, ast.StructType) else None
