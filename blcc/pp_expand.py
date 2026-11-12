@@ -500,6 +500,7 @@ class Expander:
         if j < len(body) and plain(body[j]) == "##":
             return self._paste(out, body, j, mapping, path, line)
         right: Optional[str] = None
+        tail: List[Item] = []
         if j < len(body):
             if body[j] in mapping and mapping[body[j]] and not is_ws(
                     plain(mapping[body[j]][0])):
@@ -510,9 +511,13 @@ class Expander:
                 # parameter in this body (verdict-c2 F-2, MC 12436 — the old
                 # `mapping[p] = tail` silently turned asm("rsp") into
                 # asm("r") and killed the __ATTR_RW chain). The operand's
-                # REMAINING tokens stay in the stream via the body splice
-                # (R8: `## __VA_ARGS__` pastes only the first, tail follows)
-                body[j:j + 1] = tail
+                # REMAINING tokens are emitted RAW right here (below) — they
+                # are ARGUMENT text, and gcc never re-substitutes parameter
+                # names inside it: `#define e(f, a...) p(f, ##a)` called as
+                # e(fmt, ..., f->num) must keep the caller's `f`, not expand
+                # it to the fmt argument again (block/partitions/ldm.c,
+                # silent, MC 12436 sweep).
+                j += 1                           # continue PAST the param
             elif body[j] in mapping:       # empty operand for this paste
                 j += 1
             else:
@@ -542,6 +547,8 @@ class Expander:
             out.append(right)              # empty left operand: paste no-op
         elif left is not None:
             out.append(left)
+        if tail:
+            out.extend(tail)               # raw argument remainder (above)
         return j
 
 
