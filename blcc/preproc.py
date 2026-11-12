@@ -8,8 +8,11 @@ machine; splitting would duplicate that state across files.
 Pass order per plan §2: pass-0 line splice (backslash-newline, keeping a
 (file,line) origin map) BEFORE comment strip; directive dispatch on logical
 lines; conditionals as a stack driven by pp_eval; include search order with
-guarded REOPEN semantics (R20: a guarded header re-reads, the guard skips
-the body — recursion depth cap + same-file-re-entered stay loud); #line
+guarded REOPEN semantics (R20 + verdict-c2 F-1, MC 12436: a file already on
+the ACTIVE include stack is re-opened exactly once — gcc does the same and
+the guard skips the body, so guarded re-entrant chains are NORMAL; a SECOND
+re-entry is a true cycle and stays loud; the recursion depth cap bounds
+runaways); #line
 origin renumber; #pragma record-and-ignore (passed through ONLY in -E mode,
 where gcc passes them through too); #error is a §8 pp diagnostic, #warning
 the §8 warning tier (stderr, exit code unaffected). Expansion itself is
@@ -411,7 +414,17 @@ class Preprocessor:
             raise DiagError("pp", path, ln, 1, "no such file or directory",
                             shown)
         resolved = os.path.abspath(full)
-        if resolved in self.stack:
+        # gcc RE-OPENS a file that is already on the active stack: its
+        # include guard (already defined) skips the body, so a guarded
+        # re-entrant chain (uapi/linux/timex.h <-> linux/time.h — the
+        # 676-file corpus wall, verdict-c2 F-1) is NORMAL and terminates.
+        # A SECOND entry for the same file while one is still active can
+        # only come from a body that re-executes — a true cycle — and
+        # stays loud (the oracle dies too: its depth-200 cap). This is the
+        # rule the oracle + the M20 diamond + the unguarded a<->b fixture
+        # jointly force (MC 12436); the diamond re-read never sees the
+        # file on the stack at all.
+        if self.stack.count(resolved) >= 2:
             raise DiagError("pp", path, ln, 1,
                             "include cycle detected for '%s'" % full, shown)
         if len(self.stack) >= _MAX_INCLUDE_DEPTH:
