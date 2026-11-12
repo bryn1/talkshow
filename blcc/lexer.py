@@ -140,6 +140,16 @@ class Lexer:
                     continue
                 if c in "\"'":
                     i = self._literal(src, text, i, toks)
+                    # L1 (M1 R9, phase-6 parity): the pp leaves `"a" "b"`
+                    # juxtaposed; merge immediately-adjacent string literals.
+                    while i < n and text[i] == '"' and toks \
+                            and toks[-1].kind == "str":
+                        i = self._literal(src, text, i, toks)
+                        nxt = toks.pop()
+                        prev = toks.pop()
+                        toks.append(Token("str", prev.text + nxt.text,
+                                          prev.file, prev.line, prev.col,
+                                          prev.value + nxt.value))
                     continue
                 matched = None
                 for p in _PUNCT:
