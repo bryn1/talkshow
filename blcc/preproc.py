@@ -195,12 +195,26 @@ class Preprocessor:
                 def more(dst):
                     # appends to the STREAM THE EXPANDER IS CURRENTLY
                     # SCANNING (it splices replacements into that list and
-                    # re-binds it — F-3/MC 12436), not to the fixed buffer
-                    if buf["i"] + 1 >= len(lines):
-                        return False
-                    buf["i"] += 1
-                    dst.extend(tokenize(lines[buf["i"]][1]))
-                    return True
+                    # re-binds it — F-3/MC 12436), not to the fixed buffer.
+                    # While an open argument list spans lines, gcc KEEPS
+                    # preprocessing line by line: a directive there is
+                    # EXECUTED, contributes nothing to the argument, and
+                    # its #if/#else decide which following lines are in the
+                    # argument at all (mm/page_alloc.c:1095, ipc/shm.c:157
+                    # — silent + loud residuals of the MC 12436 sweep).
+                    while True:
+                        if buf["i"] + 1 >= len(lines):
+                            return False
+                        buf["i"] += 1
+                        phys2, joined2 = lines[buf["i"]]
+                        tk = tokenize(joined2)
+                        if next((t for t in tk if not is_ws(t)), None) == "#":
+                            self._directive(st, base_dir, phys2,
+                                            tk[tk.index("#"):])
+                            continue
+                        if all(c[1] for c in self._conds):
+                            dst.extend(tk)
+                            return True
 
                 exp = self.expander.expand(stream, st["label"], ln, more)
                 self.out.append(SourceLine(st["label"], ln, "".join(exp)))
