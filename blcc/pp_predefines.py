@@ -18,16 +18,25 @@ from blcc.pp_expand import Macro, tokenize
 # Pinned from gcc 11.4.0 by scripts/gen_has_attribute_table.py — regenerate
 # there if the oracle ever moves; 1 = __has_attribute(<name>) is true.
 HAS_ATTRIBUTE = {
-    "alloc_size": 1, "always_inline": 1, "assume_aligned": 1,
-    "attribute_const": 0, "copy": 1, "deprecated": 1, "designated_init": 1,
-    "fallthrough": 1, "flatten": 1, "forced_inline": 0, "format": 1,
-    "gnu_inline": 1, "malloc": 1, "no_inline": 0, "no_sanitize_address": 1,
-    "no_sanitize_undefined": 1, "no_stack_protector": 1, "noinline": 1,
-    "nonnull": 1, "optimize": 1, "packed": 1, "printf": 0, "pure": 1,
-    "section": 1, "sentinel": 1, "syntax_error": 0, "tls_model": 1,
-    "unused": 1, "used": 1, "warn_unresolved_offsets": 0,
-    "warn_unused_result": 1, "weak": 1, "aligned": 1, "cold": 1, "hot": 1,
-    "visibility": 1, "alias": 1,
+    "alias": 1, "aligned": 1, "alloc_size": 1, "allocate": 0, "always_inline":
+    1, "app_linkage": 0, "artificial": 1, "assume_aligned": 1,
+    "attribute_const": 0, "cleanup": 1, "cold": 1, "const": 1, "constructor": 1,
+    "copy": 1, "deprecated": 1, "designated_init": 1, "disable_tail_calls": 0,
+    "dllexport": 0, "dllimport": 0, "error": 1, "externally_visible": 1,
+    "fallback": 0, "fallthrough": 1, "flatten": 1, "forced_inline": 0, "format":
+    1, "format_arg": 1, "gnu_inline": 1, "hot": 1, "ifunc": 1, "leaf": 1,
+    "long_call": 0, "malloc": 1, "may_alias": 1, "no_binds_local": 0,
+    "no_caller_saved_registers": 1, "no_clone": 0, "no_icf": 1, "no_inline": 0,
+    "no_instrument_function": 1, "no_sanitize": 1, "no_sanitize_coverage": 0,
+    "no_sanitize_thread": 1, "no_sanitize_undefined": 1, "no_stack_protector":
+    1, "noclone": 1, "noinline": 1, "noipa": 1, "nomerge": 0, "nonnull": 1,
+    "nonstring": 1, "noreturn": 1, "notail": 0, "omit_pipeline_dependency": 0,
+    "optimize": 1, "packed": 1, "patchable_function_entry": 1, "printf": 0,
+    "profile": 0, "pure": 1, "returns_nonnull": 1, "section": 1, "sentinel": 1,
+    "short_call": 0, "syntax_error": 0, "tls_model": 1, "uninitialized": 0,
+    "unused": 1, "used": 1, "visibility": 1, "warn_if_not_aligned": 1,
+    "warn_unresolved_offsets": 0, "warn_unused_result": 1, "warning": 1, "weak":
+    1, "weakref": 1, "x": 0
 }
 
 # -std value -> __STDC_VERSION__ body (None = macro NOT defined, gcc answer)
