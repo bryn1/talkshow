@@ -1,7 +1,7 @@
 """Token-stream macro expansion for the M1 preprocessor (plan R7–R9, R14,
 R15, R18, R19).
 
-LINES (594 > 400): the expansion recursion, argument collection, prescan,
+LINES (621 > 400): the expansion recursion, argument collection, prescan,
 substitution and paste pass tokens through ONE cursor chain; splitting
 would thread the same cursor through two files.
 
@@ -41,9 +41,15 @@ _CHUNK_RE = re.compile(
 
 _ID_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*$")
 _MAX_EXPANSIONS = 4000000      # runaway (doubling) guard, not a depth cap
-_IDENTISH = re.compile(r"^[A-Za-z0-9_.']")
-_PASTE_SPLIT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*|[0-9][0-9A-Za-z_.]*|.?$")
 _PASTE_ONE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*|[0-9][0-9A-Za-z_.]*")
+# A paste join that is ONE valid token without being an identifier/pp-number:
+# the multi-char operators and the leading-dot pp-number. gcc 11.4 joins
+# `&`+`&` to `&&`, `.`+`4` to `.4`, and ERRORS on every join that is not a
+# single token (`+`+`-`, `%`+`-`, `.`+`.`, `e`+`+`, `x`+string) — matrix
+# measured this card, MC 12454.
+_PASTE_JOIN = re.compile(
+    r"<<=|>>=|\.\.\.|->|\+\+|--|<<|>>|&&|\|\||==|!=|<=|>=|\+=|-=|\*=|/="
+    r"|\.[0-9][0-9A-Za-z_.]*", re.S)
 
 
 def tokenize(text: str) -> List[str]:
@@ -233,8 +239,14 @@ class Expander:
                 out.extend(repl)
                 i = self._last_consumed
                 continue
-            if macro.params is None:        # object-like: splice + rescan
-                toks = _wrap(list(macro.body), hid | {t}) + toks[i + 1:]
+            if macro.params is None:        # object-like: ONE substitution
+                subst = self._substitute(macro, [], path, line)
+                # (and paste) pass with an EMPTY mapping, then splice + rescan
+                # (C11 6.10.3.4: `##` in an object-like body joins the RAW
+                # body tokens BEFORE the rescan — the old bare splice left
+                # `X ## Y` for the rescan, which then prescanned the operands
+                # and never joined them: verdict-c3 F-A, MC 12454).
+                toks = _wrap(subst, hid | {t}) + toks[i + 1:]
                 i, n = 0, len(toks)
                 continue
             k = i + 1
@@ -490,7 +502,7 @@ class Expander:
                     i = j + 1
                     continue
             if t == "##":
-                i = self._paste(out, body, i, mapping, path, line)
+                i = self._paste(out, body, i, mapping, macro, path, line)
                 n = len(body)
                 continue
             if t in mapping:
@@ -502,23 +514,31 @@ class Expander:
         return [t for t in out if t != ""]
 
     def _paste(self, out: List[Item], body: List[Item], i: int,
-                mapping: Dict[str, List[Item]], path: str, line: int) -> int:
+                mapping: Dict[str, List[Item]], macro: Macro, path: str,
+                line: int) -> int:
         while out and is_ws(plain(out[-1])):
             out.pop()
         left = out.pop() if out else None          # Item | None
         j = i + 1
         while j < len(body) and is_ws(plain(body[j])):
             j += 1
-        # collapse a duplicated '## ##' (gcc joins the operands instead)
+        # collapse a duplicated '## ##' (gcc joins the operands instead): the
+        # popped left goes BACK so the collapsed cursor pastes against the
+        # SAME left operand (`X## ##Y` -> XY, oracle-measured, MC 12454).
         if j < len(body) and plain(body[j]) == "##":
-            return self._paste(out, body, j, mapping, path, line)
+            if left is not None:
+                out.append(left)
+            return self._paste(out, body, j, mapping, macro, path, line)
         right: Optional[str] = None
         tail: List[Item] = []
+        variadic_operand = False
         if j < len(body):
             if body[j] in mapping and mapping[body[j]] and not is_ws(
                     plain(mapping[body[j]][0])):
                 right = plain(mapping[body[j]][0])
                 tail = mapping[body[j]][1:]
+                variadic_operand = (macro.variadic and
+                                    body[j] == macro.var_name)
                 # NO mapping shrink here: the parameter's FULL argument must
                 # survive for every later occurrence/paste of the same
                 # parameter in this body (verdict-c2 F-2, MC 12436 — the old
@@ -540,22 +560,29 @@ class Expander:
             return j                       # GNU comma-swallow (R8)
         if left is not None and right is not None:
             joined = plain(left) + right
-            if _IDENTISH.match(plain(left)) and _IDENTISH.match(right) \
-                    and not _PASTE_SPLIT.match(joined):
-                self.warn(line, 1,
-                          "pasting '%s' and '%s' does not give a valid "
-                          "preprocessing token" % (plain(left), right))
-            if _PASTE_ONE.fullmatch(joined):
+            if _PASTE_ONE.fullmatch(joined) or _PASTE_JOIN.fullmatch(joined):
                 out.append(joined)
-            else:
-                # The join is NOT a single valid preprocessing token: gcc
-                # keeps the operands as TWO tokens on the rescan, and the
-                # comma-count idiom `__C(, ##X, n..0)` (arch/x86 rmwcc.h:7,
-                # verbatim in the corpus sweep, MC 12436) only counts right
-                # when that pasted comma re-splits arguments again. A single
-                # joined string here silently shifts every argument.
+            elif plain(left) == "," and variadic_operand:
+                # GNU `, ## __VA_ARGS__` with a NON-empty tail: the comma
+                # swallower suppresses the paste and gcc emits the TWO
+                # tokens with no diagnostic (rmwcc.h COUNT_LAST shape, 1309
+                # sites in linux-5.10, rc 0; the same `,`+token paste
+                # through a PLAIN parameter IS an error — measured pair,
+                # MC 12454).
                 out.append(left)
                 out.append(right)
+            else:
+                # C11 6.10.3.4p4: a paste that yields no valid preprocessing
+                # token is UB, and gcc 11.4's posture is LOUD: an ERROR
+                # (rc != 0) naming the operands. Matrix measured this card:
+                # `%`+`-`, `+`+`-`, `%`+`%`, `1`+`+`, `e`+`+`, `.`+`.`,
+                # ident+string, string+ident, plain `,`+token, token+`,`
+                # ALL error; every single-token join stays quiet.
+                raise DiagError(
+                    "pp", path, line, 1,
+                    "pasting '%s' and '%s' does not give a valid "
+                    "preprocessing token" % (plain(left), right),
+                    "macro paste")
         elif right is not None:
             out.append(right)              # empty left operand: paste no-op
         elif left is not None:

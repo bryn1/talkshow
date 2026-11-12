@@ -1,7 +1,7 @@
 """M1 GCC-compatible preprocessor: directive dispatch & source bookkeeping
 (plan R1, R2, R4, R10–R14, R17, R20, R21).
 
-LINES (583 > 400): directive dispatch is ONE concern — the #if-conditional
+LINES (623 > 400): directive dispatch is ONE concern — the #if-conditional
 stack, #line origin state and include search must share the per-file state
 machine; splitting would duplicate that state across files.
 
@@ -33,6 +33,32 @@ from blcc import pp_eval
 
 _MAX_INCLUDE_DEPTH = 200         # mirrors gcc's default -fmax-include-depth
 _NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*$")
+_IDENTC_RE = re.compile(r"[A-Za-z0-9_.']")
+# Two spliced tokens must never re-lex as one: `pri`+`ntf` may not print as
+# `printf` (e14, MC 12454) and `<`+`<` may not print as `<<`, exactly like
+# the space_needed rule in cpp (gcc emits `pri ntf`, `< < <`, `/ *x`).
+_MERGE2_OPS = ("<<=", ">>=", "...", "->", "++", "--", "<<", ">>", "&&",
+               "||", "==", "!=", "<=", ">=", "+=", "-=", "*=", "/=", "%=",
+               "&=", "^=", "|=")
+
+
+def _emit_join(toks: List[str]) -> str:
+    """Serialize an expanded token list, separating two tokens whose bare
+    concatenation would lex back as something else (ident/pp-number runs,
+    multi-char-operator prefixes, comment starts). Source whitespace
+    between tokens survives untouched."""
+    out: List[str] = []
+    for t in toks:
+        if out:
+            a, b = out[-1], t
+            if a and b and not is_ws(a[-1]) and not is_ws(b[0]):
+                j = a[-1] + b[0]
+                if ((_IDENTC_RE.match(j[0]) and _IDENTC_RE.match(j[1]))
+                        or any(op.startswith(j) for op in _MERGE2_OPS)
+                        or j in ("/*", "*/", "//")):
+                    out.append(" ")
+        out.append(t)
+    return "".join(out)
 
 
 def _splice(text: str) -> List[Tuple[int, List[Tuple[int, str]]]]:
@@ -217,7 +243,8 @@ class Preprocessor:
                             return True
 
                 exp = self.expander.expand(stream, st["label"], ln, more)
-                self.out.append(SourceLine(st["label"], ln, "".join(exp)))
+                self.out.append(SourceLine(st["label"], ln,
+                                           _emit_join(exp)))
                 i = buf["i"] + 1
                 continue
             if len(self._conds) > self._cond_base[-1]:
@@ -534,9 +561,22 @@ class Preprocessor:
             # expansion that leaks a trailing space corrupts every
             # __stringify of it (alternative.h .word, MC 12436 sweep).
         if first and (first[0] == "##" or first[-1] == "##"):
+            if params is None:
+                # OBJECT-LIKE edge paste: gcc 11.4 makes this a DEFINE-TIME
+                # ERROR, rc != 0 (MC 12454 e6/e7 measured pair: `#define E
+                # ##b` dies with "'##' cannot appear at either end of a
+                # macro expansion").
+                raise DiagError("pp", path, ln, 1,
+                                "'##' cannot appear at either end of a macro "
+                                "expansion", warn_ctx)
             self._warn(path, ln, 1, "'##' cannot appear at either end of a "
                                     "macro expansion")
-            return                               # macro NOT defined (oracle)
+            # The function-like spelling keeps the documented M1 leniency
+            # (warn + macro NOT defined, rc 0, stream equal — pinned by
+            # test_pp_differential_m1.test_paste_no_yield_warns; the oracle
+            # is rc 1 here, a KNOWN residual outside F-A's object-like
+            # scope, MC 12454 readings).
+            return
         new = Macro(name, list(first), params, variadic, var_name=var_name)
         old = self.defs.get(name)
         if old is not None and not self._same_macro(old, new):
