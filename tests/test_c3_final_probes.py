@@ -188,6 +188,10 @@ def test_out_of_set_escape_rejected_loud(esc):
 
 
 def test_block_scope_enum_decl_is_loud_not_silent():
+    # DA-verdict-c2 P3-1 (OBS-A) adjudicated the §8 message: it must name the
+    # CONSTRUCT literally ("enum declaration in block scope ...") and must NOT
+    # echo the node class 'EnumDecl'. The probe's intent — loud, construct
+    # named — is preserved; the match is case-folded to accept the keyword.
     _reject("enumblock",
             "int main(void) { enum { K = 2 }; int g[K]; g[0] = 1; pl(g[0]); return 0; }\n",
-            r"Enum")
+            r"(?i)enum declaration")

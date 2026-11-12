@@ -15,6 +15,7 @@ Expression emission: blcc/expr_codegen.py; type sizing/layout: blcc/types.py.
 """
 from __future__ import annotations
 
+import dataclasses
 from typing import Dict, List, Optional, Tuple
 
 from blcc import ast
@@ -74,6 +75,9 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter):
                 if d.name in self.globals:
                     self._err(d, "redefinition of global '{}'".format(d.name),
                               d.name)
+                sized = self._sized_array_decl(d.type, d.init, d)
+                if sized is not d.type:   # nodes are frozen — carry a copy
+                    d = dataclasses.replace(d, type=sized)
                 self.globals[d.name] = d
             elif isinstance(d, ast.StructDecl):
                 if d.members is not None:
@@ -277,6 +281,14 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter):
                 self._stmt(n.stmt)
         elif isinstance(n, ast.VarDecl):
             self._stmt_vardecl(n)
+        elif isinstance(n, ast.EnumDecl):
+            # §8: the message names the CONSTRUCT literally — never a node
+            # class name like 'EnumDecl' (DA-c2 P3-1 / OBS-A).
+            self._err(n, "enum declaration in block scope is not in the "
+                      "subset (§4)", "enum")
+        elif isinstance(n, ast.StructDecl):
+            self._err(n, "struct declaration in block scope is not in the "
+                      "subset (§4)", "struct")
         else:
             self._err(n, "cannot emit statement", type(n).__name__)
 
@@ -304,19 +316,22 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter):
         self.fn.locals = saved
 
     def _stmt_vardecl(self, vd: ast.VarDecl) -> None:
-        off = self._slot(vd.type, vd)
-        ty = self._decay(vd.type)
+        # §4: a local `T a[]` gets its size FROM ITS INITIALIZER here — slot,
+        # locals entry, sizeof and decay all see the sized type downstream
+        # (the node is frozen, so the sized type travels in the local ty).
+        ty = self._sized_array_decl(vd.type, vd.init, vd)
+        off = self._slot(ty, vd)
         # bind the ORIGINAL type: _ex_ident needs sized-arrayness to decay to
         # leaq; pointer behaviour everywhere else comes from _decay in _ty.
-        self.fn.locals[vd.name] = (off, vd.type)
+        self.fn.locals[vd.name] = (off, ty)
         if vd.init is None:
             return
         if isinstance(vd.init, ast.InitList):
-            self._init_local(off, vd.type, vd.init, vd)
+            self._init_local(off, ty, vd.init, vd)
             return
-        if isinstance(vd.init, ast.StrLit) and isinstance(vd.type, ast.ArrayType):
+        if isinstance(vd.init, ast.StrLit) and isinstance(ty, ast.ArrayType):
             raw = vd.init.value.encode("utf-8", "surrogateescape") + b"\0"
-            n = 0 if vd.type.size is None else self._arrlen(vd.type, vd)
+            n = 0 if ty.size is None else self._arrlen(ty, vd)
             if len(raw) > n:
                 self._err(vd.init, "string initializer longer than char[{}] (§4)"
                           .format(n), "initializer")
@@ -324,11 +339,11 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter):
                 self._e("movq ${}, %rax".format(b))
                 self._e("movb %al, {}(%rbp)".format(off + i))
             return
-        if isinstance(vd.type, ast.ArrayType):
+        if isinstance(ty, ast.ArrayType):
             self._err(vd, "array initializer must be a brace list or string "
                       "literal (§4)", type(vd.init).__name__)
         self._emit_expr(vd.init)
-        self._store(ty, "{}(%rbp)".format(off), at=vd)
+        self._store(self._decay(ty), "{}(%rbp)".format(off), at=vd)
 
     def _init_local(self, off: int, ty: ast.Node, init: ast.InitList, at) -> None:
         if isinstance(ty, ast.ArrayType):

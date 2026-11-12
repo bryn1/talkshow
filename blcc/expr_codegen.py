@@ -140,6 +140,20 @@ class ExprEmitter:
             self._e("movl %eax, %eax")
             self._e("movslq %eax, %rax")
 
+    def _reintern_stored(self, ty: ast.Node) -> None:
+        """C: an assignment's value is the CONVERTED STORED value (gcc:
+        (xi = 3000000000) is the int -1294967296, not the 64-bit source).
+        Re-intern %rax through the target's own width: int via movl+movslq,
+        short/char via movs*; long and pointer results are already 64-bit."""
+        if isinstance(ty, ast.BuiltinType):
+            if ty.name == "int":
+                self._e("movl %eax, %eax")
+                self._e("movslq %eax, %rax")
+            elif ty.name == "short":
+                self._e("movswq %ax, %rax")
+            elif ty.name == "char":
+                self._e("movsbq %al, %rax")
+
     def _ex_select(self, n) -> None:
         self._emit_addr(n)
         if isinstance(self._ty(n), ast.ArrayType):
@@ -166,6 +180,7 @@ class ExprEmitter:
                 self._store(ty, "{}(%rip)".format(n.target.name), at=n)
             else:
                 self._ty(n.target)      # raises 'undeclared'
+            self._reintern_stored(ty)   # result = converted stored value (§4)
             return
         self._emit_expr(n.value)
         t = self._t()
@@ -175,6 +190,7 @@ class ExprEmitter:
         self._e("movq {}, %rcx".format(t))  # value
         self._store(ty, "(%rdx)", src="c", at=n)
         self._e("movq {}, %rax".format(t))  # result = value
+        self._reintern_stored(ty)           # converted, not the raw source
         self._unt()
 
     def _ex_assignop(self, n) -> None:
@@ -202,7 +218,7 @@ class ExprEmitter:
             self._e("imulq {}, %rax".format(t0))
         else:
             self._e("{} {}, %rax".format(_ARITH[op], t0))
-        self._narrow_int(self._ty(n))       # compound result keeps target type
+        self._reintern_stored(self._decay(self._ty(n)))   # = stored value (§4)
         self._e("movq {}, %rdx".format(t1))
         self._store(ty, "(%rdx)", at=n)
         self._unt(2)

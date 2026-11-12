@@ -77,7 +77,33 @@ class TypeMap:
                   type(n).__name__)
 
     def _arrlen(self, ty: ast.ArrayType, at) -> int:
-        return self._fold_const(ty.size, at)
+        n = self._fold_const(ty.size, at)
+        if n < 0:
+            self._err(at or ty.size, "array size must be positive (§4)", str(n))
+        esz = self._size(ty.inner, at)
+        if n > 2 ** 28 or esz * n > 2 ** 31:
+            self._err(at or ty.size, "array size exceeds the implementation "
+                      "limit of 2^28 elements / 2^31 bytes (§4)", str(n))
+        return n
+
+    def _sized_array_decl(self, ty: ast.Node, init, at) -> ast.Node:
+        """§4 admits `T a[]` only with an initializer — the DECLARATION then
+        takes its size FROM THE INITIALIZER (count x elem; a string array is
+        strlen+1 bytes). The `size is None` proxy is legal only for array
+        PARAMETERS; leaving an unsized array with storage made _slot emit an
+        8-byte frame hole and _ex_ident load array content as a pointer."""
+        if not isinstance(ty, ast.ArrayType) or ty.size is not None or init is None:
+            return ty
+        n = None
+        if isinstance(init, ast.InitList):
+            n = len(init.items)
+        elif isinstance(init, ast.StrLit) and isinstance(ty.inner, ast.BuiltinType) \
+                and TYPE_SIZE[ty.inner.name] == 1:
+            n = len(init.value.encode("utf-8", "surrogateescape")) + 1
+        if n is None:
+            return ty                       # scalar init: the loud §4 reject owns
+        return ast.ArrayType(ty.file, ty.line, ty.col, ty.inner,
+                             ast.IntLit(ty.file, ty.line, ty.col, n))
 
     # -- alignments (P2-2: natural C layout, never a flat 8) ----------------------
 

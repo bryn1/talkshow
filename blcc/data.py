@@ -37,11 +37,14 @@ class DataEmitter:
                   "address-of-global (§4)", type(n).__name__)
 
     def _bytes_of(self, ty: ast.Node, init, at) -> List[Tuple[str, int]]:
-        """-> list of ('b', byte) | ('q', label) covering size(ty) bytes."""
+        """-> list of ('b', byte) | ('q', label) | ('z', count) covering
+        size(ty) bytes. Zero runs stay COMPRESSED ('z') so _emit_global can
+        emit a .zero directive — a materialized byte list is what OOM-killed
+        the compiler on large .bss (DA-c2 P2-2, exit 137 outside §2)."""
         if isinstance(ty, (ast.BuiltinType, ast.PtrType)):
             sz = self._size(ty, at)
             if init is None:
-                return [("b", 0)] * sz
+                return [("z", sz)]
             if isinstance(init, ast.InitList):
                 self._err(init, "brace initializer for a scalar (§4)", "{")
             v = self._const(init)
@@ -59,8 +62,10 @@ class DataEmitter:
                 if ty.size is not None and len(raw) > n:
                     self._err(init, "string initializer longer than char[{}] (§4)"
                               .format(n), "initializer")
-                return ([("b", b) for b in raw]
-                        + [("b", 0)] * (n - len(raw)))
+                out = [("b", b) for b in raw]
+                if n - len(raw) > 0:
+                    out.append(("z", n - len(raw)))
+                return out
             items = init.items if isinstance(init, ast.InitList) else \
                 ([] if init is None else None)
             if items is None:
@@ -72,7 +77,9 @@ class DataEmitter:
             out: List[Tuple[str, int]] = []
             for it in items:
                 out.extend(self._bytes_of(ty.inner, it, at))
-            return out + [("b", 0)] * max(0, n * esz - len(out))
+            if n * esz - len(out) > 0:
+                out.append(("z", n * esz - len(out)))
+            return out
         if isinstance(ty, ast.StructType):
             offsets, total = self._struct_layout(ty, at)
             members = self.structs[ty.tag]
@@ -83,19 +90,24 @@ class DataEmitter:
                           "member constants (§4)", "initializer")
             out = []
             for i, m in enumerate(members):
-                out.extend([("b", 0)] * (offsets[m.name] - len(out)))
+                if offsets[m.name] - len(out) > 0:
+                    out.append(("z", offsets[m.name] - len(out)))
                 if i < len(items):
                     out.extend(self._bytes_of(m.type, items[i], at))
-            return out + [("b", 0)] * (total - len(out))
+            if total - len(out) > 0:
+                out.append(("z", total - len(out)))
+            return out
         self._err(at or self.tu, "cannot initialize this type", type(ty).__name__)
 
     def _emit_global(self, vd: ast.VarDecl):
         items = self._bytes_of(vd.type, vd.init, vd)
+        total = sum(1 if k == "b" else (8 if k == "q" else v)
+                    for k, v in items)
         # .align precedes the label (.data AND .bss): a label written before
         # its padding binds to the pre-padding address, not to the bytes.
-        if all(k == "b" and v == 0 for k, v in items):
+        if all(k == "z" or (k == "b" and v == 0) for k, v in items):
             return "bss", ["    .align 8", "{}:".format(vd.name),
-                           "    .zero {}".format(len(items))]
+                           "    .zero {}".format(total)]
         lines = ["    .align 8", "{}:".format(vd.name)]
         acc: List[int] = []
 
@@ -108,6 +120,9 @@ class DataEmitter:
         for kind, val in items:
             if kind == "b":
                 acc.append(val)
+            elif kind == "z":
+                flush()
+                lines.append("    .zero {}".format(val))
             else:
                 flush()
                 lines.append("    .quad {}".format(val))
