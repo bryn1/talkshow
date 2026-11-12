@@ -161,3 +161,54 @@ def test_unguarded_true_cycle_loud(tmp_path):
     assert "include cycle detected" in b.stderr
 
 
+
+# ------------------------------------------------------------- F-2 paste --
+
+
+def test_paste_same_param_twice_full_arg(tmp_path):
+    """Verbatim rc2_min.c kernel driver (arch/x86 asm.h:31/48/189 shape):
+    the SECOND paste of one parameter used to lose its right operand —
+    gcc emits "rsp", shipped blcc emitted "r" AT RC 0 (silent)."""
+    src = ("#define __stringify_1(x...) #x\n"
+           "#define __stringify(x...) __stringify_1(x)\n"
+           "#define SEL_RAW(a,b) __stringify(b)\n"
+           "#define REG(reg) SEL_RAW(e##reg, r##reg)\n"
+           "R = REG(sp);\n")
+    out, _ = diff_snippet(tmp_path, src)
+    assert '"rsp"' in norm(out)                      # independent pin
+
+
+def test_paste_attr_chain_loudless(tmp_path):
+    """Verbatim include/linux/sysfs.h:101 device.h chain shape: shipped
+    blcc died LOUD ('__ATTR takes 4 argument(s)') because the paste shrink
+    ate the argument mapping mid-substitution."""
+    src = ("#define __stringify_1(x...) #x\n"
+           "#define __stringify(x...) __stringify_1(x)\n"
+           "#define ___PASTE(a,b) a##b\n"
+           "#define __PASTE(a,b) ___PASTE(a,b)\n"
+           "#define __ATTR(_name, _mode, _show, _store) "
+           "{ .attr = {.name = __stringify(_name), .mode = "
+           "__PASTE(04,_mode) }, .show = _show, .store = _store }\n"
+           "#define __ATTR_RW(_name) __ATTR(_name, 0644, _name##_show, "
+           "_name##_store)\n"
+           "#define DEVICE_ATTR_RW(_name) struct device_attribute "
+           "dev_attr_##_name = __ATTR_RW(_name)\n"
+           "DEVICE_ATTR_RW(foo);\n")
+    out, b = diff_snippet(tmp_path, src)
+    assert "'__ATTR' redefined" not in b.stderr
+    joined = " ".join(norm(out))
+    assert 'dev_attr_foo' in joined and '"foo"' in joined and '0644' in joined
+
+
+def test_paste_va_args_tail_not_shrunk(tmp_path):
+    """Discriminator for the R8 tail rule vs the mapping fix: a variadic
+    tail used BOTH as a plain occurrence and as a paste operand — the plain
+    occurrence must see the FULL tail (old code saw the shrunk mapping)."""
+    src = ("#define BOTH(a...) a + Z ## a\n"
+           "V = BOTH(1 , 2);\n")
+    out, _ = diff_snippet(tmp_path, src)
+    # oracle (measured): V = 1 , 2 + Z1 , 2 ;  — the plain occurrence sees
+    # the FULL tail AND the paste takes its head, tail following (R8).
+    assert " ".join(norm(out)) == "V = 1 , 2 + Z1 , 2 ;"
+
+

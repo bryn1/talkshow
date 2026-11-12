@@ -456,9 +456,13 @@ class Expander:
                     mapping[body[j]][0]):
                 right = mapping[body[j]][0]
                 tail = mapping[body[j]][1:]
-                mapping[body[j]] = tail
-                # the operand's REMAINING tokens stay in the stream (R8:
-                # `## __VA_ARGS__` pastes only the first, the tail follows)
+                # NO mapping shrink here: the parameter's FULL argument must
+                # survive for every later occurrence/paste of the same
+                # parameter in this body (verdict-c2 F-2, MC 12436 — the old
+                # `mapping[p] = tail` silently turned asm("rsp") into
+                # asm("r") and killed the __ATTR_RW chain). The operand's
+                # REMAINING tokens stay in the stream via the body splice
+                # (R8: `## __VA_ARGS__` pastes only the first, tail follows)
                 body[j:j + 1] = tail
             elif body[j] in mapping:       # empty operand for this paste
                 j += 1
