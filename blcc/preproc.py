@@ -1,7 +1,7 @@
 """M1 GCC-compatible preprocessor: directive dispatch & source bookkeeping
 (plan R1, R2, R4, R10–R14, R17, R20, R21).
 
-LINES (526 > 400): directive dispatch is ONE concern — the #if-conditional
+LINES (583 > 400): directive dispatch is ONE concern — the #if-conditional
 stack, #line origin state and include search must share the per-file state
 machine; splitting would duplicate that state across files.
 
@@ -283,8 +283,7 @@ class Preprocessor:
         if self._conds and not self._conds[-1][1]:
             return                             # inactive region: silence
         if word == "include":
-            self._include(label, ln, self._text(rest).strip(),
-                          base_dir=base_dir)
+            self._include_line(label, ln, rest, base_dir)
         elif word == "define":
             self._define(label, ln, rest, warn_ctx="#define " + self._text(rest))
         elif word == "undef":
@@ -381,10 +380,25 @@ class Preprocessor:
 
     # -- #include (search order + reopen, R1/R20) --------------------------------
 
+    def _include_line(self, label, ln, toks, base_dir) -> None:
+        operand = self._text(toks).strip()
+        if operand[:1] not in ('"', "<"):
+            # C11 6.10.3 / gcc (MC 12438, the 37-file class): the operand is
+            # macro-EXPANDED before the filename is parsed — every kernel TU
+            # that #defines CREATE_TRACE_POINTS reaches define_trace.h's
+            # `#include TRACE_INCLUDE(TRACE_INCLUDE_FILE)` through this
+            # path. The SHIPPED expander does the rescan (one mechanism,
+            # F-3's); an operand that expands to garbage stays LOUD here —
+            # _include's parser never defaults to silence.
+            toks = self.expander.expand(toks, label, ln)
+            operand = self._text(toks).strip()
+        self._include(label, ln, operand, base_dir=base_dir)
+
     def _include(self, path: str, ln: int, operand: str,
                  base_dir=".", preinclude: bool = False) -> None:
         if not operand:
-            raise DiagError("pp", path, ln, 1, "empty #include",
+            raise DiagError("pp", path, ln, 1,
+                            '#include expects "FILENAME" or <FILENAME>',
                             "#include")
         if operand[0] == "<":
             end = operand.find(">")
@@ -393,6 +407,7 @@ class Preprocessor:
                                 "#include " + operand)
             target = operand[1:end]
             angle = True
+            tail = operand[end + 1:]
         elif operand[0] == '"':
             end = operand.find('"', 1)
             if end < 0:
@@ -401,10 +416,17 @@ class Preprocessor:
                                 "#include " + operand)
             target = operand[1:end]
             angle = False
+            tail = operand[end + 1:]
         else:
+            # gcc 11.4 (measured): error, rc 1. Loud, never silent.
             raise DiagError("pp", path, ln, 1,
-                            "macro-operand #include is not evaluated in M1 "
-                            "(deferred §5)", "#include " + operand)
+                            '#include expects "FILENAME" or <FILENAME>',
+                            "#include " + operand)
+        if tail.strip():
+            # oracle rc 0 + warning "extra tokens at end of #include
+            # directive" — the file is STILL included (MC 12438 pin).
+            self._warn(path, ln, 1, "extra tokens at end of #include "
+                                    "directive")
         if not target:
             raise DiagError("pp", path, ln, 1, "empty #include path",
                             "#include " + operand)
