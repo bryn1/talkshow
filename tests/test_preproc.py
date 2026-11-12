@@ -38,10 +38,14 @@ def test_function_like_nested_and_expression_args():
 
 
 def test_macro_name_inside_string_and_comment_not_expanded():
+    # M1: comments are stripped in pass 1 (R21, like gcc -E); macro names
+    # inside the remaining string literal must still NOT expand, and a
+    # longer identifier must never match the shorter macro (longest match).
     out = joined("#define FOO 1\n"
                  'char *s = "FOO"; // FOO here\n'
                  "int FOO_bar = 2;\n")
-    assert 'char *s = "FOO"; // FOO here' in out
+    assert 'char *s = "FOO";' in out
+    assert "FOO here" not in out
     assert "int FOO_bar = 2;" in out
 
 
@@ -57,10 +61,12 @@ def test_macro_arg_count_mismatch_is_pp_diagnostic():
     assert PP_RE.match(str(ei.value))
 
 
-def test_runaway_macro_is_loud_not_infinite():
-    with pytest.raises(DiagError) as ei:
-        preprocess("t.c", "#define A A+1\nint x = A;\n")
-    assert "macro expansion limit" in str(ei.value)
+def test_runaway_macro_terminates_like_gcc():
+    # M1 drops the GA "expansion limit" abort: gcc 11.4 lets a self-
+    # referential macro terminate by blue paint — the identifier survives
+    # inside its own expansion and expansion exits normally (probed).
+    out = joined("#define A A+1\nint x = A;\n")
+    assert "int x = A+1;" in out
 
 
 # -- conditionals --------------------------------------------------------------
@@ -146,9 +152,10 @@ def test_self_include_cycle_guard(tmp_path):
 # -- directives and positions -----------------------------------------------------
 
 def test_unsupported_directive_is_pp_diagnostic():
+    # M1 supports #if/#ifdef/... ; #include_next is the deferred one.
     with pytest.raises(DiagError) as ei:
-        preprocess("t.c", "#if 1\nint x;\n#endif\n")
-    assert "#if" in str(ei.value)
+        preprocess("t.c", "#include_next <foo.h>\n")
+    assert "#include_next" in str(ei.value)
     assert PP_RE.match(str(ei.value))
 
 
