@@ -1,7 +1,7 @@
 """Token-stream macro expansion for the M1 preprocessor (plan R7–R9, R14,
 R15, R18, R19).
 
-LINES (492 > 400): the expansion recursion, argument collection, prescan,
+LINES (510 > 400): the expansion recursion, argument collection, prescan,
 substitution and paste pass tokens through ONE cursor chain; splitting
 would thread the same cursor through two files.
 
@@ -309,23 +309,37 @@ class Expander:
 
     def _check_args(self, groups: List[List[str]], macro: Macro, path: str,
                     line: int) -> List[List[str]]:
-        trimmed = []
-        for g in groups:
-            while g and is_ws(g[0]):
-                g = g[1:]
-            while g and is_ws(g[-1]):
-                g = g[:-1]
-            trimmed.append(g)
-        named = len(macro.params or [])
-        if named == 0 and len(trimmed) == 1 and not trimmed[0]:
+        named = macro.params or []
+        # F2 (GNU spelling `name(p..., x...)`): the NAMED variadic param
+        # answers to the tail, so it is NOT a required argument — the call
+        # needs only the non-variadic named params (mipi_dbi_command(dbi,
+        # cmd, seq...) accepts mipi_dbi_command(dbi, 0x01); oracle).
+        required = len(named) - (1 if (macro.variadic and
+                                       macro.var_name in named) else 0)
+        fixed = []
+        for idx, g in enumerate(groups):
+            # P2a (oracle stringify matrix): a variadic parameter answers to
+            # ONE contiguous token range — the tail groups stay RAW here and
+            # are flattened-with-commas + range-end trimmed in _substitute
+            # (gcc keeps the source whitespace around the joining commas:
+            # Q(a , b) -> "a , b", Q(a,b) -> "a,b", Q( ,) -> ","). Named
+            # params keep their per-argument trim (S( a ) -> "a").
+            tail = macro.variadic and idx >= required
+            if not tail:
+                while g and is_ws(g[0]):
+                    g = g[1:]
+                while g and is_ws(g[-1]):
+                    g = g[:-1]
+            fixed.append(g)
+        if len(named) == 0 and len(fixed) == 1 and not fixed[0]:
             return []                      # zero-argument invocation() form
-        if len(trimmed) < named or (not macro.variadic and
-                                    len(trimmed) > named):
+        if len(fixed) < required or (not macro.variadic and
+                                       len(fixed) > required):
             raise DiagError("pp", path, line, 1,
                             "macro '%s' takes %s argument(s)" % (
-                                macro.name, named if not macro.variadic
-                                else "at least %d" % named), macro.name)
-        return trimmed
+                                macro.name, required if not macro.variadic
+                                else "at least %d" % required), macro.name)
+        return fixed
 
     # -- prescan (plain parameters only, fresh hidden set — oracle F(F(1))) ----
 
@@ -388,11 +402,15 @@ class Expander:
         for idx, arg in enumerate(args[:start]):
             mapping[named[idx]] = arg
         if macro.variadic:                        # the tail ALWAYS answers,
-            rest: List[str] = []                  # even when the call is empty
-            for arg in args[start:]:
-                if rest:
-                    rest.append(",")
-                rest.extend(arg)
+            tail = args[start:]                   # even when the call is
+            rest: List[str] = list(tail[0]) if tail else []
+            for arg in tail[1:]:                  # ONE contiguous range:
+                rest.append(",")                  # groups rejoined by index,
+                rest.extend(arg)                  # ws trimmed at the ENDS
+            while rest and is_ws(rest[0]):        # only (oracle, P2a)
+                rest = rest[1:]
+            while rest and is_ws(rest[-1]):
+                rest = rest[:-1]
             mapping[macro.var_name] = rest
         raw_names = {n for n, u in self._param_usage(macro).items()
                      if u == "raw"}
