@@ -268,3 +268,71 @@ def test_alias_blue_paint_still_terminates(tmp_path):
     assert norm(out2).count("A") == 1                # gcc: P = A Q (blue)
 
 
+
+# ------------------------------------------------------------ F-4 predefines --
+
+
+def test_predefines_definedness_battery(tmp_path):
+    """EVERY name of the shipped table answers DEFINED on the oracle, and
+    the shipped table carries the full gcc 11.4 kernel-profile capture (not
+    the old hand-picked 24). The stateful hooks (__LINE__ … __TIME__) are
+    excluded: they answer at the use site, not as #ifdef names."""
+    sys.path.insert(0, REPO)
+    from blcc.pp_predefines import builtins
+    names = sorted(builtins("gnu89"))
+    assert len(names) >= 340, "predefine table too small: %d" % len(names)
+    for probe in ("__GCC_ASM_FLAG_OUTPUTS__", "__SIZEOF_INT128__",
+                  "__GNUC__", "__STDC__", "__INT64_C"):
+        assert probe in names, probe
+    lines = ["#ifndef %s\nMISS_%s\n#endif\n" % (n, n) for n in names
+             if n not in ("__LINE__", "__FILE__", "__COUNTER__",
+                          "__DATE__", "__TIME__")]
+    path = write(tmp_path, "battery.c", "".join(lines))
+    g = gcc_run(["-std=gnu89", path] + PINS)
+    b = blcc_run(["-std=gnu89", path] + PINS)
+    assert g.returncode == 0, g.stderr[:200]
+    assert b.returncode == 0, b.stderr[:200]
+    assert not any(t.startswith("MISS_") for t in norm(g.stdout))
+    assert not any(t.startswith("MISS_") for t in norm(b.stdout))
+    assert len(names) >= 340
+
+
+def test_predefines_value_branches(tmp_path):
+    """Silent-branch-flip rows + per-std value rows, token-equal to gcc:
+    __GCC_ASM_FLAG_OUTPUTS__ (371 corpus files took the WRONG asm.h:119
+    branch), __SIZEOF_INT128__ (math64.h:156), __STDC_UTF_16__ NOT defined
+    under gnu89 (gcc fact), __STDC_VERSION__ per -std, __INT64_C paste."""
+    src = ("#ifdef __GCC_ASM_FLAG_OUTPUTS__\nAFO\n#else\nAFO_NO\n#endif\n"
+           "#if __SIZEOF_INT128__ == 16\nI128\n#else\nI128_NO\n#endif\n"
+           "#ifdef __STDC_UTF_16__\nUTF\n#else\nUTF_NO\n#endif\n"
+           "#ifndef __STDC_VERSION__\nNOSTDVC\n#endif\n"
+           "C = __INT64_C(5);\nU = __UINT64_C(5);\n"
+           "#if __GNUC__ * 10000 + __GNUC_MINOR__ * 100 + "
+           "__GNUC_PATCHLEVEL__ == 110400\nGCCV\n#endif\n")
+    out, _ = diff_snippet(tmp_path, src, extra=["-std=gnu89"])
+    toks = norm(out)
+    for tag in ("AFO", "I128", "UTF_NO", "NOSTDVC", "GCCV"):
+        assert tag in toks, tag
+    assert "C = 5L ;" in " ".join(toks)
+    out17, _ = diff_snippet(tmp_path,
+                            "#ifdef __STDC_VERSION__\nV17\n#endif\n"
+                            "#ifdef __STDC_UTF_16__\nU17\n#endif\n",
+                            extra=["-std=gnu17"], fname="t17.c")
+    assert {"V17", "U17"} <= set(norm(out17))
+
+
+def test_predefines_D_U_still_win(tmp_path):
+    """The generated table must keep the R17 order: builtins first, then
+    argv -D/-U left-to-right (interaction unchanged)."""
+    out, _ = diff_snippet(tmp_path,
+                          "#if __STDC__ == 0\nZERO\n#else\nONE\n#endif\n",
+                          extra=["-std=gnu89", "-U__STDC__",
+                                 "-D__STDC__=0"])
+    assert "ZERO" in norm(out)
+    out2, _ = diff_snippet(tmp_path, "#ifdef __SIZEOF_INT128__\nYES\n"
+                                     "#else\nNO\n#endif\n",
+                           extra=["-std=gnu89", "-U__SIZEOF_INT128__"],
+                           fname="t2.c")
+    assert "NO" in norm(out2)
+
+
