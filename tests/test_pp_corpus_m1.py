@@ -6,9 +6,9 @@ test bug), compared with the SHIPPED normalizer imported from
 tests/test_pp_differential_m1.py (never re-implemented) and the shipped PINS
 on both sides.
 
-Selection rule per file: it was a FAILING corpus row in the c2 sweep
-(m1-verify-c2-corpus.tsv) whose root cause is one of the five fixes — so
-each row is a regression pin with a named class, not decoration. The seed
+Selection rule per file: it was a FAILING corpus row in the c2 or the c3
+sweep whose root cause is one of the fixed classes — so each row is a
+regression pin with a named class, not decoration. The seed
 shims are built under /home/claudecode/Blaha/.tmp/m1-seed by the shipped
 build_seed() — never inside the kernel tree (READ-ONLY).
 
@@ -92,6 +92,22 @@ FILES = [
     ("crypto/wp512.c", "F-4/F-1 spread crypto"),
     ("crypto/serpent_generic.c", "F-4/F-1 spread crypto"),
     ("crypto/sm3_generic.c", "F-4/F-1 spread crypto"),
+    # M1-c4 (MC 12438): macro-operand #include — every CREATE_TRACE_POINTS
+    # TU reaches define_trace.h's `#include TRACE_INCLUDE(TRACE_INCLUDE_FILE)`
+    # (C11 6.10.3 operand expansion). 7 rows spanning mm/, block/, init/,
+    # kernel/ — every one of them died LOUD (rc 2 "deferred §5") pre-fix.
+    ("kernel/trace/power-traces.c", "c4 macro-operand #include"),
+    ("kernel/trace/rpm-traces.c", "c4 macro-operand #include"),
+    ("block/blk-core.c", "c4 macro-operand #include"),
+    ("init/main.c", "c4 macro-operand #include"),
+    ("kernel/workqueue.c", "c4 macro-operand #include"),
+    ("mm/filemap.c", "c4 macro-operand #include"),
+    ("mm/vmscan.c", "c4 macro-operand #include"),
+    # M1-c4 (MC 12438) P0-SILENT: mm/interval_tree.c — the self-referential
+    # `#define inline inline ...` (compiler_types.h:144) passed through a
+    # multi-line macro argument lost its blue paint at the prescan/emit
+    # boundary and duplicated its attribute tail (72 extra tokens, rc 0).
+    ("mm/interval_tree.c", "c4 SILENT attr duplication"),
 ]
 
 
