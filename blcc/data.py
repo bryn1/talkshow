@@ -33,12 +33,13 @@ class DataEmitter:
                       "§4 set (integer/char constant or address-of-global; "
                       "string bytes belong in a char array initializer)",
                       "string literal")
-        if isinstance(n, (ast.Call, ast.Binary)):
-            # SEALED contract (test_c2_orch_probes REJECT_CASES) pins these
-            # two exact tokens at this site: found 'Call' / found 'Binary'.
-            # Everything else names its construct literally (§8, DA-c3 P1-1).
-            self._err(n, "global initializer must be an integer/char constant "
-                      "or address-of-global (§4)", type(n).__name__)
+        # §8 construct-naming (DA-c3 P1-1 completed at lead ruling): even the
+        # two forms test_c2_orch_probes once pinned by node-class token are
+        # named literally now — 'call expression' / '<op> expression'. The
+        # sealed probe PREDATES the OBS-A/§8 adjudication; its re-sign is the
+        # verifier's (TEST-c4). Until then those two token rows are RED by
+        # design — reverting this line to 'found Call/Binary' would UNFIX the
+        # product and is the wrong remedy.
         self._err(n, "global initializer must be an integer/char constant "
                   "or address-of-global (§4)", self._what(n))
 
