@@ -43,6 +43,7 @@ _ID_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*$")
 _MAX_EXPANSIONS = 4000000      # runaway (doubling) guard, not a depth cap
 _IDENTISH = re.compile(r"^[A-Za-z0-9_.']")
 _PASTE_SPLIT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*|[0-9][0-9A-Za-z_.]*|.?$")
+_PASTE_ONE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*|[0-9][0-9A-Za-z_.]*")
 
 
 def tokenize(text: str) -> List[str]:
@@ -526,7 +527,17 @@ class Expander:
                 self.warn(line, 1,
                           "pasting '%s' and '%s' does not give a valid "
                           "preprocessing token" % (plain(left), right))
-            out.append(joined)
+            if _PASTE_ONE.fullmatch(joined):
+                out.append(joined)
+            else:
+                # The join is NOT a single valid preprocessing token: gcc
+                # keeps the operands as TWO tokens on the rescan, and the
+                # comma-count idiom `__C(, ##X, n..0)` (arch/x86 rmwcc.h:7,
+                # verbatim in the corpus sweep, MC 12436) only counts right
+                # when that pasted comma re-splits arguments again. A single
+                # joined string here silently shifts every argument.
+                out.append(left)
+                out.append(right)
         elif right is not None:
             out.append(right)              # empty left operand: paste no-op
         elif left is not None:
