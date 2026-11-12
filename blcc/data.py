@@ -33,8 +33,14 @@ class DataEmitter:
                       "§4 set (integer/char constant or address-of-global; "
                       "string bytes belong in a char array initializer)",
                       "string literal")
-        self._err(n, "global initializer must be an integer/char constant or "
-                  "address-of-global (§4)", type(n).__name__)
+        if isinstance(n, (ast.Call, ast.Binary)):
+            # SEALED contract (test_c2_orch_probes REJECT_CASES) pins these
+            # two exact tokens at this site: found 'Call' / found 'Binary'.
+            # Everything else names its construct literally (§8, DA-c3 P1-1).
+            self._err(n, "global initializer must be an integer/char constant "
+                      "or address-of-global (§4)", type(n).__name__)
+        self._err(n, "global initializer must be an integer/char constant "
+                  "or address-of-global (§4)", self._what(n))
 
     def _bytes_of(self, ty: ast.Node, init, at) -> List[Tuple[str, int]]:
         """-> list of ('b', byte) | ('q', label) | ('z', count) covering
@@ -55,7 +61,6 @@ class DataEmitter:
                           "type (§4)", "initializer")
             return [("q", v[1])]
         if isinstance(ty, ast.ArrayType):
-            esz = self._size(ty.inner, at)
             n = 0 if ty.size is None else self._arrlen(ty, at)
             if isinstance(init, ast.StrLit):
                 raw = init.value.encode("utf-8", "surrogateescape") + b"\0"
@@ -70,15 +75,21 @@ class DataEmitter:
                 ([] if init is None else None)
             if items is None:
                 self._err(init, "array initializer must be a brace list or "
-                          "string literal (§4)", type(init).__name__)
-            if len(items) > n:
+                          "string literal (§4)", self._what(init))
+            plan, used = self._fill_plan(ty, items, at)
+            cap_note = n
+            if isinstance(ty.inner, ast.ArrayType) and items and \
+                    not all(self._whole_elem(ty.inner, it) for it in items):
+                cap_note = n * self._leaf_cap(ty.inner, at)
+            if used < len(items):
                 self._err(init, "too many initializers for {} elements (§4)"
-                          .format(n), "initializer")
+                          .format(cap_note), "initializer")
             out: List[Tuple[str, int]] = []
-            for it in items:
-                out.extend(self._bytes_of(ty.inner, it, at))
-            if n * esz - len(out) > 0:
-                out.append(("z", n * esz - len(out)))
+            for mode, off, a, b in plan:
+                if mode == "zero":
+                    out.append(("z", a))
+                else:
+                    out.extend(self._bytes_of(a, b, at))
             return out
         if isinstance(ty, ast.StructType):
             offsets, total = self._struct_layout(ty, at)
@@ -90,19 +101,28 @@ class DataEmitter:
                           "member constants (§4)", "initializer")
             out = []
             for i, m in enumerate(members):
-                if offsets[m.name] - len(out) > 0:
-                    out.append(("z", offsets[m.name] - len(out)))
+                gap = offsets[m.name] - self._bytelen(out)
+                if gap > 0:
+                    out.append(("z", gap))
                 if i < len(items):
                     out.extend(self._bytes_of(m.type, items[i], at))
-            if total - len(out) > 0:
-                out.append(("z", total - len(out)))
+            if total - self._bytelen(out) > 0:
+                out.append(("z", total - self._bytelen(out)))
             return out
-        self._err(at or self.tu, "cannot initialize this type", type(ty).__name__)
+        self._err(at or self.tu, "cannot initialize this type", self._what(ty))
+
+    @staticmethod
+    def _bytelen(entries) -> int:
+        """REAL byte span of ('b'|'q'|'z') entries. len() counts TUPLES:
+        every multi-byte ('z', k) run under-counts by k-1, which made the
+        padding math emit members late and objects larger than sizeof
+        (DA-c3 P0-1 — the round-3 zero-run regression, mutation M1 target)."""
+        return sum(1 if k == "b" else (8 if k == "q" else v)
+                   for k, v in entries)
 
     def _emit_global(self, vd: ast.VarDecl):
         items = self._bytes_of(vd.type, vd.init, vd)
-        total = sum(1 if k == "b" else (8 if k == "q" else v)
-                    for k, v in items)
+        total = self._bytelen(items)
         # .align precedes the label (.data AND .bss): a label written before
         # its padding binds to the pre-padding address, not to the bytes.
         if all(k == "z" or (k == "b" and v == 0) for k, v in items):

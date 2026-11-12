@@ -290,7 +290,7 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter):
             self._err(n, "struct declaration in block scope is not in the "
                       "subset (§4)", "struct")
         else:
-            self._err(n, "cannot emit statement", type(n).__name__)
+            self._err(n, "cannot emit statement", self._what(n))
 
     def _stmt_for(self, n: ast.For) -> None:
         saved = dict(self.fn.locals)
@@ -341,32 +341,72 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter):
             return
         if isinstance(ty, ast.ArrayType):
             self._err(vd, "array initializer must be a brace list or string "
-                      "literal (§4)", type(vd.init).__name__)
+                      "literal (§4)", self._what(vd.init))
         self._emit_expr(vd.init)
         self._store(self._decay(ty), "{}(%rbp)".format(off), at=vd)
 
     def _init_local(self, off: int, ty: ast.Node, init: ast.InitList, at) -> None:
         if isinstance(ty, ast.ArrayType):
-            esz = self._size(ty.inner, at)
-            n = self._arrlen(ty, at) if ty.size is not None else len(init.items)
-            if len(init.items) > n:
+            # ONE brace-elision walk for both writers: the plan is the same
+            # §6.7.9 stream blcc.data emits global bytes from (DA-c3 P0-2);
+            # here each leaf becomes a frame store, each 'zero' run a memset.
+            plan, used = self._fill_plan(ty, init.items, at)
+            cap_note = (self._arrlen(ty, at) if ty.size is not None
+                        else len(init.items))
+            if isinstance(ty.inner, ast.ArrayType) and init.items and \
+                    not all(self._whole_elem(ty.inner, it) for it in init.items):
+                cap_note = cap_note * self._leaf_cap(ty.inner, at)
+            if used < len(init.items):
                 self._err(at, "too many initializers for {} elements (§4)"
-                          .format(n), "initializer")
-            for i, it in enumerate(init.items):
-                self._init_item(off + i * esz, ty.inner, it, at)
+                          .format(cap_note), "initializer")
+            for mode, o, a, b in plan:
+                if mode == "zero":
+                    self._zero_local(off + o, a)
+                else:
+                    self._init_item(off + o, a, b, at)
         elif isinstance(ty, ast.StructType):
             offsets, _ = self._struct_layout(ty, at)
             members = self.structs[ty.tag]
             if len(init.items) > len(members):
                 self._err(at, "too many struct initializers (§4)", "initializer")
-            for m, it in zip(members, init.items):
-                self._init_item(off + offsets[m.name], m.type, it, at)
+            placed = 0
+            for i, m in enumerate(members):
+                mo = offsets[m.name]
+                if placed < mo:
+                    self._zero_local(off + placed, mo - placed)
+                if i < len(init.items):
+                    self._init_item(off + mo, m.type, init.items[i], at)
+                else:
+                    self._zero_local(off + mo, self._size(m.type, at))
+                placed = mo + self._size(m.type, at)
         else:
             self._err(at, "brace initializer for a scalar local (§4)", "{")
+
+    def _zero_local(self, off: int, nbytes: int) -> None:
+        """Zero a frame span: partial initializers must leave ZERO in the
+        untouched slots (C §6.7.9), never stale frame garbage. rep stosb so
+        the emission stays constant-size however large the tail is."""
+        if nbytes <= 0:
+            return
+        self._e("movq ${}, %rcx".format(nbytes))
+        self._e("leaq {}(%rbp), %rdi".format(off))
+        self._e("xorl %eax, %eax")
+        self._e("cld")
+        self._e("rep stosb")
 
     def _init_item(self, off: int, ty: ast.Node, item, at) -> None:
         if isinstance(item, ast.InitList):
             self._init_local(off, ty, item, at)
+            return
+        if isinstance(item, ast.StrLit) and isinstance(ty, ast.ArrayType):
+            raw = item.value.encode("utf-8", "surrogateescape") + b"\0"
+            n = 0 if ty.size is None else self._arrlen(ty, at)
+            if len(raw) > n:
+                self._err(item, "string initializer longer than char[{}] (§4)"
+                          .format(n), "initializer")
+            for i, byte in enumerate(raw):
+                self._e("movq ${}, %rax".format(byte))
+                self._e("movb %al, {}(%rbp)".format(off + i))
             return
         self._emit_expr(item)
         self._store(ty, "{}(%rbp)".format(off), at=at)

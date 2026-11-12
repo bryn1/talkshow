@@ -31,7 +31,7 @@ class ExprEmitter:
     def _emit_expr(self, n: ast.Node) -> None:
         m = getattr(self, "_ex_" + type(n).__name__.lower(), None)
         if m is None:
-            self._err(n, "cannot emit expression", type(n).__name__)
+            self._err(n, "cannot emit expression", self._what(n))
         m(n)
 
     def _ex_intlit(self, n) -> None:
@@ -73,7 +73,14 @@ class ExprEmitter:
             self._emit_addr(n.operand)
         elif n.op == "*":
             self._emit_expr(n.operand)
-            self._load(self._ty(n), "(%rax)", at=n)
+            ty = self._ty(n)
+            if isinstance(ty, ast.ArrayType):
+                # array-typed lvalue in VALUE position decays to a pointer to
+                # its first element — the dereferenced ADDRESS itself (gcc:
+                # &(*p) == p), never a content load of the row bytes.
+                pass
+            else:
+                self._load(ty, "(%rax)", at=n)
         elif n.op == "-":
             self._emit_expr(n.operand)
             self._e("negq %rax")
@@ -395,4 +402,4 @@ class ExprEmitter:
                 self._e("addq ${}, %rax".format(off))
             return
         self._emit_expr(n)                             # rvalue: not addressable
-        self._err(n, "not an addressable l-value (§4)", type(n).__name__)
+        self._err(n, "not an addressable l-value (§4)", self._what(n))

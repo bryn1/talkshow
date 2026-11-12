@@ -246,12 +246,19 @@ class Parser:
         ty = base
         for _ in range(stars):
             ty = ast.PtrType(pos.file, pos.line, pos.col, ty)
+        dims = []
         while self.s.at_punct("["):
             bracket = self.s.next()
             size = (None if self.s.at_punct("]") else self.expr.parse_expression())
             self.s.expect_punct("]")
             if size is None and ctx == "member":
                 self._sema(bracket, "'array' members of a struct must have a fixed size (§5)")
+            dims.append((bracket, size))
+        # C reads declarators right-to-left: in `int m[2][3]` the bracket
+        # CLOSEST to m ([2]) is the OUTERMOST array — array of 2 rows of 3.
+        # Wrapping each successive bracket outward reversed the dimensions
+        # (DA-c3 P0-2: stride 8, false "too many initializers", m[i][j] off).
+        for bracket, size in reversed(dims):
             ty = ast.ArrayType(bracket.file, bracket.line, bracket.col, ty, size)
         params: Tuple[ast.Param, ...] = ()
         is_fn = False

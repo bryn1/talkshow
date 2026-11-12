@@ -11,6 +11,7 @@ from typing import Callable, Optional
 
 from blcc import ast
 from blcc.lexer import DiagError
+from blcc.types import what
 
 BINARY_PREC = {
     "||": 1, "&&": 2,
@@ -220,7 +221,7 @@ class ExprParser:
             raise DiagError(
                 "parse", tok.file, tok.line, tok.col,
                 "cannot apply {} to a non-l-value expression".format(context),
-                type(node).__name__)
+                what(node))
 
     def _struct_type(self, node: ast.Node):
         ty = self.expr_type(node)

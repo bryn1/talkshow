@@ -4,7 +4,7 @@ result kinds. This is the shared base of blcc.codegen.Codegen: every method
 reads tables Codegen collects (structs/enums/globals/sigs/fn.locals/tu)."""
 from __future__ import annotations
 
-from typing import Dict, Tuple
+from typing import Dict, List, Tuple
 
 from blcc import ast
 from blcc.lexer import DiagError
@@ -17,12 +17,53 @@ def _roundup8(n: int) -> int:
     return (n + 7) & ~7
 
 
+def what(n) -> str:
+    """§8 literal-naming: the offending CONSTRUCT as found '...' — never a
+    Python node class name (DA-c3 P1-1). Identifiers render as their own
+    source token; the fallback never echoes a class name. Shared by the
+    parser, sema and both codegens (module function: the mixins stay
+    independent)."""
+    if isinstance(n, ast.Ident):
+        return n.name
+    if isinstance(n, ast.IntLit):
+        return "integer literal"
+    if isinstance(n, ast.CharLit):
+        return "char literal"
+    if isinstance(n, ast.StrLit):
+        return "string literal"
+    if isinstance(n, ast.Call):
+        return "call expression"
+    if isinstance(n, ast.Cast):
+        return "cast expression"
+    if isinstance(n, ast.Sizeof):
+        return "sizeof expression"
+    if isinstance(n, ast.Binary):
+        return "{} expression".format(n.op)
+    if isinstance(n, ast.Unary):
+        return "{} expression".format(n.op)
+    if isinstance(n, ast.BuiltinType):
+        return n.name
+    if isinstance(n, ast.PtrType):
+        return "pointer"
+    if isinstance(n, ast.ArrayType):
+        return "array"
+    if isinstance(n, ast.StructType):
+        return "struct {}".format(n.tag)
+    if isinstance(n, ast.InitList):
+        return "{"
+    return "construct"
+
+
 class TypeMap:
 
     # -- diagnostics ---------------------------------------------------------
 
     def _err(self, at, message: str, found: str, phase: str = "sema"):
         raise DiagError(phase, at.file, at.line, at.col, message, found)
+
+    def _what(self, n) -> str:
+        """§8 literal-naming — see module-level what()."""
+        return what(n)
 
     # -- type sizing (§4 table lives HERE, never in ast.py) ---------------------
 
@@ -40,7 +81,7 @@ class TypeMap:
             if ty.size is None:        # parameter: decays to pointer (§4)
                 return 8
             return esz * self._arrlen(ty, at)
-        self._err(at or self.tu, "cannot size this type", type(ty).__name__)
+        self._err(at or self.tu, "cannot size this type", self._what(ty))
 
     # -- constant-folded array sizes (P1-2: §4 sizes are expressions) ------------
 
@@ -74,7 +115,7 @@ class TypeMap:
             return q if n.op == "/" else a - b * q
         self._err(at or n, "array size must be a compile-time constant "
                   "expression (§4: literals, enum constants, + - * /)",
-                  type(n).__name__)
+                  self._what(n))
 
     def _arrlen(self, ty: ast.ArrayType, at) -> int:
         n = self._fold_const(ty.size, at)
@@ -96,7 +137,14 @@ class TypeMap:
             return ty
         n = None
         if isinstance(init, ast.InitList):
-            n = len(init.items)
+            inner = ty.inner
+            if isinstance(inner, ast.ArrayType) and init.items and \
+                    not all(self._whole_elem(inner, it) for it in init.items):
+                cap = self._leaf_cap(inner, at)      # brace-elided flat rows
+                n = -(-self._leaf_count(init.items) // cap) if cap \
+                    else len(init.items)
+            else:
+                n = len(init.items)
         elif isinstance(init, ast.StrLit) and isinstance(ty.inner, ast.BuiltinType) \
                 and TYPE_SIZE[ty.inner.name] == 1:
             n = len(init.value.encode("utf-8", "surrogateescape")) + 1
@@ -104,6 +152,76 @@ class TypeMap:
             return ty                       # scalar init: the loud §4 reject owns
         return ast.ArrayType(ty.file, ty.line, ty.col, ty.inner,
                              ast.IntLit(ty.file, ty.line, ty.col, n))
+
+    # -- array initializer descent (§6.7.9 brace elision, DA-c3 P0-2) ----------
+
+    def _whole_elem(self, inner, it) -> bool:
+        """True when item `it` initializes ONE element of type `inner`
+        wholesale: a brace list, or a string literal for a char array row."""
+        if isinstance(it, ast.InitList):
+            return True
+        return isinstance(it, ast.StrLit) and isinstance(inner, ast.ArrayType) \
+            and isinstance(inner.inner, ast.BuiltinType) \
+            and TYPE_SIZE[inner.inner.name] == 1
+
+    def _leaf_cap(self, ty, at) -> int:
+        """Scalar slots one value of `ty` holds (0 = opaque aggregate)."""
+        if isinstance(ty, ast.ArrayType):
+            return self._arrlen(ty, at) * self._leaf_cap(ty.inner, at)
+        return 0 if isinstance(ty, ast.StructType) else 1
+
+    def _leaf_count(self, items) -> int:
+        """Scalar values a (possibly nested) initializer stream carries."""
+        tot = 0
+        for it in items:
+            if isinstance(it, ast.InitList):
+                tot += self._leaf_count(it.items)
+            elif isinstance(it, ast.StrLit):
+                tot += len(it.value.encode("utf-8", "surrogateescape")) + 1
+            else:
+                tot += 1
+        return tot
+
+    def _fill_plan(self, ty: ast.ArrayType, items, at):
+        """Walk an array's element stream in memory order honoring C brace
+        elision (§6.7.9): an element consumes one item (brace list, char-row
+        string, scalar) — or, when the element is itself an array and the
+        item is not a whole-element init, draws items straight into its
+        slots. When items run out the tail is ZERO-filled: partial init is
+        legal C and must not inherit frame garbage (local) or exceed the
+        object size (global). ty must be SIZED (_sized_array_decl owns that
+        upstream). Returns (plan, items_consumed); plan entries are
+        ('init', byte_off, elem_ty, item) | ('zero', byte_off, nbytes, None).
+        Both blcc.data (byte runs) and blcc.codegen (frame stores) consume
+        this — one elision rule, two writers (DA-c3 P0-2)."""
+        plan: List[Tuple] = []
+        pos = [0]
+
+        def fill_arr(a_ty, base):
+            n = self._arrlen(a_ty, at)
+            esz = self._size(a_ty.inner, at)
+            i = 0
+            while i < n:
+                off = base + i * esz
+                if pos[0] >= len(items):
+                    plan.append(("zero", off, esz * (n - i), None))
+                    return
+                it = items[pos[0]]
+                inner = a_ty.inner
+                if isinstance(inner, ast.ArrayType) \
+                        and not self._whole_elem(inner, it):
+                    mark = len(plan)
+                    fill_arr(inner, off)      # elide: fill this row's slots
+                    if len(plan) == mark:
+                        return                # stream dry mid-row
+                    i += 1
+                    continue
+                pos[0] += 1
+                plan.append(("init", off, inner, it))
+                i += 1
+
+        fill_arr(ty, 0)
+        return plan, pos[0]
 
     # -- alignments (P2-2: natural C layout, never a flat 8) ----------------------
 
@@ -203,7 +321,7 @@ class TypeMap:
             if not isinstance(base, ast.PtrType):
                 self._err(n, "'[]' applied to a non-pointer/array (§4)", "[]")
             return base.inner
-        self._err(n, "cannot type this expression", type(n).__name__)
+        self._err(n, "cannot type this expression", self._what(n))
 
     def _binary_ty(self, n: ast.Binary) -> ast.Node:
         if n.op in ("==", "!=", "<", "<=", ">", ">=", "&&", "||"):
