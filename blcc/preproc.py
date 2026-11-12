@@ -492,6 +492,11 @@ class Preprocessor:
             else:
                 params = []
         first = self._skip_ws(body)
+        while first and is_ws(first[-1]):
+            first = first[:-1]        # gcc stores NO edge whitespace in a
+            # macro body: `#define F (x) /* c */` ends at `)`, and an
+            # expansion that leaks a trailing space corrupts every
+            # __stringify of it (alternative.h .word, MC 12436 sweep).
         if first and (first[0] == "##" or first[-1] == "##"):
             self._warn(path, ln, 1, "'##' cannot appear at either end of a "
                                     "macro expansion")
