@@ -1,7 +1,7 @@
 """M1 GCC-compatible preprocessor: directive dispatch & source bookkeeping
 (plan R1, R2, R4, R10–R14, R17, R20, R21).
 
-LINES (508 > 400): directive dispatch is ONE concern — the #if-conditional
+LINES (526 > 400): directive dispatch is ONE concern — the #if-conditional
 stack, #line origin state and include search must share the per-file state
 machine; splitting would duplicate that state across files.
 
@@ -175,7 +175,10 @@ class Preprocessor:
                 toks = tokenize(joined)
                 head = next((t for t in toks if not is_ws(t)), None)
                 if head == "#":
-                    self._directive(st, base_dir, ln, toks)
+                    # a directive starts at the first '#' TOKEN, not the
+                    # first character: `/* c */ #define` is a directive too
+                    # (verdict-c1 F5, oracle rc 0).
+                    self._directive(st, base_dir, ln, toks[toks.index("#"):])
                     i += 1
                     continue
                 if not active:
