@@ -437,9 +437,10 @@ def test_paren_init_diag_names_construct():
 
 
 def test_global_cast_init_diag_and_sealed_exception():
-    """cn08: found names 'cast expression' at the global-init site, while the
-    SEALED contract tokens stay intact there: test_c2_orch_probes REJECT_CASES
-    pins endswith found 'Call' / found 'Binary' (sealed > wording; disclosed).
+    """cn08: found names 'cast expression' at the global-init site. The
+    former sealed exception for the node-class tokens was RE-SIGNED at the
+    §8 adjudication (TEST-c4): test_c2_orch_probes REJECT_CASES and w9/w10
+    here now pin the shipped construct names 'call expression' / '+ expression'.
     """
     r, out = compile_src('char s[] = "hi";\nint g = (long)s;\n'
                          'int main(void){ _sys_exit(0); }\n', "w8")
@@ -449,9 +450,9 @@ def test_global_cast_init_diag_and_sealed_exception():
     assert_nothing_emitted(out)
     for tag, src, tok in (
             ("w9", "int f(void){return 1;} int x = f();\n"
-                   "int main(void){ _sys_exit(0); }\n", "Call"),
+                   "int main(void){ _sys_exit(0); }\n", "call expression"),
             ("w10", "int a = 1 + 1;\nint main(void){ _sys_exit(0); }\n",
-             "Binary")):
+             "+ expression")):
         r, out = compile_src(src, tag)
         assert r.returncode == 2, (tag, r.stderr)
         assert r.stderr.strip().endswith("found '{}'".format(tok)), (tag, r.stderr)

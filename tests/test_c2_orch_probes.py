@@ -217,9 +217,9 @@ def test_allowed_global_init_forms_still_work():
 
 REJECT_CASES = [
     ("callinit", "int f(void){return 1;} int x = f();\n"
-                 "int main(void){ _sys_exit(0); }\n", "Call"),
+                 "int main(void){ _sys_exit(0); }\n", "call expression"),
     ("arithinit", "int a = 1 + 1;\nint main(void){ _sys_exit(0); }\n",
-     "Binary"),
+     "+ expression"),
     ("bracescalar", "int i = {1};\nint main(void){ _sys_exit(0); }\n", "{"),
     ("strtoolong", 'char s[2] = "abc";\nint main(void){ _sys_exit(0); }\n',
      "initializer"),
