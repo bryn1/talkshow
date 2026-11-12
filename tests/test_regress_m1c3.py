@@ -213,6 +213,46 @@ def test_paste_va_args_tail_not_shrunk(tmp_path):
 
 
 
+# ------------------------------------- F-2b/F-2c: 712-sweep paste/ws fallout --
+def test_comma_count_idiom_arity(tmp_path):
+    """`__C(, ##X, n..0)` counts X's arguments ONLY because gcc keeps a join
+    that is not a valid pp-token as TWO tokens on the rescan — the pasted
+    comma still splits arguments. One fused token shifts every arg by one:
+    arch/x86 rmwcc.h RMWcc_ARGS then calls GEN_UNARY_RMWcc_3 with the wrong
+    arity (preempt.h:94, 100+ corpus files). Expectations = the oracle."""
+    src = tmp_path / "cnt.c"
+    src.write_text("#define __CNT(_0, _1, _2, _3, _n, X...) _n\n"
+                   "#define CNT(X...) __CNT(, ##X, 3, 2, 1, 0)\n"
+                   "A = CNT(a, b, c);\nB = CNT(a);\nC = CNT();\n")
+    path = str(src)
+    g, b = gcc_run([path]), blcc_run([path])
+    assert g.returncode == 0 and b.returncode == 0, b.stderr[:300]
+    gn, bn = norm(g.stdout), norm(b.stdout)
+    assert gn == bn
+    for name, want in (("A", "3"), ("B", "1"), ("C", "0")):
+        i = bn.index(name)
+        assert bn[i + 2] == want, (name, bn[i:i + 4])   # oracle-pinned counts
+
+
+def test_define_body_edge_ws(tmp_path):
+    """A macro body stores NO edge whitespace (gcc): the space a trailing
+    comment leaves must not ride along in every expansion — __stringify
+    turns it into STRING CONTENT (alternative.h:178 .word corruption, the
+    largest silent class of the 712-file sweep)."""
+    src = tmp_path / "ws.c"
+    src.write_text("#define FEAT\t(11*32+27) /* c */\n"
+                   "#define INV\t(1 << 15)\n"
+                   "#define NOT(f)\t((f) | INV)\n"
+                   "#define s1(x...)\t#x\n"
+                   "#define s(x...)\ts1(x)\n"
+                   "A = s(NOT(FEAT));\n")
+    path = str(src)
+    g, b = gcc_run([path]), blcc_run([path])
+    assert g.returncode == 0 and b.returncode == 0, b.stderr[:300]
+    gn, bn = norm(g.stdout), norm(b.stdout)
+    assert gn == bn
+    assert '"(((11*32+27)) | (1 << 15))"' in " ".join(bn)  # no stray space
+
 # ------------------------------------------------------------- F-3 rescan --
 
 
@@ -419,3 +459,46 @@ def test_if_random_ternary_corpus(tmp_path):
                      % (expr(3), i, i))
     out, _ = diff_snippet(tmp_path, "".join(parts))
     assert len(norm(out)) > 20                       # corpus actually ran
+
+# ---------------------- directives in an OPEN argument list + ## single-pass --
+def test_directive_inside_open_argument_list(tmp_path):
+    """A macro invocation whose argument list spans lines keeps PREPROCESSING
+    between them: a directive there is EXECUTED, contributes nothing to the
+    argument, and its #if/#else decide which lines are argument text at all
+    (mm/page_alloc.c:1095 leaked `# ifdef` tokens silently; ipc/shm.c:157
+    died LOUD with a bogus arg count — MC 12436 sweep residuals)."""
+    src = tmp_path / "argdir.c"
+    src.write_text("#define F(a, b, c) a b c\n"
+                   "X = F(1,\n"
+                   "#ifdef UNDEF\n"
+                   "GONE,\n"
+                   "#else\n"
+                   "KEEP,\n"
+                   "#endif\n"
+                   "3);\n")
+    path = str(src)
+    g, b = gcc_run([path]), blcc_run([path])
+    assert g.returncode == 0 and b.returncode == 0, b.stderr[:300]
+    assert norm(g.stdout) == norm(b.stdout)
+    bn = norm(b.stdout)
+    assert "KEEP" in bn and "GONE" not in bn
+
+
+def test_paste_param_shadowing_caller_name(tmp_path):
+    """Argument text is NEVER re-substituted against the macro's own
+    parameters: `#define e(f, a...) p(f, ##a)` called e(fmt, rec, f->num)
+    must keep the CALLER's `f` — splicing the `##a` remainder back into the
+    body scan expanded the caller's f into fmt (block/partitions/ldm.c
+    ldm_error, silent one-token corruption, MC 12436 sweep)."""
+    src = tmp_path / "shadow.c"
+    src.write_text("#define _p(l, f, a...) printk(l, f, ##a)\n"
+                   "#define e(f, a...) _p(\"ERR\", f, ##a)\n"
+                   "e(\"msg %d\", rec, f->num);\n")
+    path = str(src)
+    g, b = gcc_run([path]), blcc_run([path])
+    assert g.returncode == 0 and b.returncode == 0, b.stderr[:300]
+    assert norm(g.stdout) == norm(b.stdout)
+    bn = norm(b.stdout)
+    i = bn.index('"msg %d"')
+    tail = bn[i + 1:]
+    assert "f" in tail and tail.count('"msg %d"') == 0  # f survives, fmt once
