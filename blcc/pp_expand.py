@@ -1,7 +1,7 @@
 """Token-stream macro expansion for the M1 preprocessor (plan R7–R9, R14,
 R15, R18, R19).
 
-LINES (510 > 400): the expansion recursion, argument collection, prescan,
+LINES (594 > 400): the expansion recursion, argument collection, prescan,
 substitution and paste pass tokens through ONE cursor chain; splitting
 would thread the same cursor through two files.
 
@@ -157,12 +157,13 @@ class Expander:
                more: Optional[Callable[[List], bool]] = None,
                protect: bool = False) -> List[str]:
         self._budget[0] = _MAX_EXPANSIONS
-        return self._expand(toks, set(), path, line, more, protect)
+        return [plain(it) for it in
+                self._expand_items(toks, set(), path, line, more, protect)]
 
     # -- core recursion --------------------------------------------------------
 
-    def _expand(self, toks: List[Item], hidden: Set[str], path: str,
-                line: int, more, protect: bool = False) -> List[str]:
+    def _expand_items(self, toks: List[Item], hidden: Set[str], path: str,
+                      line: int, more, protect: bool = False) -> List[Item]:
         """Scan `toks` to exhaustion. A stream item is a plain token (blue
         against the region `hidden` set) or a (token, extras) tuple —
         extras are the macro names THIS token may never answer to. An
@@ -175,7 +176,14 @@ class Expander:
         emit-then-advance boundary emitted those calls UN-expanded,
         silently). Blue paint hides only the macros named in a token's
         extras, never a name merely produced by their bodies, so the
-        oracle's termination posture (identifier survives, rc 0) holds."""
+        oracle's termination posture (identifier survives, rc 0) holds. The
+        result keeps its ITEMS: the argument-prescan boundary must carry the
+        produced tokens' extras into the substituted argument, or a
+        self-referential macro (`#define inline inline __gnu_inline
+        __inline_maybe_unused notrace`, compiler_types.h:144) re-expands the
+        keyword it produced at EVERY substitution site and SILENTLY doubles
+        its tail — the mm/interval_tree.c 72-token divergence (MC 12438).
+        The public expand() is the flattening boundary."""
         out: List[Item] = []
         i, n = 0, len(toks)
         while i < n:
@@ -208,10 +216,10 @@ class Expander:
                 continue
             macro = self.macros.get(t) if is_id(t) else None
             if macro is None or t in hid:
-                out.append(t)
-                i += 1
-                continue
-            self._budget[0] -= 1
+                out.append(item)            # ITEM survives, not just the
+                i += 1                      # text (MC 12438: flattening here
+                continue                    # dropped the blue paint emitted
+            self._budget[0] -= 1            # by every splice)
             if self._budget[0] <= 0:
                 raise DiagError("pp", path, line, 1,
                                 "macro expansion limit exceeded (runaway "
@@ -219,7 +227,7 @@ class Expander:
             if macro.kind != "std":
                 repl = self._builtin(macro, toks, i, path, line, more, hid)
                 if repl is None:            # not expandable right here
-                    out.append(t)
+                    out.append(item)
                     i += 1
                     continue
                 out.extend(repl)
@@ -233,7 +241,7 @@ class Expander:
             while k < n and is_ws(plain(toks[k])):
                 k += 1
             if not (k < n and plain(toks[k]) == "("):
-                out.append(t)               # function-like name not invoked
+                out.append(item)            # function-like name not invoked
                 i += 1
                 continue
             args, close = self._collect_args(toks, k, path, line, macro, more)
@@ -243,7 +251,7 @@ class Expander:
             subst = self._substitute(macro, sub_raw, path, line)
             toks = _wrap(subst, hid | {t}) + toks[close + 1:]
             i, n = 0, len(toks)
-        return [plain(it) for it in out]
+        return out
 
     # -- builtin hooks (fire at the USE SITE, once per occurrence) -------------
 
@@ -287,7 +295,9 @@ class Expander:
             self._last_consumed = close + 1
             if args is None:
                 return None
-            args = self._expand(args, set(), path, line, more)  # R14: the
+            args = [plain(it) for it in
+                    self._expand_items(args, set(), path, line, more)
+                    ]                               # R14: the
             # argument is FULLY EXPANDED, not stringified; the result must
             # be exactly one string-literal token.
             toks_a = [t for t in args if not is_ws(t)]
@@ -399,8 +409,11 @@ class Expander:
         for idx, arg in enumerate(args):
             name = self._param_at(macro, idx)
             if name is not None and usage.get(name) == "plain":
-                out.append(self._expand(arg, set(), path, line, more,
-                                        protect))
+                # ITEMS SURVIVE the prescan boundary (MC 12438): the
+                # blue-paint extras of produced tokens must reach the
+                # substitution-site rescan.
+                out.append(self._expand_items(arg, set(), path, line, more,
+                                              protect))
             else:
                 out.append(arg)
         return out
