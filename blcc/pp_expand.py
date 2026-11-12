@@ -14,16 +14,18 @@ builtin hooks fired at the USE SITE inside the rescan. No directives, no
 files, no expression grammar. stdlib-only.
 
 Oracle posture (gcc 11.4, probed this card): arguments of a plain parameter
-are prescanned with a FRESH hidden set (F(F(1)) → 1+1+1); rescanning the
-replacement list carries the hidden set (mutual cycles stop silently, the
-identifier survives, exit 0 — test_paste/ga rows pin it); a paste operand is
-used RAW (no prescan). A runaway (non-cyclic, doubling) expansion still
-raises the §8 pp diagnostic.
+are prescanned with a FRESH hidden set (F(F(1)) → 1+1+1); the replacement
+list is spliced into the stream and rescanned IN PLACE, blue paint carried
+PER TOKEN (mutual cycles stop silently, the identifier survives, exit 0 —
+test_paste/ga rows pin it; a name PRODUCED by an expansion is a fresh token
+with the producing chain's extras, never painted by them — F-3/MC 12436);
+a paste operand is used RAW (no prescan). A runaway (non-cyclic, doubling)
+expansion still raises the §8 pp diagnostic.
 """
 from __future__ import annotations
 
 import re
-from typing import Callable, Dict, List, Optional, Set
+from typing import Callable, Dict, FrozenSet, List, Optional, Set, Tuple, Union
 
 from blcc.lexer import DiagError
 
@@ -82,6 +84,33 @@ def canon_attr(name: str) -> str:
     return n
 
 
+_EMPTY = frozenset()
+
+Item = Union[str, Tuple[str, frozenset]]
+
+
+def plain(item: Item) -> str:
+    """The token text of a stream item (items carry per-token hidden extras
+    as (tok, extras) tuples — see Expander._expand, F-3/MC 12436)."""
+    return item if isinstance(item, str) else item[0]
+
+
+def item_ws(item: Item) -> bool:
+    return is_ws(plain(item))
+
+
+def _wrap(items: List[Item], extras: Set[str]) -> List[Item]:
+    """Blue-paint the produced tokens: every token of a replacement list
+    becomes (token, extras), hidden ONLY against those macro names — the
+    macro being expanded plus everything already hidden at its use site.
+    The OUTER continuation is never wrapped (F-3/MC 12436: the old
+    set-scoped hiding is exactly what made the hide-then-emit boundary
+    swallow invocations of expansion-produced names)."""
+    ex = frozenset(extras)
+    return [(plain(it), (it[1] if isinstance(it, tuple) else _EMPTY) | ex)
+            for it in items]
+
+
 def escape_string(s: str) -> str:
     return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
@@ -124,32 +153,50 @@ class Expander:
     # -- public ---------------------------------------------------------------
 
     def expand(self, toks: List[str], path: str, line: int,
-               more: Optional[Callable[[], bool]] = None,
+               more: Optional[Callable[[List], bool]] = None,
                protect: bool = False) -> List[str]:
         self._budget[0] = _MAX_EXPANSIONS
         return self._expand(toks, set(), path, line, more, protect)
 
     # -- core recursion --------------------------------------------------------
 
-    def _expand(self, toks: List[str], hidden: Set[str], path: str,
+    def _expand(self, toks: List[Item], hidden: Set[str], path: str,
                 line: int, more, protect: bool = False) -> List[str]:
-        out: List[str] = []
+        """Scan `toks` to exhaustion. A stream item is a plain token (blue
+        against the region `hidden` set) or a (token, extras) tuple —
+        extras are the macro names THIS token may never answer to. An
+        expansion SPLICES its replacement list into the stream and keeps
+        scanning from the replacement head (C's re-scan model): a macro
+        name PRODUCED by an expansion — the object-like alias
+        `#define cpu_to_le16 __cpu_to_le16` whose call must then expand,
+        or a paste-built invocation head CAT(ID, 4) -> ID4(...) — sees the
+        following '(' on the next step (verdict-c2 F-3, MC 12436: the old
+        emit-then-advance boundary emitted those calls UN-expanded,
+        silently). Blue paint hides only the macros named in a token's
+        extras, never a name merely produced by their bodies, so the
+        oracle's termination posture (identifier survives, rc 0) holds."""
+        out: List[Item] = []
         i, n = 0, len(toks)
         while i < n:
-            t = toks[i]
+            item = toks[i]
+            if isinstance(item, str):
+                t, hid = item, hidden
+            else:
+                t, hid = item[0], hidden | item[1]
             if protect and t == "defined" and not self.macros.get("defined"):
-                out.append(t)
+                out.append(item)
                 i += 1
                 j = i
-                while j < n and is_ws(toks[j]):
+                while j < n and is_ws(plain(toks[j])):
                     out.append(toks[j])
                     j += 1
-                if j < n and toks[j] == "(":
+                if j < n and plain(toks[j]) == "(":
                     depth = 0
                     while j < n:
                         out.append(toks[j])
-                        depth += toks[j] in "([{["
-                        depth -= toks[j] in ")]}"
+                        pt = plain(toks[j])
+                        depth += pt in "([{"
+                        depth -= pt in ")]}"
                         j += 1
                         if depth == 0:
                             break
@@ -159,7 +206,7 @@ class Expander:
                 i = j
                 continue
             macro = self.macros.get(t) if is_id(t) else None
-            if macro is None or t in hidden:
+            if macro is None or t in hid:
                 out.append(t)
                 i += 1
                 continue
@@ -169,7 +216,7 @@ class Expander:
                                 "macro expansion limit exceeded (runaway "
                                 "'#define')", "macro expansion")
             if macro.kind != "std":
-                repl = self._builtin(macro, toks, i, path, line, more, hidden)
+                repl = self._builtin(macro, toks, i, path, line, more, hid)
                 if repl is None:            # not expandable right here
                     out.append(t)
                     i += 1
@@ -177,16 +224,14 @@ class Expander:
                 out.extend(repl)
                 i = self._last_consumed
                 continue
-            if macro.params is None:        # object-like
-                sub = self._expand(list(macro.body), hidden | {t}, path,
-                                   line, more, protect)
-                out.extend(sub)
-                i += 1
+            if macro.params is None:        # object-like: splice + rescan
+                toks = _wrap(list(macro.body), hid | {t}) + toks[i + 1:]
+                i, n = 0, len(toks)
                 continue
             k = i + 1
-            while k < n and is_ws(toks[k]):
+            while k < n and is_ws(plain(toks[k])):
                 k += 1
-            if not (k < n and toks[k] == "("):
+            if not (k < n and plain(toks[k]) == "("):
                 out.append(t)               # function-like name not invoked
                 i += 1
                 continue
@@ -195,11 +240,9 @@ class Expander:
             sub_raw = self._prescan_args(args, macro, path, line, more,
                                          protect)
             subst = self._substitute(macro, sub_raw, path, line)
-            out.extend(self._expand(subst, hidden | {t}, path, line,
-                             more, protect))
-            i = close + 1
-            n = len(toks)
-        return out
+            toks = _wrap(subst, hid | {t}) + toks[close + 1:]
+            i, n = 0, len(toks)
+        return [plain(it) for it in out]
 
     # -- builtin hooks (fire at the USE SITE, once per occurrence) -------------
 
@@ -231,7 +274,8 @@ class Expander:
             self._last_consumed = close + 1
             if args is None:
                 return None
-            name = next((t for t in args if not is_ws(t)), None)
+            name = next((plain(t) for t in args if not is_ws(plain(t))),
+                        None)
             if name is None or not is_id(name):
                 self._last_consumed = i + 1
                 return ["0"]
@@ -258,9 +302,9 @@ class Expander:
     def _need_one_arg(self, toks, i, path, line, macro, more):
         k = i + 1
         n = len(toks)
-        while k < n and is_ws(toks[k]):
+        while k < n and is_ws(plain(toks[k])):
             k += 1
-        if not (k < n and toks[k] == "("):
+        if not (k < n and plain(toks[k]) == "("):
             return None, i
         args_list, close = self._collect_args(toks, k, path, line, macro, more)
         if len(args_list) != 1:
@@ -271,23 +315,26 @@ class Expander:
 
     # -- argument collection ----------------------------------------------------
 
-    def _collect_args(self, toks: List[str], open_i: int, path: str,
+    def _collect_args(self, toks: List[Item], open_i: int, path: str,
                       line: int, macro: Macro, more):
-        """Returns (list-of-arg-token-lists, index of the ')' token)."""
-        groups: List[List[str]] = []
-        group: List[str] = []
+        """Returns (list-of-arg-item-lists, index of the ')' token). Items
+        (with their blue-paint extras) flow into the argument lists; the
+        continuation callback appends further logical lines to THIS stream
+        (`more(dst)`), so a splice that re-bound the list keeps working."""
+        groups: List[List[Item]] = []
+        group: List[Item] = []
         depth = 0
         k = open_i
         n = len(toks)
         while True:
             if k >= n:
-                if more and more():
+                if more and more(toks):
                     n = len(toks)           # multi-line invocation (R2 spliced
                     continue                # logical line may still continue)
                 raise DiagError("pp", path, line, 1,
                                 "unterminated argument list for macro "
                                 "'%s'" % macro.name, macro.name)
-            t = toks[k]
+            t = plain(toks[k])
             if t in "([{":
                 depth += 1
                 if depth == 1:
@@ -304,11 +351,11 @@ class Expander:
                 k += 1
                 continue
             if depth >= 1:
-                group.append(t)
+                group.append(toks[k])
             k += 1
 
-    def _check_args(self, groups: List[List[str]], macro: Macro, path: str,
-                    line: int) -> List[List[str]]:
+    def _check_args(self, groups: List[List[Item]], macro: Macro, path: str,
+                    line: int) -> List[List[Item]]:
         named = macro.params or []
         # F2 (GNU spelling `name(p..., x...)`): the NAMED variadic param
         # answers to the tail, so it is NOT a required argument — the call
@@ -326,9 +373,9 @@ class Expander:
             # params keep their per-argument trim (S( a ) -> "a").
             tail = macro.variadic and idx >= required
             if not tail:
-                while g and is_ws(g[0]):
+                while g and is_ws(plain(g[0])):
                     g = g[1:]
-                while g and is_ws(g[-1]):
+                while g and is_ws(plain(g[-1])):
                     g = g[:-1]
             fixed.append(g)
         if len(named) == 0 and len(fixed) == 1 and not fixed[0]:
@@ -343,13 +390,14 @@ class Expander:
 
     # -- prescan (plain parameters only, fresh hidden set — oracle F(F(1))) ----
 
-    def _prescan_args(self, args: List[List[str]], macro: Macro, path: str,
-                      line: int, more, protect: bool = False) -> List[List[str]]:
-        plain = self._param_usage(macro)
+    def _prescan_args(self, args: List[List[Item]], macro: Macro, path: str,
+                      line: int, more, protect: bool = False
+                      ) -> List[List[Item]]:
+        usage = self._param_usage(macro)
         out = []
         for idx, arg in enumerate(args):
             name = self._param_at(macro, idx)
-            if name is not None and plain.get(name) == "plain":
+            if name is not None and usage.get(name) == "plain":
                 out.append(self._expand(arg, set(), path, line, more,
                                         protect))
             else:
@@ -393,9 +441,9 @@ class Expander:
 
     # -- substitution + paste ----------------------------------------------------
 
-    def _substitute(self, macro: Macro, args: List[List[str]], path: str,
-                    line: int) -> List[str]:
-        mapping: Dict[str, List[str]] = {}
+    def _substitute(self, macro: Macro, args: List[List[Item]], path: str,
+                    line: int) -> List[Item]:
+        mapping: Dict[str, List[Item]] = {}
         named = macro.params or []
         start = len(named) - (1 if (macro.variadic and
                                     macro.var_name in named) else 0)
@@ -403,18 +451,18 @@ class Expander:
             mapping[named[idx]] = arg
         if macro.variadic:                        # the tail ALWAYS answers,
             tail = args[start:]                   # even when the call is
-            rest: List[str] = list(tail[0]) if tail else []
+            rest: List[Item] = list(tail[0]) if tail else []
             for arg in tail[1:]:                  # ONE contiguous range:
                 rest.append(",")                  # groups rejoined by index,
                 rest.extend(arg)                  # ws trimmed at the ENDS
-            while rest and is_ws(rest[0]):        # only (oracle, P2a)
+            while rest and is_ws(plain(rest[0])):  # only (oracle, P2a)
                 rest = rest[1:]
-            while rest and is_ws(rest[-1]):
+            while rest and is_ws(plain(rest[-1])):
                 rest = rest[:-1]
             mapping[macro.var_name] = rest
         raw_names = {n for n, u in self._param_usage(macro).items()
                      if u == "raw"}
-        out: List[str] = []
+        out: List[Item] = []
         body = list(macro.body)        # local copy: paste splices back into it
         i, n = 0, len(body)
         while i < n:
@@ -439,22 +487,22 @@ class Expander:
             i += 1
         return [t for t in out if t != ""]
 
-    def _paste(self, out: List[str], body: List[str], i: int,
-                mapping: Dict[str, List[str]], path: str, line: int) -> int:
-        while out and is_ws(out[-1]):
+    def _paste(self, out: List[Item], body: List[Item], i: int,
+                mapping: Dict[str, List[Item]], path: str, line: int) -> int:
+        while out and is_ws(plain(out[-1])):
             out.pop()
-        left = out.pop() if out else None
+        left = out.pop() if out else None          # Item | None
         j = i + 1
-        while j < len(body) and is_ws(body[j]):
+        while j < len(body) and is_ws(plain(body[j])):
             j += 1
         # collapse a duplicated '## ##' (gcc joins the operands instead)
-        if j < len(body) and body[j] == "##":
+        if j < len(body) and plain(body[j]) == "##":
             return self._paste(out, body, j, mapping, path, line)
         right: Optional[str] = None
         if j < len(body):
             if body[j] in mapping and mapping[body[j]] and not is_ws(
-                    mapping[body[j]][0]):
-                right = mapping[body[j]][0]
+                    plain(mapping[body[j]][0])):
+                right = plain(mapping[body[j]][0])
                 tail = mapping[body[j]][1:]
                 # NO mapping shrink here: the parameter's FULL argument must
                 # survive for every later occurrence/paste of the same
@@ -467,17 +515,17 @@ class Expander:
             elif body[j] in mapping:       # empty operand for this paste
                 j += 1
             else:
-                right = body[j]
+                right = plain(body[j])
                 j += 1
-        if left == "," and right is None:
+        if left is not None and plain(left) == "," and right is None:
             return j                       # GNU comma-swallow (R8)
         if left is not None and right is not None:
-            joined = left + right
-            if _IDENTISH.match(left) and _IDENTISH.match(right) \
+            joined = plain(left) + right
+            if _IDENTISH.match(plain(left)) and _IDENTISH.match(right) \
                     and not _PASTE_SPLIT.match(joined):
                 self.warn(line, 1,
                           "pasting '%s' and '%s' does not give a valid "
-                          "preprocessing token" % (left, right))
+                          "preprocessing token" % (plain(left), right))
             out.append(joined)
         elif right is not None:
             out.append(right)              # empty left operand: paste no-op
@@ -486,10 +534,11 @@ class Expander:
         return j
 
 
-def _stringify(arg: List[str]) -> str:
+def _stringify(arg: List[Item]) -> str:
     parts: List[str] = []
     ws = False
-    for t in arg:
+    for item in arg:
+        t = plain(item)
         if is_ws(t):
             ws = parts
             continue

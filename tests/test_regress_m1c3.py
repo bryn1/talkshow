@@ -212,3 +212,59 @@ def test_paste_va_args_tail_not_shrunk(tmp_path):
     assert " ".join(norm(out)) == "V = 1 , 2 + Z1 , 2 ;"
 
 
+
+# ------------------------------------------------------------- F-3 rescan --
+
+
+def test_objectlike_alias_rescanned_as_function(tmp_path):
+    """#define ALIAS TWO (object-like alias of a function-like macro): the
+    ALIAS(1,2) invocation must expand through the alias: gcc `(1)+(2)`,
+    shipped blcc emitted TWO(1,2) AT RC 0 (silent)."""
+    src = ("#define TWO(a,b) (a)+(b)\n"
+           "#define ALIAS TWO\n"
+           "E1 = ALIAS(1,2);\n")
+    out, _ = diff_snippet(tmp_path, src)
+    assert " ".join(norm(out)) == "E1 = ( 1 ) + ( 2 ) ;"
+
+
+def test_paste_produced_name_invoked(tmp_path):
+    """CAT(ID, N(...)) pastes the invocation head ID4; the following
+    (...) must invoke it: gcc GOT_IT(1,2,3,4), shipped blcc emitted the
+    UN-expanded ID4(1,2,3,4) at rc 0 (silent). Kernel driver: rmwcc.h:60."""
+    src = ("#define ID4(a,b,c,d) GOT_IT(a,b,c,d)\n"
+           "#define CAT2(a,b) a ## b\n"
+           "#define CAT(a,b) CAT2(a,b)\n"
+           "#define N(a,b,c,d,e...) 4\n"
+           "#define F(...) CAT(ID, N(__VA_ARGS__))(__VA_ARGS__)\n"
+           "X1 = F(1,2,3,4);\n")
+    out, _ = diff_snippet(tmp_path, src)
+    assert " ".join(norm(out)) == "X1 = GOT_IT ( 1 , 2 , 3 , 4 ) ;"
+
+
+def test_cpu_to_le16_kernel_alias_shape(tmp_path):
+    """The byteorder/generic.h:90 shape verbatim: 10 corpus files (and the
+    silent module_signature.c row) carry this un-expanded today."""
+    src = ("#define __cpu_to_le16(x) ((__u16)(x))\n"
+           "#define cpu_to_le16 __cpu_to_le16\n"
+           "v = cpu_to_le16(42);\n")
+    out, _ = diff_snippet(tmp_path, src)
+    toks = norm(out)
+    assert "__cpu_to_le16" not in toks
+    assert " ".join(toks) == "v = ( ( __u16 ) ( 42 ) ) ;"
+
+
+def test_alias_blue_paint_still_terminates(tmp_path):
+    """Rescan must not break blue paint: a doubling chain through an alias
+    terminates with the hidden identifier surviving, exit 0 (gcc posture).
+    """
+    src = ("#define B A A\n"
+           "#define A done\n"
+           "E = A;\n")
+    out, _ = diff_snippet(tmp_path, src)
+    assert " ".join(norm(out)) == "E = done ;"
+    src2 = ("#define A A\n"
+            "P = A Q;\n")                           # A after A: rescanned
+    out2, _ = diff_snippet(tmp_path, src2, fname="u.c")
+    assert norm(out2).count("A") == 1                # gcc: P = A Q (blue)
+
+

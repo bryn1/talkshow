@@ -192,11 +192,14 @@ class Preprocessor:
                 buf = {"i": i}
                 stream = list(toks)
 
-                def more():
+                def more(dst):
+                    # appends to the STREAM THE EXPANDER IS CURRENTLY
+                    # SCANNING (it splices replacements into that list and
+                    # re-binds it — F-3/MC 12436), not to the fixed buffer
                     if buf["i"] + 1 >= len(lines):
                         return False
                     buf["i"] += 1
-                    stream.extend(tokenize(lines[buf["i"]][1]))
+                    dst.extend(tokenize(lines[buf["i"]][1]))
                     return True
 
                 exp = self.expander.expand(stream, st["label"], ln, more)
