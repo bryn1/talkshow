@@ -131,8 +131,7 @@ class Preprocessor:
         self.expander.main_file = path
         self._apply_cli()
         for name in self.opts.preinclude:
-            self._include(path, 1, '"%s"' % name,
-                          base_dir=os.path.dirname(path) or ".")
+            self._include(path, 1, '"%s"' % name, preinclude=True)
         self._process(path, text)
         return self.out
 
@@ -360,7 +359,7 @@ class Preprocessor:
     # -- #include (search order + reopen, R1/R20) --------------------------------
 
     def _include(self, path: str, ln: int, operand: str,
-                 base_dir=".") -> None:
+                 base_dir=".", preinclude: bool = False) -> None:
         if not operand:
             raise DiagError("pp", path, ln, 1, "empty #include",
                             "#include")
@@ -387,10 +386,22 @@ class Preprocessor:
             raise DiagError("pp", path, ln, 1, "empty #include path",
                             "#include " + operand)
         cand: List[str] = []
-        if not angle:
+        if preinclude:
+            # -include (R17) resolves gcc's measured way (verdict-c1 Leg 4,
+            # rows G1-G11): the operand AS-GIVEN first — a relative name
+            # answers to the CWD — then every -I dir in order, then every
+            # -isystem dir. The includer (main file's) directory is NEVER
+            # searched: that is the quoted-#include rule, not this one.
+            cand.append(os.path.normpath(target))
+            cand += [os.path.normpath(os.path.join(d, target))
+                     for d in self.opts.includes_dir + self.opts.isystem]
+        elif not angle:
             cand.append(os.path.normpath(os.path.join(base_dir, target)))
-        cand += [os.path.normpath(os.path.join(d, target))
-                 for d in self.opts.includes_dir + self.opts.isystem]
+            cand += [os.path.normpath(os.path.join(d, target))
+                     for d in self.opts.includes_dir + self.opts.isystem]
+        else:
+            cand += [os.path.normpath(os.path.join(d, target))
+                     for d in self.opts.includes_dir + self.opts.isystem]
         full = next((c for c in cand if os.path.isfile(c)), None)
         shown = "#include %s" % operand
         if full is None:
