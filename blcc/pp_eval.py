@@ -1,7 +1,11 @@
 """`#if` constant-expression evaluation (plan R5/R6 evaluation half).
 
 Concern: an ALREADY-EXPANDED token list -> int. Precedence-climbing over the
-R5 operator set; integer constants with suffixes (hex/oct/bin incl. gnu89
+R5 operator set EXTENDED with the conditional operator `?:` (MC 12436 F-5:
+gcc evaluates it in #if — the kernel's uapi byte-order guards use it; the
+result type merges BOTH arms by the usual arithmetic conversions; the GNU
+EXTENSION `x ?: y` (missing middle) is REJECTED by gcc 11.4 in #if and stays
+LOUD here); integer constants with suffixes (hex/oct/bin incl. gnu89
 `0b`), char literals (gcc 11.4 answer: a byte >= 0x80 signs to negative,
 multichar packs bytes into int), undefined identifiers -> 0, and the C
 integer ladder (int -> long -> long long, unsigned wrap) evaluated in a
@@ -103,6 +107,18 @@ class _Parser:
                 else:
                     left = _wrap(1 if (left.v or right.v) else 0, False, _INT)
                 continue
+            if t == "?":                   # the conditional operator IS part
+                mid = self._expr(0)        # of the #if grammar (gcc
+                if self._accept(":") is None:   # evaluates it; MC 12436 F-5)
+                    raise self._err("missing ':' after conditional operator",
+                                    self._peek())
+                last = self._expr(0)       # right-associative: a?b:c?d:e
+                # gcc's cpp merges BOTH arms' types before selecting (probed:
+                # `(1 ? -1 : 1u) > 0` is TRUE): usual arithmetic conversions
+                # over the arms, then the selected arm converted.
+                u, r = _ladder(mid.u, mid.r, last.u, last.r)
+                left = _wrap((mid if left.v != 0 else last).v, u, r)
+                continue
             right = self._expr(prec + 1)
             left = self._binop(t, left, right)
 
@@ -181,7 +197,7 @@ class _Parser:
         raise self._err("missing binary operator before token", t)
 
 
-_PREC = {"||": 1, "&&": 2, "|": 3, "^": 4, "&": 5,
+_PREC = {"?": 0, "||": 1, "&&": 2, "|": 3, "^": 4, "&": 5,
          "==": 6, "!=": 6, "<": 7, ">": 7, "<=": 7, ">=": 7,
          "<<": 8, ">>": 8, "+": 9, "-": 9, "*": 10, "/": 10, "%": 10}
 

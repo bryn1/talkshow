@@ -336,3 +336,86 @@ def test_predefines_D_U_still_win(tmp_path):
     assert "NO" in norm(out2)
 
 
+
+# ---------------------------------------------------------------- F-5 ?: --
+
+
+def test_if_conditional_operator(tmp_path):
+    """The kernel's 4 uapi byte-order headers (aio_abi.h:77, acct.h,
+    raid/md_p.h, sound/asound.h — 173 corpus deaths) use `?:` in #if; gcc
+    evaluates it. Branch matrix pinned from the oracle."""
+    src = ("#define ZERO 0\n"
+           "#if 1 ? 1 : 0\nT1\n#endif\n"
+           "#if ZERO ? 1 : 0\nNO\n#else\nT2\n#endif\n"
+           "#define COND (1 ? 1 : 0)\n"
+           "#if COND == 1\nT3\n#endif\n"
+           "#if (1 + (ZERO ? 2 : 3)) == 4\nT4\n#endif\n"
+           "#if defined(__BYTE_ORDER) ? __BYTE_ORDER == __ORDER_LITTLE_ENDIAN__ : 0\n"
+           "T5\n#endif\n"
+           "#if defined(__STDC__) ? __STDC__ : 0\nT6\n#endif\n"
+           "#if 0 ? 1 : 2 + 2 == 4\nT7\n#endif\n"
+           "#if 1 ? 2 : 3 ? 4 : 5\nT8\n#endif\n")
+    out, _ = diff_snippet(tmp_path, src)
+    toks = norm(out)
+    for tag in ("T1", "T2", "T3", "T4", "T6", "T7", "T8"):
+        assert tag in toks, tag
+    assert "NO" not in toks                          # T5: byte-order off
+
+
+def test_if_conditional_operator_type_model(tmp_path):
+    """gcc merges the two arms' types BEFORE selecting (probed): with the
+    other arm unsigned, `(1 ? -1 : 1u) > 0` is TRUE; `(0 ? 1u : (1LL<<63))
+    < 0` is FALSE (arm type merged unsigned)."""
+    src = ("#if (1 ? -1 : 1u) > 0\nM1\n#else\nM1_NO\n#endif\n"
+           "#if (0 ? 1u : (1LL<<63)) < 0\nM2\n#else\nM2_NO\n#endif\n"
+           "#if (2 ? 3 : (1u<<40)) + 1 == 4\nM3\n#endif\n")
+    out, _ = diff_snippet(tmp_path, src)
+    toks = norm(out)
+    assert {"M1", "M2_NO", "M3"} <= set(toks)
+    assert "M1_NO" not in toks and "M2" not in toks
+
+
+def test_if_gnu_missing_middle_loud(tmp_path):
+    """The gcc EXTENSION `x ?: y` is REJECTED by gcc 11.4 in #if
+    ('operator "?" has no right operand', rc 1) — blcc must stay loud too;
+    accepting it would be a silent divergence."""
+    path = write(tmp_path, "t.c", "#if 0 ?: 5\nX\n#endif\n")
+    g = gcc_run([path])
+    b = blcc_run([path])
+    assert g.returncode != 0
+    assert b.returncode == 2 and PP_RE.match(b.stderr)
+
+
+def test_if_random_ternary_corpus(tmp_path):
+    """100 seeded expressions INCLUDING ternary shapes, branch outcomes
+    diffed against gcc in one run each (risk-5 mitigation, extended)."""
+    import random
+    rnd = random.Random(20261112)
+    ops = ["+", "-", "*", "&", "|", "^", "<<", ">>", "==", "!=", "<", ">=",
+           "&&", "||"]
+    lits = ["0", "1", "2", "3", "7", "0x10", "077", "12u", "5L", "3UL",
+            "(__SIZEOF_LONG__ * 8)"]
+
+    def expr(depth):
+        if depth <= 0 or rnd.random() < 0.3:
+            return rnd.choice(lits)
+        kind = rnd.random()
+        if kind < 0.25:
+            c, a, b = expr(depth - 1), expr(depth - 1), expr(depth - 1)
+            return "(%s ? %s : %s)" % (c, a, b)
+        if kind < 0.33:
+            return "(%s)" % expr(depth - 1)
+        if kind < 0.41:
+            return "!(%s)" % expr(depth - 1)
+        op = rnd.choice(ops)
+        a, b = expr(depth - 1), expr(depth - 1)
+        if op in ("<<", ">>"):
+            b = str(rnd.randrange(0, 8))
+        return "%s %s %s" % (a, op, b)
+
+    parts = ["#define DDEF 1\n"]
+    for i in range(100):
+        parts.append("#if %s\nE%03d\n#else\nZ%03d\n#endif\n"
+                     % (expr(3), i, i))
+    out, _ = diff_snippet(tmp_path, "".join(parts))
+    assert len(norm(out)) > 20                       # corpus actually ran
