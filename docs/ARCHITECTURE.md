@@ -1,13 +1,14 @@
-# blcc — Architecture Contract (v3, 2026-11-11, MC 12406) — repo git history is the version store
+# blcc — Architecture Contract (v4, 2026-11-12, MC 12410) — repo git history is the version store
 
 Executable contract: code children implement EXACTLY this; the closing Architect verifies reality against it.
 Project: /home/claudecode/Blaha/c-compiler/ (session plane). Host: Ubuntu 22.04 x86-64, Python 3.10.12 (no 3.11+ syntax).
-Layout: one concern per file; target ~250 lines, soft cap 400 (a file over 400 carries a `# LINES:` reason line at its top), absolute cap 600.
+Layout: one concern per file; target ~250 lines, hard cap 400 (a file over 400 carries its reason at the top — a `# LINES reason:` comment or the module docstring's first lines), absolute cap 600 (tests included).
+v4 = the Architect's close, pinned to tree 5887eef. Every v4 row below was re-derived live at that tree (Architect probes), not copied from any report; the v3 text otherwise stands. v4 changes: §3 module table completed (`__main__`, `types`, `data`, `expr_codegen` landed but unlisted), escape set + preprocessor EOF posture pinned; §4 arrays rank ≥ 2 pinned, `sizeof` operand forms and string/parameter sizes pinned, shift sentence replaced with shipped behavior, brace-elision line drawn, empty brace lists pinned; §5 loud side of that line listed; §6 `strcmp` returns the raw difference (pinned, do not normalize); §7 names who carries rank-2 coverage; §9 test inventory at 17 files / 271 tests.
 
 ## 1. Scope / non-scope
 - blcc accepts the C subset in §4, emits x86-64 AT&T assembly, and drives system `as`+`ld` into a STATIC freestanding ELF that runs on this Linux host.
 - "Compiles linux" = compiles C *for* Linux; the produced binaries run on Linux. Compiling the Linux KERNEL source is GCC-scale work and is explicitly OUT of scope — blcc never claims it.
-- Freestanding: NO libc, no libc headers, no dynamic linking. Programs reach Linux via raw syscalls through §5 builtins; the compiler ships its own `_start`.
+- Freestanding: NO libc, no libc headers, no dynamic linking. Programs reach Linux via raw syscalls through §6 builtins; the compiler ships its own `_start`.
 - Out: PIE/dynamic, Windows/macOS/other ISAs, `#include <...>` system headers, precompiled output other than ELF.
 - Cardinal failure = silently wrong code: every unsupported/invalid input is a loud diagnostic (§8), never guessed codegen.
 
@@ -19,35 +20,44 @@ Layout: one concern per file; target ~250 lines, soft cap 400 (a file over 400 c
 - Assembled/linked exactly: `as --64 -o <tmp>.o <file>.s` then `ld -static -o <output> <tmp>.o`.
 
 ## 3. Modules (one concern per file)
-Pipeline: driver → preprocessor → lexer → parser → codegen → as/ld; runtime.py feeds codegen.
+Pipeline: driver → preprocessor → lexer → parser (+expr_parser) → codegen (+expr_codegen, +data — mixins of one Codegen class; sizes answered by types.py; runtime.py feeds codegen, never the reverse) → as/ld.
 
 | File | Concern |
 |---|---|
-| blcc/__init__.py | Package docstring ONLY — the single file this phase creates; no code ever lands here. |
-| blcc/lexer.py | Tokenizer: ids, keywords, int/char/string literals (escapes `\n \t \\ \" \0 \xHH`), punctuation, comments; every token carries file/line/col. |
-| blcc/preproc.py | Subset preprocessor: `#include "local.h"` (quoted, input-relative, cycle guard), object-like + function-like `#define`, `#ifdef/#ifndef/#else/#endif`, `#undef`. |
+| blcc/__init__.py | Package docstring ONLY — no code ever lands here. |
+| blcc/__main__.py | `python3 -m blcc` entry (§2): forwards argv to driver.main, exits with its code. |
+| blcc/lexer.py | Tokenizer: ids, keywords, int/char/string literals (escape set pinned under this table), punctuation, comments; every token carries file/line/col; also hosts the shared DiagError (§8 format). |
+| blcc/preproc.py | Subset preprocessor: `#include "local.h"` (quoted, input-relative, cycle guard; `#include <...>` is a pp diagnostic), object-like + function-like `#define`, `#ifdef/#ifndef/#else/#endif`, `#undef`. PINNED posture: a conditional left open at EOF closes IMPLICITLY (gcc rejects it) — accepted lenient posture, classified P3 in the close record; `#else`/`#endif` without an open conditional stay loud. |
 | blcc/ast.py | Node dataclasses only (frozen where practical) — no behavior beyond fields. |
-| blcc/parser.py | Recursive-descent parser: declarations + statements → ast nodes; records every grammar diagnostic. |
+| blcc/parser.py | Recursive-descent parser: declarations + statements → ast nodes + light sema; records every grammar diagnostic. |
 | blcc/expr_parser.py | Expression parser: precedence-climbing + casts + unary, producing ast nodes. Split from parser.py up front: the expression grammar alone would push one file past 400 lines. |
-| blcc/codegen.py | x86-64 AT&T emitter: stack frame per function, locals at fixed rbp offsets, temporaries on-stack; correctness over optimization. |
-| blcc/driver.py | CLI parse, pipeline order, as/ld subprocess calls, diagnostics, exit codes 0/2/3. |
-| blcc/runtime.py | Emits the runtime asm blob (frozen text constant) + builtin symbol table shared with codegen. No C runtime source: blcc cannot compile C. |
+| blcc/types.py | Type answers shared by the emitters: §4 sizes, the decay rule, type-of-expression, natural struct layout math; `what()` renders every diagnostic construct LITERALLY (§8 — construct names, never Python node classes); `_fill_plan` is the ONE §6.7.9 brace-elision walk feeding BOTH data.py's global byte runs and codegen.py's local frame stores. |
+| blcc/data.py | Global data emission: constant evaluation of file-scope initializers (integer/char constants, address-of-global, brace lists) and their `.data`/`.bss` byte runs; padding counted in BYTES (`_bytelen`), so gap-containing aggregates land members at natural offsets and the emitted object equals sizeof. Mixin of Codegen. |
+| blcc/codegen.py | x86-64 AT&T emitter: stack frame per function, locals at fixed rbp offsets, temporaries on-stack; statements, the switch compare chain, local initializers through types._fill_plan. Correctness over optimization. |
+| blcc/expr_codegen.py | Expression emission of the same emitter, split from codegen.py the way expr_parser.py was split from parser.py (the expression half alone would push one file past 400 lines); never imports codegen — Codegen supplies the helpers via the mixin. |
+| blcc/driver.py | CLI parse, pipeline order, as/ld subprocess calls, diagnostics, exit codes 0/2/3; the sealed belt converts any internal compiler fault into an §8 exit-2 line — never a traceback, never exit 1. |
+| blcc/runtime.py | Emits the runtime asm blob (frozen text constant) + the ONE builtin symbol table (BUILTINS), from which parser.py DERIVES its redeclaration guard (one mechanism, one source). No C runtime source: blcc cannot compile C. |
 
-Rejected: JIT/bytecode middle-end, LLVM/lli, third-party parsers, a second runtime in C, per-function temp registers ( SSA-style regalloc) — all rejected for stdlib-only + correctness-first.
+Escape set (pinned to the shipped lexer; byte-exact vs gcc at 5887eef): `\n` `\t` `\\` `\"`, octal `\0ddd` ONLY with the leading zero (max 3 digits), and `\x` with EXACTLY TWO hex digits — no maximal munch: `"\x80ab"` is three characters (`\x80`, `a`, `b`), where C (hex escapes consume as many digits as possible) would fold it into one byte. Bare `\ddd`, `\8`, `\u` are loud lex rejects naming the offending escape. §4 strings use this same set.
+
+Rejected: JIT/bytecode middle-end, LLVM/lli, third-party parsers, a second runtime in C, per-function temp registers (SSA-style regalloc) — all rejected for stdlib-only + correctness-first.
 
 ## 4. C subset (pinned)
-- Types: `char` `short` `int` `long` `void`; sizes 1/2/4/8, all 8 for pointers; `_Bool` out. Structs; arrays (fixed size; `T a[]` only with init list or as parameter); `typedef`; `enum` constants (int-valued).
-- Interning (v3: pinned to the landed implementation — the old "int zero-extends" was WRONG; a negative int re-interned zero-extended cannot survive 64-bit ops, which §7's pins demand). All values live in 64-bit slots; per-width: char/short load `movsbq`/`movswq`; int load `movl mem,%eax` + `movslq %eax,%rax` (re-intern sign-extended); int result narrowed to 32-bit via `movl %eax,%eax`; long `movq`; stores `movb/movw/movl/movq`; unsigned byte/char operand contexts `movzbq`, runtime byte loops `movzbl`; division `cqto`+`idivq`. Pinned so two coders emit identical asm.
+- Types: `char` `short` `int` `long` `void`; sizes 1/2/4/8, all 8 for pointers; `_Bool` out. Structs; arrays (fixed size, any rank — see Arrays below); `typedef`; `enum` constants (int-valued).
+- Interning: all values live in 64-bit slots; per-width: char/short load `movsbq`/`movswq`; int load `movl mem,%eax` + `movslq %eax,%rax` (re-intern sign-extended); int result narrowed to 32-bit via `movl %eax,%eax`; long `movq`; stores `movb/movw/movl/movq`; unsigned byte/char operand contexts `movzbq`, runtime byte loops `movzbl`; division `cqto`+`idivq`. An assignment's value is the CONVERTED STORED value (both `=` and compound paths re-intern through the target width). Pinned so two coders emit identical asm.
+- Arrays (posture pinned at 5887eef): any fixed rank ≥ 1, row-major; the bracket NEAREST the identifier binds first — `int m[2][3]` is 2 rows of 3; the `sizeof m` / `sizeof(m[0])` / `sizeof(m[0][0])` chain is exact at every rank. `T a[]` and `T a[][N]` size the first dimension FROM THE INITIALIZER: nested lists → row count; flat brace-elided fills → ceil(count / row capacity); `char ss[][4] = {"ab","cde"}` → 8 bytes. A row decays to its address (8-byte slot, row-byte stride); a `T p[][N]` parameter is that 8-byte pointer proxy, striding rows by N×elem. A dereferenced row pointer yields the ADDRESS, never a content load. Partial rows zero-fill to capacity — locals included (a frame tail never inherits garbage). Excess initializers are a LOUD per-level reject naming the violated capacity. Rank ≥ 2 inside structs behaves identically. `T a[]` as a parameter decays to a pointer (8).
+- Initializers: per-level brace lists; char arrays additionally take a plain string literal (`char s[] = "ab";` → sizeof 3; `char t[4] = "ab";` → sizeof 4, tail zero). Array-side brace elision IS in the subset: flat fills, unsized ceil sizing, partial zero-fill. The struct side of C's §6.7.9 elision is NOT: scalar-filling a struct initializer, and brace-WRAPPED string rows (`char row[3] = {"ab"};`, `{"x"}` into a struct char-array member) are loud §8 rejects though C-valid — a PINNED false-reject posture, listed in §5. Empty brace lists (`T x = {};`, `struct S v[2] = {{},{}};`) are ACCEPTED as all-zero (the gnu17 spelling, oracle-verified byte-exact both sides).
 - Storage: globals (initializers = integer/char/address-of-global constants; 0 → `.bss`, non-zero → `.data`), locals. Only storage class keyword accepted: `static` at file scope (same as non-static there); `static` inside a function → diagnostic.
 - Functions: prototypes, definitions, calls, recursion, `main(int argc, char **argv)` (other mains allowed as ordinary functions). No default argument promotions beyond the interning rule.
-- Operators: `+ - * / %` (signed; x86 idq semantics pinned — `/` and `%` truncate toward zero; sample 2 exists to pin that), unary `-`; `& | ^ ~ << >>` (shift count from operand's own width); `!`; `== != < <= > >=`; `&& ||` (short-circuit); compound `+= -= *= /= %= &= |= ^= <<= >>=`; `++ --` prefix+postfix; `sizeof` types+expressions (compile-time); casts among the 4 int types and pointer↔pointer / pointer↔long; `&` `*`.
+- Operators: `+ - * / %` (signed; x86 `idivq` semantics pinned — `/` and `%` truncate toward zero; sample 2 exists to pin that), unary `-`; `& | ^ ~ << >>` — shifts execute in the 64-bit slot and x86 masks the count (`%cl`), then the int result narrows through the 32-bit slot; in-range counts are exact (`1<<31` = INT_MIN), and a count ≥ the operand's width is UB in C and MAY DIVERGE from gcc — shipped, pinned (runtime `int 1<<33` yields 0 here); `!`; `== != < <= > >=`; `&& ||` (short-circuit); compound `+= -= *= /= %= &= |= ^= <<= >>=`; `++ --` prefix+postfix; `sizeof` types+expressions (compile time; operand forms pinned below); casts among the 4 int types and pointer↔pointer / pointer↔long; `&` `*`.
+- `sizeof` (operand forms pinned): accepts `sizeof <type>`, `sizeof <identifier>`, and `sizeof(<expression>)`. Unparenthesized postfix/unary operands (`sizeof m[0]`, `sizeof -x`, `sizeof *a`) are loud parse rejects though C-valid — a PINNED false-reject posture; write `sizeof(m[0])`. `sizeof("lit")` = **8**: string literals carry §4's `char *` type, so the result is a pointer width — the PINNED divergence from C, whose `sizeof("abcd")` is 5 (the literal's bytes live in `.rodata` and are not part of the operand's type here). `sizeof` applied to an array PARAMETER yields 8 (parameters decay; C forbids that spelling — accepted lenient posture).
 - Control: `if`/`else`, `while`, `do…while`, `for` (declaration or expression init; both empty allowed), `break`, `continue`, `return`, nested blocks.
 - `switch`/`case`/`default` IS IN the subset (pinned — do not re-litigate): integer controlling expr, compile-time-constant labels, codegen emits a compare chain (jump table allowed as a refinement only when all case values are dense and contiguous), C fall-through semantics preserved, `break` exits the switch.
-- Strings: literals → byte arrays in `.rodata`, type `char *`; same escape set as lexer.
+- Strings: literals → byte arrays in `.rodata`, type `char *`; the §3 escape set, incl. `\x` two-hex-digit cap and `\0ddd`-only octal.
 - Sample helper: `samples/print.h` (preprocessor-included, ordinary C on top of §6 builtins): `void pstr(const char *)`, `void pint(long)` (signed decimal), `void pchar(int)`; plus `#define NL` → `"\n"`. Samples use it so the pinned stdout bytes stay readable.
 
 ## 5. NOT in the subset — loud diagnostic naming the construct, exit 2
-float/double · goto/labels · unions · bitfields · function pointers (declarations, calls through them) · variadic functions · struct assignment or comparison (member-wise scalar assignment is in) · multi-file linking beyond `#include` inlining (exactly one translation unit to `as`) · `static`/`extern` linkage rules beyond file scope · `default` in switch outside a switch, arrays as struct members beyond fixed arrays, `for` init declarations beyond one simple declaration.
+float/double · goto/labels · unions · bitfields · function pointers (declarations, calls through them) · variadic functions · struct assignment or comparison (member-wise scalar assignment is in) · multi-file linking beyond `#include` inlining (exactly one translation unit to `as`) · `static`/`extern` linkage rules beyond file scope · `default` in switch outside a switch, arrays as struct members beyond fixed arrays, `for` init declarations beyond one simple declaration · the struct side of brace elision (§4 Initializers: scalar-filled struct initializers, brace-wrapped string rows) · unknown escapes (`\ddd` bare, `\8`, `\u`) · unparenthesized non-trivial `sizeof` operands.
 Any token the lexer cannot classify is itself a diagnostic naming the offending text.
 
 ## 6. Linux-freestanding runtime (pinned)
@@ -55,10 +65,10 @@ Any token the lexer cannot classify is itself a diagnostic naming the offending 
   `long _sys_write(long fd, const char *buf, long len);` `void _sys_exit(long code);`
   `long _sys_open(const char *path, long flags);` `long _sys_read(long fd, char *buf, long len);`
   `long strlen(const char *s);` `long strcmp(const char *a, const char *b);`
-- Mapping (Linux x86-64): `syscall(number, arg1..3)` → rax=number, rdi=arg1, rsi=arg2, rdx=arg3, rcx/r11 clobbered; `instruction_syscall`. write=1, open=2, read=0, exit=60. `_sys_write`→1, `_sys_open`→2, `_sys_read`→0, `_sys_exit`→60 (never returns); `strlen`/`strcmp` are asm loops in the runtime blob (return byte count / 0-equal / sign of first difference).
+- Mapping (Linux x86-64): `syscall(number, arg1..3)` → rax=number, rdi=arg1, rsi=arg2, rdx=arg3, rcx/r11 clobbered; write=1, open=2, read=0, exit=60. `_sys_write`→1, `_sys_open`→2, `_sys_read`→0, `_sys_exit`→60 (never returns); `strlen`/`strcmp` are asm loops in the runtime blob: `strlen` returns the byte count before the NUL; `strcmp` returns 0 when equal, else the RAW difference of the two bytes at the first difference, both read UNSIGNED (`movzbl`), so the result spans −255..255 — the SIGN is what C pins. Do NOT normalize to ±1: the raw value is the shipped, oracle-checked behavior, and normalizing would break the §6 sign pins.
 - `_start`: extern "C"-style ABI — argc/argv/envp already on the stack at entry; `_start` loads argc→rdi, argv→rsi, calls `main`, then `_sys_exit(rax & 0xff)`. argv strings stay at their stack addresses; codegen references them only via pointers passed in registers/locals.
 - Assembly ABI: System V — args rdi,rsi,rdx,rcx,r8,r9; return rax; callee-saved rbx,rsp,rbp,r12–r15 untouched by generated code; rsp 16-byte aligned at every `call`.
-- Emitted module layout: single `.text`, `.section .rodata`, `.data`, `.bss`; entry `_start`; link: static, non-PIE, default base 0x400000.
+- Emitted module layout: single `.text`, `.section .rodata`, `.data`, `.bss`; entry `_start`; link: static, non-PIE, default base 0x400000 (verified: first PT_LOAD at 0x400000 at 5887eef).
 - Runtime blob = frozen asm text constant in blcc/runtime.py (no runtime.c anywhere — blcc has no C compiler to compile it with).
 
 ## 7. samples/ (pinned names, exact expected stdout bytes, exit codes)
@@ -79,11 +89,11 @@ Source-style contract for all samples: they use ONLY §4+§6; the ONLY permitted
 | 11 | switch.c | loop 0..4, switch {0:`zero\n` 1:`one\n` 2:`two\n` default:`many\n`} → `zero\none\ntwo\nmany\nmany\n` | 0 |
 | 12 | globmix.c | global `int g` (+1 twice in `bump()`), local 19 + g → `21\n` | 21 |
 
-Pinned: exit codes ≥256 truncate per `exit(n & 0xff)` (all pinned codes are < 256 — this rule only guards samples). Tests run every sample twice: no args, and with one arg `hi`. argv.c then prints `argc=2\nhi\n` exit 2; the no-arg run prints `argc=1\n` exit 1 — that exact pair is the argv contract. hostname.c asserts stdout == first bytes of /etc/hostname up to 128 (content-derived assertion, not a literal). Samples 2 and 6 exist so a wrong pinned expectation cannot survive an independent ground truth.
+Pinned: exit codes ≥256 truncate per `exit(n & 0xff)` (all pinned codes are < 256 — this rule only guards samples). Tests run every sample twice: no args, and with one arg `hi`. argv.c then prints `argc=2\nhi\n` exit 2; the no-arg run prints `argc=1\n` exit 1 — that exact pair is the argv contract. hostname.c asserts stdout == first bytes of /etc/hostname up to 128 (content-derived assertion, not a literal). Samples 2 and 6 exist so a wrong pinned expectation cannot survive an independent ground truth. The samples table is deliberately UNCHANGED by v4 and does NOT exercise rank ≥ 2 arrays or gap-padding aggregates: that behavior is carried by the test suite — tests/test_regress_c5.py (the padding byte-count family incl. an emitted-`.data` byte-count proof, and the rank-2 fill/walk/decay/sizing rows); rank-3 composition was verified in the DA-c4 close probes (r407), recorded in the close.
 
 ## 8. Diagnostics contract
 - Compile error: `file:line:col: <phase>: <message>, found '<token-or-construct>'` on stderr, exit 2. Phases: `lex` / `pp` / `parse` / `sema` / `asm`.
-- Unsupported §5 constructs: message names the construct literally (e.g. `float`, `goto`, `union`, `function pointer`).
+- Unsupported §5 constructs: message names the construct literally (e.g. `float`, `goto`, `union`, `function pointer`) — a construct name or the user's own source token, NEVER a Python node class name (`Call`, `IntLit`, …); `types.what()` is the single renderer.
 - Assembler/linker: tool stderr passed through verbatim, exit 3; scratch `.o`/`.s` kept on failure (into `.tmp/`).
 - `main` missing → `sema` diagnostic exit 2. Nothing is ever emitted for input the contract rejects.
 
@@ -92,6 +102,7 @@ Pinned: exit codes ≥256 truncate per `exit(n & 0xff)` (all pinned codes are < 
 - Unit: test_lexer.py (token kinds, line/col, escapes), test_preproc.py (defines, includes, conditionals, undef, cycle guard), test_parser.py + test_expr_parser.py (AST shapes incl. switch, sizeof), test_codegen.py (asm text patterns: frame setup, switch cmp-chain, movsx), test_runtime.py (blob symbols present), test_driver.py (exit codes, `--emit-asm` keeps `.s`, `-v` echoes).
 - End-to-end: tests/test_samples.py — for each §7 sample: compile via `python3 -m blcc`, run the binary, assert EXACT stdout + exit per the table (argv/hostname per their pinned rules); no skips, no timeouts >10s, fully deterministic.
 - Negative: float literal → exit 2 + `float`; goto → exit 2 + `goto`; missing `;` and unbalanced `}` → exit 2 naming file:line:col; unknown include → exit 2 + `pp`.
+- Inventory at 5887eef (17 files, 271 tests): conftest.py; the seven unit files above; test_samples.py; the adversarial suites test_independent_e2e.py / test_independent_negative.py; the fix-cycle regression files test_regress_c2.py / test_regress_c3.py / test_regress_c4.py / test_regress_c5.py (c5: padding byte-count family + rank-2 rows + §8 construct-naming); the sealed §8 probe file test_c2_orch_probes.py (its 2 global-init found-tokens were re-signed BY THE VERIFIER at 5887eef to the shipped construct names — that adjudication stands: sealed rows change only by verifier authority, never by a producer); and the cycle-3 differential probes test_c3_final_probes.py.
 - Deterministic: samples write only under `.tmp/`; no network; no env reads beyond what argv/hostname pinned.
 
 ## 10. Data stores / ports / dependencies (closing Architect checks this table against reality)
@@ -101,4 +112,4 @@ Pinned: exit codes ≥256 truncate per `exit(n & 0xff)` (all pinned codes are < 
 
 ## 11. File hygiene (binding on every child)
 - No literal unimplemented-work marker words — spelled "T-O-D-O" and "F-I-X-M-E" here so this file passes its own grep gate — anywhere in source or docs; the fleet gate fails on them. Unimplemented scope is a §5 diagnostic, never a marker comment.
-- Python 3.10 syntax ceiling (no `match`, no 3.11 stdlib APIs); English identifiers; files ≤600 lines (400 soft, see header line rule); every module imports only stdlib + blcc siblings.
+- Python 3.10 syntax ceiling (no `match`, no 3.11 stdlib APIs); English identifiers; files ≤600 lines (cap 400 — above it the top-of-file reason rule in the header applies, comment form or docstring first lines); every module imports only stdlib + blcc siblings.
