@@ -140,8 +140,10 @@ class Lexer:
                     continue
                 if c in "\"'":
                     i = self._literal(src, text, i, toks)
-                    # L1 (M1 R9, phase-6 parity): the pp leaves `"a" "b"`
-                    # juxtaposed; merge immediately-adjacent string literals.
+                    # L1 (M1 R9, phase-6 parity): a macro-produced literal
+                    # can abut the next one with NOTHING between (`"a""b"`
+                    # — zero gap); merge THOSE. Any inter-literal space
+                    # stops this loop — spaced juxtaposition is M2 row 6g.
                     while i < n and text[i] == '"' and toks \
                             and toks[-1].kind == "str":
                         i = self._literal(src, text, i, toks)
