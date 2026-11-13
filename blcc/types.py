@@ -1,3 +1,6 @@
+# LINES reason: the type law (sizes, UAC, decay, fold, layout, typeof) is the
+# single §4 answer-table shared by parser, sema and both codegens — one file
+# keeps the measured gcc gnu89 law rows beside the code that implements them.
 """Type answers for codegen (ARCHITECTURE.md §4): sizes, the decay rule,
 struct layout (§4 natural alignment), type-of-expression, and the §6 builtin
 result kinds. This is the shared base of blcc.codegen.Codegen: every method

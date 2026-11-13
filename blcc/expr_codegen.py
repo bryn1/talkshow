@@ -1,3 +1,6 @@
+# LINES reason: expression EMISSION dispatches on node class with the shared
+# intern-in-%rax convention; splitting emitters would duplicate the frame/temp
+# and _convert discipline across files.
 """Expression emission of blcc's x86-64 emitter (ARCHITECTURE.md §3/§4/§6).
 
 Split from blcc/codegen.py the way blcc/expr_parser.py was split from

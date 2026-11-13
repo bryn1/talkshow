@@ -1,3 +1,6 @@
+# LINES reason: the expression grammar is ONE precedence-climbing surface —
+# splitting the operator levels across files would scatter the §4 subset law
+# (incl. the §1c conditional entry) away from the table that defines it.
 """Expression parser for blcc (ARCHITECTURE.md §3).
 
 Precedence climbing + casts + unary, producing ast expression nodes. The
