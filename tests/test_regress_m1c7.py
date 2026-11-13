@@ -381,8 +381,11 @@ def test_cc_phase_flags_blcc_loud_divergence(tmp_path):
     # naming the flag (doc §2 table, ARCHITECTURE v5.1).
     for flag in ("-Wall", "-O2", "-m64", "-c", "-fno-common", "-MD"):
         path = write(tmp_path, "t.c", VFOO)
-        g = gcc_run([flag, path] + PINS)
-        b = blcc_run([flag, path] + PINS)
+        # cwd=tmp_path: gcc -MD WRITES a .d beside the object target, and
+        # with an absolute src it lands in the CWD — without this pin the
+        # row drops `t.d` into the repo (teeth-run caught it).
+        g = gcc_run([flag, path] + PINS, cwd=str(tmp_path))
+        b = blcc_run([flag, path] + PINS, cwd=str(tmp_path))
         assert g.returncode == 0, (flag, g.stderr)
         assert b.returncode == 2
         assert flag in b.stderr
