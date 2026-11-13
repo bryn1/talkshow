@@ -566,10 +566,22 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter):
             if len(init.items) > len(slots):
                 self._err(at, "too many struct initializers (§4)", "initializer")
             placed = 0
+            if ty.is_union:
+                # union slots OVERLAP (all at 0): the sequential gap walk
+                # below cannot express "rest of the storage is zero" —
+                # zero-first, then apply only the designated member
+                # (§1 row 10; the T+9 legs pin gcc's byte picture).
+                self._zero_local(off, self._size(ty, at))
+                for i, (sname, sty, mo, ssz) in enumerate(slots):
+                    if i < len(init.items) and \
+                            not isinstance(init.items[i], ast.ZeroFill):
+                        self._init_item(off + mo, sty, init.items[i], at)
+                return
             for i, (sname, sty, mo, ssz) in enumerate(slots):
                 if placed < mo:
                     self._zero_local(off + placed, mo - placed)
-                if i < len(init.items):
+                if i < len(init.items) and \
+                        not isinstance(init.items[i], ast.ZeroFill):
                     self._init_item(off + mo, sty, init.items[i], at)
                 else:
                     self._zero_local(off + mo, ssz)
@@ -590,6 +602,8 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter):
         self._e("rep stosb")
 
     def _init_item(self, off: int, ty: ast.Node, item, at) -> None:
+        if isinstance(item, ast.ZeroFill):
+            return          # normalization padding: the span is already zero
         if isinstance(item, ast.InitList):
             self._init_local(off, ty, item, at)
             return

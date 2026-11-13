@@ -118,6 +118,21 @@ class InitList(Node):
     items: Tuple[Node, ...]
 
 
+@dataclass(frozen=True)
+class Desig(Node):
+    """§1 row 10: designator run + value, as written (the parser
+    NORMALIZES every InitList before consumers see it)."""
+    desigs: Tuple[tuple, ...]   # ('f',name) | ('i',expr) | ('r',lo,hi)
+    value: Node
+
+
+@dataclass(frozen=True)
+class ZeroFill(Node):
+    """normalization padding — the C rule 'every subobject an initializer
+    does not mention is ZERO'. data.py emits its zero bytes; codegen
+    pre-zeros whole objects and skips it."""
+
+
 # --------------------------------------------------------------------------
 # Statements (§4)
 # --------------------------------------------------------------------------

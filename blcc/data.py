@@ -72,6 +72,31 @@ class DataEmitter:
         emit a .zero directive — a materialized byte list is what OOM-killed
         the compiler on large .bss (DA-c2 P2-2, exit 137 outside §2)."""
         ty = self._untype(ty)          # §2.6: `static __typeof__(long) gsl`
+        if isinstance(init, ast.ZeroFill):
+            return [("z", self._size(ty, at))]     # §1 row 10 padding
+        if isinstance(ty, ast.StructType) and ty.is_union \
+                and isinstance(init, ast.InitList):
+            # union slots OVERLAP: a sequential byte stream cannot carry
+            # them; materialize (unions are object-sized, the .zero
+            # compression rule protects .bss ARRAYS, not these).
+            total, slots = self._struct_layout(ty, at)[1:]
+            buf = bytearray(total)
+            for i, (sname, sty, mo, ssz) in enumerate(slots):
+                if i < len(init.items) and \
+                        not isinstance(init.items[i], ast.ZeroFill):
+                    sub = self._bytes_of(sty, init.items[i], at)
+                    pos = 0
+                    for kind, val in sub:
+                        if kind == "b":
+                            buf[mo + pos] = val
+                            pos += 1
+                        elif kind == "z":
+                            pos += val
+                        else:
+                            self._err(init, "address initializer inside a "
+                                      "union initializer is not in the "
+                                      "subset (§5)", "initializer")
+            return [("b", b) for b in buf]
         if isinstance(ty, (ast.BuiltinType, ast.PtrType)):
             sz = self._size(ty, at)
             if isinstance(init, ast.FloatLit):

@@ -346,6 +346,11 @@ class TypeMap:
                     return
                 it = items[pos[0]]
                 inner = a_ty.inner
+                if isinstance(it, ast.ZeroFill):
+                    pos[0] += 1                 # §1 row 10 padding
+                    plan.append(("zero", off, esz, None))
+                    i += 1
+                    continue
                 if isinstance(inner, ast.ArrayType) \
                         and not self._whole_elem(inner, it):
                     mark = len(plan)

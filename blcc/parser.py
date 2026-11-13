@@ -843,6 +843,8 @@ class Parser:
                 self._params_variadic = False
                 break
             init = self.parse_initializer() if self.s.accept_punct("=") else None
+            if init is not None:
+                init = self._norm_init(ty, init, pos)   # §1 row 10
             if is_extern and init is None and not at_file:
                 # an extern LOCAL re-declares a file-scope object; the
                 # name already resolves through the enclosing scope —
@@ -890,12 +892,231 @@ class Parser:
         if self.s.accept_punct("{"):
             items: List[ast.Node] = []
             while not self.s.at_punct("}"):
-                items.append(self.parse_initializer())
+                if self.s.at_punct(".") or self.s.at_punct("["):
+                    desigs = self._parse_designators()
+                    self.s.expect_punct("=")
+                    items.append(ast.Desig(pos.file, pos.line, pos.col,
+                                           desigs, self.parse_initializer()))
+                else:
+                    items.append(self.parse_initializer())
                 if not self.s.accept_punct(","):
                     break
             self.s.expect_punct("}")
             return ast.InitList(pos.file, pos.line, pos.col, tuple(items))
         return self.expr.parse_expression()
+
+    def _parse_designators(self) -> Tuple[tuple, ...]:
+        out: List[tuple] = []
+        while True:
+            if self.s.accept_punct(".") is not None:
+                out.append(("f", self.s.expect_id("parse").text))
+                continue
+            lb = self.s.accept_punct("[")
+            if lb is not None:
+                lo = self.expr.parse_expression()
+                if self.s.accept_punct("...") is not None:
+                    hi = self.expr.parse_expression()
+                    out.append(("r", lo, hi))
+                else:
+                    out.append(("i", lo))
+                self.s.expect_punct("]")
+                continue
+            break
+        if not out:
+            self._parse_err(self.s.peek(), "designator expected "
+                                          "(§1 row 10)")
+        return tuple(out)
+
+    # -- §1 row 10: designated-initializer NORMALIZATION ----------------------
+
+    def _unqual(self, ty):
+        while isinstance(ty, ast.Qualified):
+            ty = ty.inner
+        return ty
+
+    def _init_slots(self, ty):
+        """Slot view (name_or_None, type, off, size) in declaration order
+        for a struct/union — the designator walk does NOT promote anonymous
+        members (it DESCENDS their slots instead). Same layout family as
+        _offsetof_flat; None = incomplete member layout (§2.13 posture)."""
+        ty = self._unqual(ty)
+        if not isinstance(ty, ast.StructType):
+            return None
+        members = self.struct_tags.get(ty.tag)
+        if members is None:
+            return None
+        slots: List[tuple] = []
+        off = 0
+        for m in members:
+            msz = self._csize(m.type)
+            mal = self._calign(m.type)
+            if msz is None or mal is None:
+                return None
+            if ty.is_union:
+                slots.append((m.name, m.type, 0, msz))
+            else:
+                o = (off + mal - 1) // mal * mal
+                slots.append((m.name, m.type, o, msz))
+                off = o + msz
+        return slots
+
+    def _desig_idx(self, node, at) -> int:
+        v = self.fold_truthy(node)
+        if v is None:
+            self._sema(at, "array designator requires a constant index "
+                       "(§1 row 10)")
+        if v < 0:
+            self._sema(at, "array designator index must be non-negative "
+                       "(§1 row 10)")
+        return v
+
+    def _find_field_slot(self, slots, ty, name, at):
+        """Resolve `.name` against a slot list: a named slot wins; else a
+        PROMOTED name inside an anonymous member — descend (T+7 promotion
+        law; returns the anon slot + the name to resolve INSIDE it)."""
+        for i, (sname, sty, mo, ssz) in enumerate(slots):
+            if sname == name:
+                return i, ()
+        from blcc.types import walk_fields
+        for i, (sname, sty, mo, ssz) in enumerate(slots):
+            if sname is None:
+                inner = self.struct_tags.get(self._unqual(sty).tag) \
+                    if isinstance(self._unqual(sty), ast.StructType) \
+                    else None
+                if inner is not None and any(n2 == name
+                                             for n2, _t2 in
+                                             walk_fields(inner,
+                                                         self.struct_tags)):
+                    return i, (("f", name),)
+        self._sema(at, "designator: no member '{}' in the initialized "
+                   "aggregate (§1 row 10)".format(name))
+
+    def _merge_init(self, a, b, pos):
+        """Two normalizations of the SAME subobject merge per C: a later
+        designation overwrites leaf-by-leaf (redesignation last-wins), a
+        ZERO fill never erases what an earlier item placed."""
+        if a is None or isinstance(a, ast.ZeroFill):
+            return b
+        if isinstance(b, ast.ZeroFill):
+            return a
+        if isinstance(a, ast.InitList) and isinstance(b, ast.InitList):
+            out = []
+            for i in range(max(len(a.items), len(b.items))):
+                out.append(self._merge_init(
+                    a.items[i] if i < len(a.items)
+                    else ast.ZeroFill(pos.file, pos.line, pos.col),
+                    b.items[i] if i < len(b.items)
+                    else ast.ZeroFill(pos.file, pos.line, pos.col), pos))
+            return ast.InitList(pos.file, pos.line, pos.col, tuple(out))
+        return b                        # last written leaf wins
+
+    def _norm_init(self, ty, init, at):
+        """Normalize ONE brace level: designators expand into a positional
+        list padded with ZeroFill; positional runs RESUME AFTER the last
+        designated member/element (gnu89 measured, d-mix leg); repeated
+        designation = later wins; ranges fill every index; designator
+        runs MIX with nested paths by RE-WRAPPING the tail ([0].hi = 5 →
+        index here, `.hi` descends into the element's own normalization)."""
+        ty = self._unqual(ty)
+        if isinstance(init, ast.Desig):
+            # re-wrapped nested path ([0].hi = 5 descends here as a bare
+            # designator run): same brace-level normalization
+            init = ast.InitList(init.file, init.line, init.col, (init,))
+        if not isinstance(init, ast.InitList):
+            if isinstance(init, ast.Desig):
+                self._sema(at, "designator used on an object of "
+                           "non-aggregate type (§1 row 10)")
+            return init
+        if not any(isinstance(it, ast.Desig) for it in init.items):
+            return init                          # positional: as written
+        pos = init
+        if isinstance(ty, ast.ArrayType):
+            esz = self._csize(ty.inner)
+            if esz is None:
+                self._sema(at, "cannot size array elements for the "
+                           "initializer (§1 row 10)")
+            declared = None
+            if ty.size is not None:
+                declared = self._desig_idx(ty.size, at)
+            out: List[ast.Node] = []
+            cur = 0
+
+            def pad_to(k):
+                while len(out) <= k:
+                    out.append(ast.ZeroFill(pos.file, pos.line, pos.col))
+
+            for it in init.items:
+                if isinstance(it, ast.Desig):
+                    kind = it.desigs[0][0]
+                    if kind == "f":
+                        self._sema(at, "'.field' designator in an array "
+                                   "initializer (§1 row 10)")
+                    if kind == "i":
+                        idxs = [self._desig_idx(it.desigs[0][1], at)]
+                        rest = it.desigs[1:]
+                    else:
+                        lo = self._desig_idx(it.desigs[0][1], at)
+                        hi = self._desig_idx(it.desigs[0][2], at)
+                        if hi < lo:
+                            self._sema(at, "range designator '{}' beyond "
+                                       "'{}' (§1 row 10)".format(hi, lo))
+                        if hi - lo > 2 ** 20:
+                            self._sema(at, "range designator exceeds the "
+                                       "implementation limit (§4)")
+                        idxs = list(range(lo, hi + 1))
+                        rest = it.desigs[1:]
+                    for k in idxs:
+                        if declared is not None and k >= declared:
+                            self._sema(at, "too many initializers for "
+                                       "{} elements (§4)".format(declared))
+                        pad_to(k)
+                        out[k] = self._merge_init(
+                            out[k], self._norm_init(
+                                ty.inner,
+                                ast.Desig(pos.file, pos.line, pos.col,
+                                          rest, it.value) if rest
+                                else it.value, at), pos)
+                    cur = max(idxs) + 1
+                else:
+                    if declared is not None and cur >= declared:
+                        self._sema(at, "too many initializers for {} "
+                                   "elements (§4)".format(declared))
+                    pad_to(cur)
+                    out[cur] = self._norm_init(ty.inner, it, at)
+                    cur += 1
+            return ast.InitList(pos.file, pos.line, pos.col, tuple(out))
+        slots = self._init_slots(ty)
+        if slots is None:
+            return init                          # non-aggregate: as written
+        out = [None] * len(slots)
+        cur = 0
+        for it in init.items:
+            if isinstance(it, ast.Desig):
+                kind = it.desigs[0][0]
+                if kind != "f":
+                    self._sema(at, "'[index]' designator in a struct/"
+                               "union initializer (§1 row 10)")
+                s_i, descend = self._find_field_slot(slots, ty,
+                                                     it.desigs[0][1], at)
+                rest = (descend + it.desigs[1:]) if descend \
+                    else it.desigs[1:]
+                out[s_i] = self._merge_init(
+                    out[s_i], self._norm_init(
+                        slots[s_i][1],
+                        ast.Desig(pos.file, pos.line, pos.col, rest,
+                                  it.value) if rest else it.value,
+                        at), pos)
+                cur = s_i + 1
+            else:
+                if cur >= len(slots):
+                    self._sema(at, "excess elements in struct initializer "
+                               "(§4)")
+                out[cur] = self._norm_init(slots[cur][1], it, at)
+                cur += 1
+        filled = tuple(z if z is not None else
+                       ast.ZeroFill(pos.file, pos.line, pos.col)
+                       for z in out)
+        return ast.InitList(pos.file, pos.line, pos.col, filled)
 
     def parse_function_body(self, params: Tuple[ast.Param, ...]) -> ast.Node:
         opening = self.s.expect_punct("{")
