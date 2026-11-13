@@ -449,11 +449,13 @@ def test_global_cast_init_diag_and_sealed_exception():
     err = r.stderr.strip()
     assert DIAG_RE.match(err) and err.endswith("found 'cast expression'"), err
     assert_nothing_emitted(out)
+    # FINDING c2-F3 (T+10b): w10 (`int a = 1 + 1;`) was STRICTER THAN THE
+    # ORACLE (gcc gnu89 rc0 — see test_c2_orch_probes.py re-sign note);
+    # it now accepts. w9 (`int x = f();`) stays pinned: gcc rc1 measured
+    # "initializer element is not constant" — oracle-correct wall.
     for tag, src, tok in (
             ("w9", "int f(void){return 1;} int x = f();\n"
-                   "int main(void){ _sys_exit(0); }\n", "call expression"),
-            ("w10", "int a = 1 + 1;\nint main(void){ _sys_exit(0); }\n",
-             "+ expression")):
+                   "int main(void){ _sys_exit(0); }\n", "call expression"),):
         r, out = compile_src(src, tag)
         assert r.returncode == 2, (tag, r.stderr)
         assert r.stderr.strip().endswith("found '{}'".format(tok)), (tag, r.stderr)

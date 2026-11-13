@@ -120,6 +120,12 @@ class Parser:
                 return None
             if node.op == "-":
                 return -v
+            if node.op == "~":
+                v = self.fold_truthy(node.operand)
+                if v is None:
+                    return None
+                v = ~v & 0xFFFFFFFFFFFFFFFF
+                return ((v + 2 ** 63) % 2 ** 64) - 2 ** 63
             if node.op == "!":
                 return 0 if v else 1
             return v
@@ -159,6 +165,18 @@ class Parser:
                 if (a < 0) != (b < 0):
                     q = -q
                 return a - b * q
+            if op in ("<<", ">>"):
+                if b < 0 or b > 63 or a is None:
+                    return None
+                v = (a << b) & 0xFFFFFFFFFFFFFFFF if op == "<<" \
+                    else a >> b
+                return ((v + 2 ** 63) % 2 ** 64) - 2 ** 63
+            if op in ("|", "&", "^"):
+                if a is None or b is None:
+                    return None
+                v = (a | b) if op == "|" else \
+                    ((a & b) if op == "&" else (a ^ b))
+                return ((v + 2 ** 63) % 2 ** 64) - 2 ** 63
             if op == "<":
                 return 1 if a < b else 0
             if op == "<=":
@@ -180,6 +198,10 @@ class Parser:
         from blcc.types import TYPE_SIZE
         if ty is None:
             return None
+        while isinstance(ty, ast.Qualified):
+            ty = ty.inner               # `const insn_attr_t tab[]` — the
+            #                              §1 row 10 walk hit the missing
+            #                              arm (pre-existing mirror gap)
         if isinstance(ty, ast.BuiltinType):
             return TYPE_SIZE.get(ty.name)
         if isinstance(ty, ast.PtrType):
@@ -300,6 +322,10 @@ class Parser:
         from blcc.types import TYPE_SIZE
         if ty is None:
             return None
+        while isinstance(ty, ast.Qualified):
+            ty = ty.inner               # `const insn_attr_t tab[]` — the
+            #                              §1 row 10 walk hit the missing
+            #                              arm (pre-existing mirror gap)
         if isinstance(ty, ast.BuiltinType):
             return TYPE_SIZE.get(ty.name)
         if isinstance(ty, ast.PtrType):
@@ -669,7 +695,8 @@ class Parser:
 
     def _skip_qualifiers(self) -> None:
         while self._at("const", "volatile", "__volatile__", "restrict",
-                       "__restrict", "__restrict__"):
+                       "__restrict", "__restrict__", "__const",
+                       "__const__"):
             self.s.next()
 
     def parse_struct_type(self) -> ast.Node:
@@ -785,21 +812,16 @@ class Parser:
         return int_ty
 
     def parse_int_constant(self, message: str) -> int:
-        sign = 1
-        if self.s.accept_punct("-"):
-            sign = -1
-        else:
-            self.s.accept_punct("+")
+        # T+10b: enums and case labels take the FULL constant grammar the
+        # kernel's post-pp text feeds them — `(1 << (3+2))`, `A | B`,
+        # `sizeof(long)` … the §1 row 10 walk (inat/idt/mmap witnesses)
+        # hit the missing arms. fold_truthy is the folder; None = LOUD.
         t = self.s.peek()
-        if t.kind in ("int", "char"):
-            self.s.next()
-            return sign * int(t.value)
-        if t.kind == "id":
-            sym = self.lookup(t.text)
-            if sym is not None and sym[0] == "enum":
-                self.s.next()
-                return sign * sym[1]
-        self._sema(t, message)
+        node = self.expr.parse_expression()
+        v = self.fold_truthy(node)
+        if v is None:
+            self._sema(t, message)
+        return v
 
     # -- declarators ---------------------------------------------------------------
 
@@ -808,8 +830,16 @@ class Parser:
         """ctx: 'var' | 'param' | 'member'. Returns (name, type, is_fn, params)."""
         pos = self.s.peek()
         stars = 0
-        while self.s.accept_punct("*") is not None:
+        while True:
+            # T+10b: `int * const p`, `char * volatile v`, `int const * q`
+            # — qualifiers may sit on either side of every `*` (kernel
+            # style; the §1 row 10 walk exposed the missing arms). They
+            # are parsed-and-dropped like every other qualifier here.
+            self._skip_qualifiers()
+            if self.s.accept_punct("*") is None:
+                break
             stars += 1
+        self._skip_qualifiers()
         if self.s.at_punct("("):
             nxt = self.s.peek(1)
             if stars or (nxt.kind == "punct" and nxt.text == "*"):

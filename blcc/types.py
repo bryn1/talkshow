@@ -202,6 +202,10 @@ class TypeMap:
             return n.value - 256 if n.value > 127 else n.value
         if isinstance(n, ast.Ident) and n.name in self.enums:
             return self.enums[n.name]
+        if isinstance(n, ast.Unary) and n.op == "~":
+            v = self._fold_const(n.operand, at)
+            v = ~v & 0xFFFFFFFFFFFFFFFF
+            return ((v + 2 ** 63) % 2 ** 64) - 2 ** 63
         if isinstance(n, ast.Unary) and n.op in ("-", "+"):
             v = self._fold_const(n.operand, at)
             return -v if n.op == "-" else v
@@ -233,6 +237,14 @@ class TypeMap:
                 b = self._fold_const(n.right, at)
                 return {"&": lambda: a & b, "|": lambda: a | b,
                         "^": lambda: a ^ b}[n.op]()
+            if n.op in ("<<", ">>"):
+                a = self._fold_const(n.left, at)
+                b = self._fold_const(n.right, at)
+                if b < 0 or b > 63:
+                    self._err(at or n, "shift amount must be a constant in "
+                              "0..63 (§4)", n.op)
+                v = (a << b) & 0xFFFFFFFFFFFFFFFF if n.op == "<<" else a >> b
+                return ((v + 2 ** 63) % 2 ** 64) - 2 ** 63
         if isinstance(n, ast.Cast):
             return self._fold_const(n.operand, at)
         if isinstance(n, ast.Binary) and n.op in ("+", "-", "*", "/", "%"):

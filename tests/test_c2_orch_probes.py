@@ -221,11 +221,15 @@ def test_allowed_global_init_forms_still_work():
 
 # -- damage side: unsupported initializer forms stay loud, emit nothing ---------
 
+# FINDING c2-F3 (T+10b, oracle-law row): the former ("arithinit",
+# "int a = 1 + 1;", "+ expression") entry pinned a wall STRICTER than the
+# oracle — gcc 11.4 -std=gnu89 accepts integer constant expressions as
+# static initializers (measured rc0). T+10b routes global inits through
+# the same folder as array sizes; the shape now ACCEPTS and is pinned
+# green by test_const_arith_global_init_accepted below.
 REJECT_CASES = [
     ("callinit", "int f(void){return 1;} int x = f();\n"
                  "int main(void){ _sys_exit(0); }\n", "call expression"),
-    ("arithinit", "int a = 1 + 1;\nint main(void){ _sys_exit(0); }\n",
-     "+ expression"),
     ("bracescalar", "int i = {1};\nint main(void){ _sys_exit(0); }\n", "{"),
     ("strtoolong", 'char s[2] = "abc";\nint main(void){ _sys_exit(0); }\n',
      "initializer"),
@@ -242,6 +246,15 @@ def test_unsupported_global_inits_stay_loud_no_emit():
         assert r.stderr.strip().endswith("found '{}'".format(found)), \
             (tag, r.stderr)
         assert_nothing_emitted(out)
+
+
+def test_const_arith_global_init_accepted():
+    # FINDING c2-F3: oracle-law accept pin (gcc rc0 measured this session).
+    r, out = compile_src("int a = 1 + 1;\nint main(void){ return a; }\n",
+                         "arithok")
+    assert r.returncode == 0, (r.returncode, r.stderr)
+    import subprocess
+    assert subprocess.run([out], timeout=30).returncode == 2  # a == 2
 
 
 def test_global_string_init_exact_contract_wording():

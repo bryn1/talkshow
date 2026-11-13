@@ -84,6 +84,16 @@ class DataEmitter:
             return n.value - 256 if n.value > 127 else n.value
         if isinstance(n, ast.Ident) and n.name in self.enums:
             return self.enums[n.name]
+        if isinstance(n, ast.Ident):
+            # T+10b: a BARE array-typed global (or a function name) in a
+            # static initializer is an address constant — the decay the
+            # kernel's pointer tables rely on (`[0][1] = t2`).
+            gd = self.globals.get(n.name)
+            if gd is not None and isinstance(self._untype(gd.type),
+                                             ast.ArrayType):
+                return ("lab", n.name)
+            if n.name in getattr(self, "sigs", {}):
+                return ("lab", n.name)
         if isinstance(n, ast.Unary) and n.op == "-":
             v = self._const(n.operand)
             if isinstance(v, int):
@@ -111,6 +121,15 @@ class DataEmitter:
         # product and is the wrong remedy.
         # §2.4(d) mirror-reject: a file-scope statement-expression gets the
         # gcc sentence verbatim-classed (measured rc1, no value assigned).
+        try:    # T+10b: enums-style INTEGER constant expressions in global
+                  # initializers (`inat_primary_table[0x00] = (1 << 12)`,
+                  # VM-flag ORs, idt sizes) — the SAME folder as array sizes.
+            from blcc.lexer import DiagError as _DE
+            v = self._fold_const(n, None)
+            if isinstance(v, int):
+                return v
+        except _DE:
+            pass
         if _has_stmtexpr(n):
             self._err(n, "braced-group within expression allowed only "
                       "inside a function (§2.4d)", "statement expression")
