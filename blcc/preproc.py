@@ -1,7 +1,7 @@
 """M1 GCC-compatible preprocessor: directive dispatch & source bookkeeping
 (plan R1, R2, R4, R10–R14, R17, R20, R21).
 
-LINES (628 > 400): directive dispatch is ONE concern — the #if-conditional
+LINES (654 > 400): directive dispatch is ONE concern — the #if-conditional
 stack, #line origin state and include search must share the per-file state
 machine; splitting would duplicate that state across files.
 
@@ -171,23 +171,25 @@ class Preprocessor:
 
     def _apply_cli(self) -> None:
         for kind, arg, _ in self.opts.du:
+            # libcpp parses a CLI -D/-U OPERAND by pushing it behind a
+            # synthetic `#define`/`#undef` line — the operand rides the
+            # SAME directive reader as the in-source spelling (skip ws,
+            # longest identifier, tolerate the tail; F-c5-A/F-c5-B, MC
+            # 12458). The FIRST '=' separates the body (measured
+            # `-DFOO==1` -> body `= 1`); with NO '=' the tail is still
+            # read and followed by `1`: `-DFOO BAR` -> body `BAR 1`,
+            # bare `-DFOO` -> `1` exactly (F-c4-A, MC 12456) while the
+            # explicit `-Dname=` keeps its EMPTY body (oracle `int x = ;`
+            # rc 0 — the c6 fix-boundary row).
             if kind == "U":
-                self.defs.pop(arg, None)
+                self._undef("<command-line>", 1, tokenize(arg),
+                            "-U needs an identifier", arg)
                 continue
-            name, sep, body = arg.partition("=")
-            m = re.match(r"[A-Za-z_][A-Za-z0-9_]*", name)
-            # -D may spell a function-like macro: SQ(x)=((x)*(x)) (R17).
-            if not m or (m.end() != len(name) and name[m.end()] != "("):
-                raise DiagError("pp", "<command-line>", 1, 1,
-                                "-D needs an identifier", arg)
-            if not sep:
-                # NO '=' at all is EXACTLY -Dname=1 (gcc 11.4 -dM spells
-                # `#define name 1`; verdict-c4 F-c4-A, SILENT). An explicit
-                # `-Dname=` keeps its EMPTY body (oracle `int x = ;` rc 0).
-                body = "1"
-            text = ("%s %s" % (name, body)) if body else name
+            name_part, sep, tail = arg.partition("=")
+            text = (name_part + " " + tail) if sep else (name_part + " 1")
             self._define("<command-line>", 1, tokenize(text),
-                         warn_ctx="#define " + arg)
+                         warn_ctx="-D " + arg,
+                         name_msg="-D needs an identifier")
 
     # -- directives -------------------------------------------------------------
 
@@ -319,11 +321,8 @@ class Preprocessor:
         elif word == "define":
             self._define(label, ln, rest, warn_ctx="#define " + self._text(rest))
         elif word == "undef":
-            if not rest or not _NAME_RE.match(rest[0]):
-                raise DiagError("pp", label, ln, 1,
-                                "#undef needs one macro name",
-                                self._text(rest))
-            self.defs.pop(rest[0], None)
+            self._undef(label, ln, rest, "#undef needs one macro name",
+                        self._text(rest))
         elif word == "error":
             msg = self._text(rest).strip()
             raise DiagError("pp", label, ln, 1, "#error %s" % msg, msg)
@@ -508,10 +507,31 @@ class Preprocessor:
 
     # -- #define ------------------------------------------------------------------
 
-    def _define(self, path: str, ln: int, toks, warn_ctx: str) -> None:
+    def _undef(self, path: str, ln: int, toks, msg: str, ctx: str) -> None:
+        """THE macro-name reader, shared by the in-source `#undef` and the
+        CLI `-U` operand (verdict-c5 F-c5-A, MC 12458): skip whitespace,
+        take the longest identifier token, tolerate the tail — the exact
+        shape libcpp parses BOTH spellings through (it pushes a -U operand
+        behind a synthetic `#undef` line), so the CLI branch uses THIS
+        reader, not a parallel string pop. Missing/invalid name = the §8
+        diagnostic naming the construct; a NON-WHITESPACE tail = gcc's
+        measured rc-0 warning tier; undefining a BUILT-IN warns
+        `undefining \"NAME\"` (c5 matrix U21) and still undefines."""
+        rest = self._skip_ws(toks)
+        if not rest or not _NAME_RE.match(rest[0]):
+            raise DiagError("pp", path, ln, 1, msg, ctx)
+        if self._skip_ws(rest[1:]):
+            self._warn(path, ln, 1, "extra tokens at end of #undef directive")
+        old = self.defs.pop(rest[0], None)
+        if old is not None and old.builtin:
+            self._warn(path, ln, 1, "undefining '%s'" % rest[0])
+
+    def _define(self, path: str, ln: int, toks, warn_ctx: str,
+                name_msg: Optional[str] = None) -> None:
         toks = self._skip_ws(toks)
         if not toks or not _NAME_RE.match(toks[0]):
-            raise DiagError("pp", path, ln, 1, "#define needs a macro name",
+            raise DiagError("pp", path, ln, 1,
+                            name_msg or "#define needs a macro name",
                             warn_ctx)
         name = toks[0]
         body = toks[1:]
@@ -584,7 +604,13 @@ class Preprocessor:
             return
         new = Macro(name, list(first), params, variadic, var_name=var_name)
         old = self.defs.get(name)
-        if old is not None and not self._same_macro(old, new):
+        if old is not None and (old.builtin
+                                or not self._same_macro(old, new)):
+            # gcc 11.4 measured (c5 F-c5-C, B18–B23): redefining a BUILT-IN
+            # warns `redefined` EVEN for an identical body (the builtin is
+            # not "the same macro" as far as the oracle is concerned); the
+            # user-vs-user rule is untouched — identical SILENT, differing
+            # warns, last wins (c6 rows).
             self._warn(path, ln, 1, "macro '%s' redefined" % name)
         self.defs[name] = new
 

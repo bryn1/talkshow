@@ -11,7 +11,6 @@ pp diagnostics still exit 2, the §8 warning tier never changes the code).
 from __future__ import annotations
 
 import os
-import re
 import subprocess
 import sys
 from typing import List, Optional
@@ -29,6 +28,22 @@ TMP_DIR = os.path.join(ROOT, ".tmp")
 USAGE = ("usage: python3 -m blcc <input.c> [-o <output>] [--emit-asm] [-v]\n"
          "       python3 -m blcc -E <input.c> [-D name[=tokens]] [-U name]\n"
          "       [-I dir] [-isystem dir] [-nostdinc] [-include file] [-std=X]")
+
+# -std aliases gcc 11.4 accepts and whose -dM captures are BYTE-IDENTICAL
+# to the spelled alias (measured c7: `diff` of -std=c90/-std=c89 and of
+# -std=gnu90/-std=gnu89 full predefine captures: empty). Aliasing here
+# keeps the generated capture table the single source of truth.
+_STD_ALIAS = {"c90": "c89", "gnu90": "gnu89"}
+
+
+def _std_value(std: str) -> str:
+    """Validate/alias one -std operand (shared by the split and attached
+    spellings — ONE mechanism for both shapes)."""
+    std = _STD_ALIAS.get(std, std)
+    from blcc.pp_predefines import STDC_VERSIONS
+    if std not in STDC_VERSIONS:
+        raise SystemExit("blcc: unsupported -std '%s'\n%s" % (std, USAGE))
+    return std
 
 
 def _parse_args(argv: List[str]):
@@ -65,21 +80,15 @@ def _parse_args(argv: List[str]):
             elif a == "-include":
                 opts.preinclude.append(argv[i])
             else:
-                std = argv[i]
-                from blcc.pp_predefines import STDC_VERSIONS
-                if std not in STDC_VERSIONS:
-                    raise SystemExit("blcc: unsupported -std '%s'\n%s"
-                                     % (std, USAGE))
-                opts.std = std
+                opts.std = _std_value(argv[i])
         elif a.startswith("-I"):
             opts.includes_dir.append(a[2:])
+        elif a.startswith("-isystem"):        # BOTH shapes measured rc 0
+            opts.isystem.append(a[8:])        # at gcc 11.4 (c7 B05/B06)
+        elif a.startswith("-include"):        # ditto (c7 B07/B08; -include
+            opts.preinclude.append(a[8:])     # is the kernel's split form)
         elif a.startswith("-std="):
-            from blcc.pp_predefines import STDC_VERSIONS
-            std = a[5:]
-            if std not in STDC_VERSIONS:
-                raise SystemExit("blcc: unsupported -std '%s'\n%s"
-                                 % (std, USAGE))
-            opts.std = std
+            opts.std = _std_value(a[5:])
         elif a.startswith("-D") or a.startswith("-U"):
             arg = a[2:]
             if not arg:
@@ -88,20 +97,22 @@ def _parse_args(argv: List[str]):
                     raise SystemExit("blcc: %s needs an argument\n"
                                      % a[1] + USAGE)
                 arg = argv[i]
-            if a[1] == "D":
-                name = arg.split("=", 1)[0]
-                if "(" not in name and not re.fullmatch(
-                        r"[A-Za-z_][A-Za-z0-9_]*", name):
-                    raise SystemExit("blcc: bad -D '%s'\n%s" % (arg, USAGE))
-                opts.du.append(("D", arg, None))
-            else:
-                opts.du.append(("U", arg, None))
+            # NO argv-layer name check (F-c5-B, MC 12458): the operand
+            # rides the SAME preproc readers as the in-source directives
+            # (preproc._apply_cli); an invalid name is a §8 pp diagnostic
+            # there, rc 2. (gcc is Joined-Separate: -D/-U consume the
+            # NEXT token as the operand even when it starts with '-'.)
+            opts.du.append((a[1], arg, None))
         elif a.startswith("-"):
             raise SystemExit("blcc: unknown flag '{}'\n{}".format(a, USAGE))
         elif in_path is None:
             in_path = a
         else:
-            raise SystemExit("blcc: more than one input file\n" + USAGE)
+            # LOUD naming the token, like gcc's trailing-operand posture
+            # (`gcc: error: BAR: linker input file not found`): the
+            # operand class must never silently swallow a stray file.
+            raise SystemExit("blcc: more than one input file '%s'\n"
+                             % a + USAGE)
         i += 1
     if in_path is None:
         raise SystemExit("blcc: need an input file\n" + USAGE)
@@ -157,8 +168,23 @@ def main(argv: List[str]) -> int:
         return 2
 
     if pp_only:
-        for sl in lines:
-            sys.stdout.write(sl.text + "\n")
+        # gcc -E -o FILE sends the pp stream to FILE (measured c7 — the
+        # kernel build line always carries -o); with no -o the stream
+        # answers to stdout.
+        if out_path:
+            try:
+                out = open(out_path, "w", encoding="utf-8")
+            except OSError as exc:
+                raise SystemExit("blcc: cannot open '%s': %s"
+                                 % (out_path, exc.strerror))
+        else:
+            out = sys.stdout
+        try:
+            for sl in lines:
+                out.write(sl.text + "\n")
+        finally:
+            if out_path:
+                out.close()
         return 0
 
     try:
