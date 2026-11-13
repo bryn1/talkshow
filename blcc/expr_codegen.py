@@ -147,6 +147,17 @@ class ExprEmitter:
 
     def _ex_call(self, n) -> None:
         name = n.callee.name
+        if name == "__builtin_types_compatible_p":
+            # §2.12 IDENTITY FOLD: resolve the two type arguments (they are
+            # TYPE nodes, carried in place of expressions — parse-time
+            # interception) and emit the constant 0/1. `__same_type`
+            # (compiler_types.h:250) rides this exact fold.
+            if len(n.args) != 2:
+                self._err(n, "'__builtin_types_compatible_p' takes exactly "
+                          "2 arguments (§2.12)", name)
+            self._imm(1 if self._types_compatible(n.args[0], n.args[1])
+                      else 0)
+            return
         if name in BUILTINS:
             want = BUILTINS[name][0]
         else:

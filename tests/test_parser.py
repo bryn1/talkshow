@@ -107,7 +107,14 @@ def test_qualified_type_with_const():
     tu = parse("void pstr(const char *s);")
     param = tu.decls[0].params[0]
     assert isinstance(param.type, ast.PtrType)
-    assert isinstance(param.type.inner, ast.BuiltinType)
+    # M2 RESYNC (§2.12): the pointee qualifier is now MARKED, not dropped
+    # — `__builtin_types_compatible_p(int*, const char*)` must answer 0
+    # (measured), which needs the marker below the PtrType spine. Layout
+    # is unchanged: TypeMap._untype strips every Qualified wrapper.
+    assert isinstance(param.type.inner, ast.Qualified)
+    assert param.type.inner.qual == "const"
+    assert isinstance(param.type.inner.inner, ast.BuiltinType)
+    assert param.type.inner.inner.name == "char"
 
 
 def test_enum_constants_are_in_scope_as_values():

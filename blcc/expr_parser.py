@@ -148,6 +148,14 @@ class ExprParser:
             if t.kind != "punct":
                 return node
             if t.text == "(":
+                if isinstance(node, ast.Ident) and node.name == (
+                        "__builtin_types_compatible_p"):
+                    # §2.12: the call's arguments are TYPE NAMES — not
+                    # parseable as expressions; intercepted like the GNU
+                    # folds, folded at codegen (needs TypeMap).
+                    args = self._parse_type_args(t)
+                    node = ast.Call(t.file, t.line, t.col, node, args)
+                    continue
                 if isinstance(node, ast.Ident) and node.name in (
                         "__builtin_expect", "__builtin_choose_expr"):
                     # §2.6: DEAD arms must not be analyzed — even the
@@ -227,6 +235,11 @@ class ExprParser:
             return ast.StrLit(t.file, t.line, t.col, t.value)
         if t.kind == "id":
             return ast.Ident(t.file, t.line, t.col, t.text)
+        if t.kind == "kw" and t.text == "_Generic":
+            # §1 row 6e (M35/M51): _Generic(control, …). Its association
+            # FIRST field is a TYPE (or `default`), not an expression, so
+            # it is parsed here (not as a call).
+            return self.parse_generic(t)
         if t.kind == "punct" and t.text == "&&":
             # §2.6 (M2 row 4d): &&label — the ADDRESS of a C label (void *),
             # the `_THIS_IP_` shape. Computed goto stays out (row 4c): this
@@ -249,6 +262,24 @@ class ExprParser:
                         "expected an expression", t.text)
 
     # -- helpers ------------------------------------------------------------------
+
+    def _parse_type_args(self, t) -> list:
+        self.s.expect_punct("(")
+        args = []
+        while True:
+            d = self.s.peek()
+            is_type = (d.kind == "kw") or (d.kind == "id" and
+                                           self.is_typename(d.text))
+            if not is_type:
+                raise DiagError(
+                    "sema", t.file, t.line, t.col,
+                    "'__builtin_types_compatible_p' takes TYPE arguments "
+                    "(§2.12)", d.text)
+            args.append(self.parse_type())
+            if not self.s.accept_punct(","):
+                break
+        self.s.expect_punct(")")
+        return args
 
     def _gnu_args(self, t) -> list:
         old = self._lenient_calls
@@ -285,6 +316,51 @@ class ExprParser:
                 "'__builtin_choose_expr' control is not a compile-time "
                 "constant expression (§2.6)", "__builtin_choose_expr")
         return args[1] if ctrl != 0 else args[2]
+
+    def parse_generic(self, t) -> ast.Node:
+        """`_Generic ( ctrl, TYPE: expr | default: expr, … )` (§2.6d).
+        Arm expressions parse in the lenient window (an UNSELECTED arm is
+        not analyzed — probe-measured: `default: undeclared_fn()` rc0);
+        the SELECTED arm re-checks downstream. Selection is a codegen
+        decision (needs TypeMap); the node carries it faithfully."""
+        self.s.expect_punct("(")
+        control = self.parse_expression()
+        assocs = []
+        default = None
+        while self.s.accept_punct(","):
+            d = self.s.peek()
+            old = self._lenient_calls
+            self._lenient_calls = True
+            try:
+                if d.kind == "kw" and d.text == "default":
+                    self.s.next()
+                    self.s.expect_punct(":")
+                    if default is not None:
+                        raise DiagError(
+                            "sema", d.file, d.line, d.col,
+                            "'_Generic' has more than one 'default' "
+                            "association (§2.6d)", "default")
+                    default = self.parse_expression()
+                    continue
+                ty = self._generic_key()
+                self.s.expect_punct(":")
+                assocs.append((ty, self.parse_expression()))
+            finally:
+                self._lenient_calls = old
+        self.s.expect_punct(")")
+        return ast.Generic(t.file, t.line, t.col, control, tuple(assocs),
+                           default)
+
+    def _generic_key(self) -> ast.Node:
+        """An association TYPE: `struct S`, `int`, `seqcount_t`, `int[4]`,
+        `int(*)(void)` (M4 wall — the FUNCTION-TYPE part stays LOUD)."""
+        d = self.s.peek()
+        if d.kind == "id" and not self.is_typename(d.text):
+            raise DiagError(
+                "parse", d.file, d.line, d.col,
+                "_Generic association needs a type name, not identifier "
+                "'{}'".format(d.text), d.text)
+        return self.parse_type()
 
     def _starts_type(self, k: int) -> bool:
         t = self.s.peek(k)

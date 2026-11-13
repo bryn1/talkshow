@@ -174,6 +174,26 @@ class Switch(Node):
 
 
 @dataclass(frozen=True)
+class Qualified(Node):
+    # §2.12/§2.6d: a TYPE-level qualifier marker. blcc ignores qualifiers
+    # for LAYOUT (everything resolves through _untype); the marker is kept
+    # ONLY where the oracle makes qualifiers significant — the pointee of
+    # `__builtin_types_compatible_p` and the association types of
+    # `_Generic`. qual ∈ {"const","volatile","restrict"}.
+    qual: str
+    inner: Node
+
+
+@dataclass(frozen=True)
+class Generic(Node):
+    # §1 row 6e: _Generic(control, TYPE: expr, …, default: expr).
+    # assocs: tuple of (ty_node, expr) — ty_node may be Qualified-wrapped.
+    control: Node
+    assocs: Tuple[Tuple[Node, Node], ...]
+    default: Optional[Node]
+
+
+@dataclass(frozen=True)
 class StmtExpr(Node):
     # §1 row 6 / §2.4: GNU statement-expression `({ stmts… final; })`.
     # stmts run at that point; value = final ExprStmt's expression (None =

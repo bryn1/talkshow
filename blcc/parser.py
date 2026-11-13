@@ -21,6 +21,10 @@ from blcc.runtime import BUILTINS as _RUNTIME_BUILTINS
 BUILTINS = frozenset(_RUNTIME_BUILTINS)
 
 _TYPE_KW = ("char", "short", "int", "long", "void")
+_QUAL_WORDS = {"const": "const", "volatile": "volatile",
+               "__volatile__": "volatile", "restrict": "restrict",
+               "__restrict": "restrict", "__restrict__": "restrict"}
+
 _DECL_START_KW = _TYPE_KW + ("const", "struct", "enum", "static", "typedef",
                              "extern", "float", "double", "union", "unsigned",
                              # M2: the extended specifier vocabulary (§4.1a)
@@ -278,20 +282,50 @@ class Parser:
     # -- types ------------------------------------------------------------------
 
     def parse_type(self) -> ast.Node:
-        """Base type + trailing pointer stars (casts, sizeof, declarators)."""
+        """Base type + trailing pointer stars and array suffixes (casts,
+        sizeof, declarators, §2.6d `_Generic` keys: `int[4]`)."""
         ty = self.parse_base_type()
         while True:
             star = self.s.accept_punct("*")
-            if star is None:
-                return ty
-            ty = ast.PtrType(star.file, star.line, star.col, ty)
+            if star is not None:
+                ty = ast.PtrType(star.file, star.line, star.col, ty)
+                continue
+            lb = self.s.peek()
+            if lb.kind == "punct" and lb.text == "[":
+                self.s.next()
+                if self.s.accept_punct("]"):
+                    size = None
+                else:
+                    size = self.expr.parse_expression()
+                    self.s.expect_punct("]")
+                ty = ast.ArrayType(lb.file, lb.line, lb.col, ty, size)
+                continue
+            return ty
 
     def parse_base_type(self) -> ast.Node:
-        # M2 §1 rows 2/14: the full scalar specifier family. Qualifiers are
-        # layout-irrelevant and drop (const/volatile/restrict); signedness
+        # §2.12/§2.6d: qualifiers LAYOUT-IGNORE stays true — everything
+        # resolves through TypeMap._untype — but a TYPE-level qualifier is
+        # MARKED (Qualified wrapper) because the oracle makes it
+        # significant in exactly two places: the pointee of
+        # __builtin_types_compatible_p and the association types of
+        # _Generic. The wrapper is stripped by every other consumer.
+        quals: List = []
+        ty = self._base_type_core(quals)
+        for q, qt in sorted(set(quals)):
+            ty = ast.Qualified(qt.file, qt.line, qt.col, q, ty)
+        return ty
+
+    def _take_qualifiers(self, out) -> None:
+        while self.s.peek().kind == "kw" and \
+                self.s.peek().text in _QUAL_WORDS:
+            qt = self.s.next()
+            out.append((_QUAL_WORDS[qt.text], qt))
+
+    def _base_type_core(self, quals: List) -> ast.Node:
+        # M2 §1 rows 2/14: the full scalar specifier family. signedness
         # combines per C: `unsigned`, bare `signed`, `unsigned long long`,
         # `long long`, order-free spec words.
-        self._skip_qualifiers()
+        self._take_qualifiers(quals)
         unsigned = signed = False
         t = self.s.peek()
         while t.kind == "kw" and t.text in ("unsigned", "signed",
@@ -301,7 +335,7 @@ class Parser:
             else:
                 signed = True
             self.s.next()
-            self._skip_qualifiers()
+            self._take_qualifiers(quals)
             t = self.s.peek()
         if t.kind == "kw":
             if t.text in ("float", "double"):

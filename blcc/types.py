@@ -60,6 +60,8 @@ def what(n) -> str:
         return "statement expression"
     if isinstance(n, ast.TypeOf):
         return "__typeof__"
+    if isinstance(n, ast.Qualified):
+        return what(n.inner)
     if isinstance(n, ast.Call):
         return "call expression"
     if isinstance(n, ast.Cast):
@@ -125,6 +127,8 @@ class TypeMap:
             if ty.typ is not None:
                 return self._untype(ty.typ)
             return self._ty(ty.expr)
+        if isinstance(ty, ast.Qualified):
+            return self._untype(ty.inner)   # layout ignores qualifiers
         if isinstance(ty, ast.PtrType):
             return ast.PtrType(ty.file, ty.line, ty.col,
                                self._untype(ty.inner))
@@ -152,7 +156,8 @@ class TypeMap:
             self.fn.locals = saved
 
     def _size(self, ty: ast.Node, at=None) -> int:
-        if isinstance(ty, (ast.TypeOf, ast.PtrType, ast.ArrayType)):
+        if isinstance(ty, (ast.TypeOf, ast.PtrType, ast.ArrayType,
+                           ast.Qualified)):
             ty = self._untype(ty)
         if isinstance(ty, ast.BuiltinType):
             if ty.name == "void":
@@ -424,6 +429,95 @@ class TypeMap:
         sn, sr = (rn, rr) if lu else (ln, lr)
         return self._bt(n, un if ur >= sr else sn)
 
+    # -- §2.12 / §2.6d: the two type-identity predicates ----------------------
+
+    def _resolve_tyof(self, ty):
+        """Resolve __typeof__ wrappers WITHOUT dropping qualifiers — the
+        compatibility predicates need the pointee-level markers that
+        _untype erases for layout (§2.12: `(int*, const int*)` = 0)."""
+        while isinstance(ty, ast.TypeOf):
+            ty = ty.typ if ty.typ is not None else self._ty(ty.expr)
+        return ty
+
+    @staticmethod
+    def _split_q(ty):
+        """Top-level qualifier set + the unqualified spine."""
+        qs = []
+        while isinstance(ty, ast.Qualified):
+            qs.append(ty.qual)
+            ty = ty.inner
+        return frozenset(qs), ty
+
+    def _ty_eq_strict(self, a, b) -> bool:
+        """C 'compatible types' as the oracle applies it to _Generic keys
+        and to POINTER POINTERS (§2.6d: key qualifiers ARE significant;
+        §2.12: `(int*, const int*)` = 0 — pointee qual is NOT top-level).
+        Nominal struct identity by TAG; arrays by (element, size)."""
+        qa, a = self._split_q(a)
+        qb, b = self._split_q(b)
+        if qa != qb:
+            return False
+        a = self._resolve_tyof(a)      # may expose a new Qualified layer
+        b = self._resolve_tyof(b)
+        qa, a = self._split_q(a)
+        qb, b = self._split_q(b)
+        if qa != qb:
+            return False
+        if isinstance(a, ast.BuiltinType) and isinstance(b, ast.BuiltinType):
+            return a.name == b.name    # char vs signed char: distinct names
+        if isinstance(a, ast.PtrType) and isinstance(b, ast.PtrType):
+            return self._ty_eq_strict(a.inner, b.inner)
+        if isinstance(a, ast.ArrayType) and isinstance(b, ast.ArrayType):
+            if a.size is None or b.size is None:
+                return False
+            return (self._fold_const(a.size, a) ==
+                    self._fold_const(b.size, b) and
+                    self._ty_eq_strict(a.inner, b.inner))
+        if isinstance(a, ast.StructType) and isinstance(b, ast.StructType):
+            return a.tag == b.tag      # nominal: same-shape, new tag ⇒ 0
+        return False
+
+    def _types_compatible(self, a, b) -> bool:
+        """__builtin_types_compatible_p (§2.12 MEASURED): TOP-LEVEL quals
+        are IGNORED on both sides (`(int, const int)` = 1), everything
+        below stays strict (`(int*, const int*)` = 0)."""
+        _, a = self._split_q(self._resolve_tyof(a))
+        _, b = self._split_q(self._resolve_tyof(b))
+        return self._ty_eq_strict(a, b)
+
+    def _lvalue_convert(self, ty):
+        """§2.6d arm of the selection rule: the control loses top-level
+        qualifiers (lvalue conversion) and an ARRAY control is ADJUSTED to
+        pointer-to-element (`int[4]:` key never matches, measured)."""
+        ty = self._untype(ty)
+        _, ty = self._split_q(ty)
+        if isinstance(ty, ast.ArrayType):
+            return ast.PtrType(ty.file, ty.line, ty.col, ty.inner)
+        return ty
+
+    def generic_select(self, n):
+        """§2.6d MEASURED selection (gcc 11.4): dup-assoc check FIRST
+        (fires regardless of the control — "'_Generic' specifies two
+        compatible types"); control undergoes lvalue conversion (top quals
+        dropped, array→pointer adjusted); selection is STRICT type
+        identity — a key carrying a top-level qualifier matches NOTHING
+        (the converted control is never qualified). Returns the chosen
+        (key, arm) pair — codegen emits ONLY that arm (untaken arms'
+        side effects never run); no match → `default:`; neither → LOUD."""
+        for i in range(len(n.assocs)):
+            for j in range(i + 1, len(n.assocs)):
+                if self._ty_eq_strict(n.assocs[i][0], n.assocs[j][0]):
+                    self._err(n, "'_Generic' specifies two compatible "
+                              "types (§2.6d)", "_Generic")
+        cty = self._lvalue_convert(self._ty(n.control))
+        for pair in n.assocs:
+            if self._ty_eq_strict(cty, pair[0]):
+                return pair
+        if n.default is not None:
+            return (None, n.default)
+        self._err(n, "_Generic controlling expression type not compatible "
+                  "with any association (§2.6d)", "_Generic")
+
     def _ty(self, n: ast.Node) -> ast.Node:
         if isinstance(n, ast.IntLit):
             # §2.1 (M2): the literal's TYPE is the lexer's typed suffix/range
@@ -471,7 +565,12 @@ class TypeMap:
                 kind = BUILTINS[name][1]
                 return ast.BuiltinType(n.file, n.line, n.col,
                                        "long" if kind == "void" else kind)
+            if name == "__builtin_types_compatible_p":
+                return ast.BuiltinType(n.file, n.line, n.col, "int")
             return self.sigs[name][1]
+        if isinstance(n, ast.Generic):
+            # §2.6d: the type of the SELECTED association's expression.
+            return self._ty(self.generic_select(n)[1])
         if isinstance(n, (ast.Assign, ast.AssignOp)):
             return self._ty(n.target)
         if isinstance(n, ast.IncDec):
@@ -531,7 +630,7 @@ class TypeMap:
                       n.field)
         for m in self.structs[base.tag]:
             if m.name == n.field:
-                return m.type
+                return self._untype(m.type)   # §2.12 marker never leaks
         self._err(n, "no member '{}' in struct '{}'".format(n.field, base.tag),
                   n.field)
 

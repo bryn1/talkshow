@@ -180,6 +180,12 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter):
             self._se_depth -= 1
             self.fn.locals = saved
 
+    def _ex_generic(self, n) -> None:
+        # §2.6d selection rules live in TypeMap.generic_select (shared by
+        # _ty(Generic)); codegen emits ONLY the chosen arm — untaken arms
+        # are never analyzed (§2.6d call-arms leg: ran_nosel stays 0).
+        self._emit_expr(self.generic_select(n)[1])
+
     def _ex_stmtexpr(self, n) -> None:
         # §2.4(c): `({;})` is void — legal as a statement, and here it is
         # used AS A VALUE: gcc's "void value not ignored as it ought to
