@@ -52,3 +52,10 @@ VA_LIST_TY = ast.ArrayType(F, 0, 0, ast.StructType(F, 0, 0, TAG),
 # The four intrinsics (parser callable allowance + codegen intercepts).
 VA_FOLDS = frozenset({"__builtin_va_start", "__builtin_va_arg",
                       "__builtin_va_end", "__builtin_va_copy"})
+
+# §2.17 mem* SIZE-CLASS fold (MC 12460 cycle-2): the __builtin_* spellings
+# ALWAYS fold; a plain name folds unless the TU carries a visible DEFINITION
+# (the self.funcs check lives codegen-side — memfold.MemFoldMixin).
+MEM_FOLDS = frozenset({"__builtin_memcpy", "__builtin_memset",
+                       "__builtin_memcmp", "__builtin_memmove"})
+MEM_PLAIN = frozenset({"memcpy", "memset", "memcmp", "memmove"})

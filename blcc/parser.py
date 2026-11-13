@@ -372,6 +372,11 @@ class Parser:
             # §2.7: the va intrinsics are FOLDS, not callables (row 19
             # "folds, not callables" posture) — no symbol, no sigs entry.
             return True
+        if name in predef.MEM_FOLDS:
+            # §2.17: same posture for the mem* builtins — the fold needs
+            # no user declaration (gcc's builtin posture); plain names
+            # still go through normal declaration rules.
+            return True
         sym = self.lookup(name)
         return sym is not None and sym[0] == "fn"
 

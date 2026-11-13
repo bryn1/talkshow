@@ -14,6 +14,7 @@ ADDRESS of an l-value in %rax (§4 lvalues: idents, *p, [], . and ->)."""
 from __future__ import annotations
 
 from blcc import ast, predef
+from blcc.memfold import MemFoldMixin
 from blcc.runtime import BUILTINS
 from blcc.types import is_unsigned
 
@@ -44,7 +45,7 @@ def _fp(ty) -> bool:
     return isinstance(ty, ast.BuiltinType) and ty.name in ("float", "double")
 
 
-class ExprEmitter:
+class ExprEmitter(MemFoldMixin):
             # inner ast.Switch bodies are the inner switch's own chain (§4)
 
     # -- expressions: result lands in %rax --------------------------------------------------------
@@ -232,6 +233,11 @@ class ExprEmitter:
             # §2.7: the four va intrinsics — never a symbol, never a
             # sigs entry; emitted here from the pinned field layout.
             self._va_intrinsic(n, name)
+            return
+        if self._is_mem_fold(name):
+            # §2.17: mem* SIZE-CLASS fold — never a symbol; every spelling
+            # with no visible in-TU DEFINITION expands inline here.
+            self._mem_fold(n)
             return
         if name == "__builtin_types_compatible_p":
             # §2.12 IDENTITY FOLD: resolve the two type arguments (they are

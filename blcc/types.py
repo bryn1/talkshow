@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Tuple
 
-from blcc import ast
+from blcc import ast, predef
 from blcc.lexer import DiagError
 from blcc.runtime import BUILTINS
 
@@ -624,6 +624,15 @@ class TypeMap:
             if name in ("__builtin_va_start", "__builtin_va_end",
                         "__builtin_va_copy"):
                 return ast.BuiltinType(n.file, n.line, n.col, "void")
+            if name in predef.MEM_FOLDS and name not in self.sigs:
+                # §2.17: undeclared __builtin mem* still TYPES (fold-side
+                # of the builtin posture): void*->void* classes return
+                # char*, memcmp returns int. A user declaration wins.
+                if name == "__builtin_memcmp":
+                    return ast.BuiltinType(n.file, n.line, n.col, "int")
+                return ast.PtrType(n.file, n.line, n.col,
+                                   ast.BuiltinType(n.file, n.line, n.col,
+                                                   "char"))
             return self.sigs[name][1]
         if isinstance(n, ast.Generic):
             # §2.6d: the type of the SELECTED association's expression.
