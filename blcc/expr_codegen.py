@@ -624,8 +624,54 @@ class ExprEmitter(MemFoldMixin):
 
     # -- lvalue addresses --------------------------------------------------------------------
 
+    def _ex_compoundlit(self, n) -> None:
+        # §1 row 11 VALUE position: scalars yield the value; aggregates
+        # yield the object's address (blcc's aggregate-value convention).
+        ty = self._untype(n.ty)
+        if not isinstance(ty, (ast.ArrayType, ast.StructType)):
+            init = n.init
+            if isinstance(init, ast.InitList):
+                if len(init.items) != 1:
+                    self._err(n, "too many initializers for a scalar "
+                              "compound literal (§4)", "{")
+                init = init.items[0]
+            self._emit_expr(ast.Cast(n.file, n.line, n.col, n.ty, init))
+            return
+        self._emit_clit_slot(n)
+
+    def _emit_clit_slot(self, n):
+        """Materialize a compound literal into an unnamed frame object and
+        leave its ADDRESS in %rax (the auto-storage law of §1 row 11: the
+        object lives as long as the enclosing block — a frame slot is a
+        safe superset; the address may escape, gcc-verified)."""
+        ty = self._sized_array_decl(self._untype(n.ty), n.init, n) \
+            if isinstance(n.ty, ast.ArrayType) else self._untype(n.ty)
+        off = self._slot(ty, n)
+        self._zero_local(off, self._size(ty, n))
+        self._init_item(off, ty, n.init, n)
+        self._e("leaq {}(%rbp), %rax".format(off))
+        return off
+
     def _emit_addr(self, n: ast.Node) -> None:
         """Address of an lvalue into %rax (§4 lvalues: idents, *p, [], members)."""
+        if isinstance(n, ast.CompoundLit):
+            # §1 row 11: &literal — scalar literals need the storage too
+            # (`int *q = &(int){42};` is legal gnu89 and writable).
+            ty = self._untype(n.ty)
+            if isinstance(ty, (ast.ArrayType, ast.StructType)):
+                self._emit_clit_slot(n)
+                return
+            off = self._slot(ty, n)
+            init = n.init
+            if isinstance(init, ast.InitList):
+                if len(init.items) != 1:
+                    self._err(n, "too many initializers for a scalar "
+                              "compound literal (§4)", "{")
+                init = init.items[0]
+            self._emit_expr(ast.Cast(n.file, n.line, n.col, n.ty, init))
+            self._store(self._decay(ty), "{}(%rbp)".format(off), at=n)
+            self._e("leaq {}(%rbp), %rax".format(off))
+            return
         if isinstance(n, ast.Ident):
             if n.name in self.fn.locals:
                 self._e("leaq {}(%rbp), %rax".format(self.fn.locals[n.name][0]))

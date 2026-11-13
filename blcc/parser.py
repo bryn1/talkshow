@@ -58,7 +58,9 @@ class Parser:
         self.expr = ExprParser(self.s, self.is_typename, self.parse_type,
                                self.callable_known, self.expr_type,
                                self.parse_stmt_expr, self.fold_truthy,
-                               self.resolve_offsetof)
+                               self.resolve_offsetof,
+                               parse_init=self.parse_initializer,
+                               norm_init=self._norm_init)
 
     # -- §2.4 GNU statement-expressions (M2-C5 leg 1) ------------------------
 
@@ -850,6 +852,13 @@ class Parser:
                 break
             init = self.parse_initializer() if self.s.accept_punct("=") else None
             if init is not None:
+                if isinstance(init, ast.CompoundLit) and \
+                        isinstance(self._unqual(ty),
+                                   (ast.ArrayType, ast.StructType)):
+                    # §1 row 11 in initializer position: gnu89 makes an
+                    # aggregate object initialized from a compound literal
+                    # byte-identical to writing the brace list — use it.
+                    init = init.init
                 init = self._norm_init(ty, init, pos)   # §1 row 10
             if is_extern and init is None and not at_file:
                 # an extern LOCAL re-declares a file-scope object; the

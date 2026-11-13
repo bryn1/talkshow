@@ -313,6 +313,10 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter):
             (data if section == "data" else bss).extend(lines)
         out.append("    .data")
         out.extend(data)
+        for lab, lit in getattr(self, "_clit_anons", []):
+            # §1 row 11: file-scope compound literals are unnamed STATIC
+            # objects; their address constants rode the ('lab', …) walks.
+            out.extend(self._emit_anon(lab, lit))
         out.append("    .bss")
         out.extend(bss)
         return "\n".join(out) + "\n"

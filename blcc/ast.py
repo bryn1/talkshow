@@ -127,6 +127,14 @@ class Desig(Node):
 
 
 @dataclass(frozen=True)
+class CompoundLit(Node):
+    """§1 row 11: `(TYPE){init}` — auto storage in a function, static
+    storage at file scope (M55)."""
+    ty: Node
+    init: Node
+
+
+@dataclass(frozen=True)
 class ZeroFill(Node):
     """normalization padding — the C rule 'every subobject an initializer
     does not mention is ZERO'. data.py emits its zero bytes; codegen

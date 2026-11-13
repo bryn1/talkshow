@@ -576,6 +576,8 @@ class TypeMap:
                   "with any association (§2.6d)", "_Generic")
 
     def _ty(self, n: ast.Node) -> ast.Node:
+        if isinstance(n, ast.CompoundLit):
+            return self._untype(n.ty)          # §1 row 11
         if isinstance(n, ast.IntLit):
             # §2.1 (M2): the literal's TYPE is the lexer's typed suffix/range
             # answer (hex may take unsigned early; decimal signed-first).

@@ -31,6 +31,51 @@ def _has_stmtexpr(n: ast.Node) -> bool:
 
 
 class DataEmitter:
+    def _anon_static(self, lit) -> str:
+        """§1 row 11: a file-scope compound literal is an unnamed STATIC
+        object. Label + bytes are emitted with the data section; the
+        initializer sees the label as an address constant."""
+        anons = getattr(self, "_clit_anons", None)
+        if anons is None:
+            anons = self._clit_anons = []
+            self._clit_anon_lbl = {}
+        key = (lit.file, lit.line, lit.col)
+        if key in self._clit_anon_lbl:
+            return self._clit_anon_lbl[key]
+        lab = "_blcc_clit_{}".format(len(anons))
+        if isinstance(lit.ty, ast.ArrayType) and lit.ty.size is None:
+            # `static int *gp = (int[]){7, 8};` — the literal's array
+            # takes its size FROM THE INITIALIZER, like a var decl would.
+            lit = ast.CompoundLit(
+                lit.file, lit.line, lit.col,
+                self._sized_array_decl(lit.ty, lit.init, lit), lit.init)
+        anons.append((lab, lit))
+        self._clit_anon_lbl[key] = lab
+        return lab
+
+    def _emit_anon(self, lab, lit):
+        items = self._bytes_of(lit.ty, lit.init, lit)
+        lines = ["    .align 8", "{}:".format(lab)]
+        acc = []
+
+        def flush():
+            if acc:
+                lines.append("    .byte {}".format(
+                    ",".join(str(b) for b in acc)))
+                acc.clear()
+
+        for kind, val in items:
+            if kind == "b":
+                acc.append(val)
+            elif kind == "z":
+                flush()
+                lines.append("    .zero {}".format(val))
+            else:
+                flush()
+                lines.append("    .quad {}".format(val))
+        flush()
+        return lines
+
     def _const(self, n: ast.Node):
         """-> int | ('lab', label) for address-of-global constants."""
         if isinstance(n, ast.IntLit):
@@ -44,8 +89,14 @@ class DataEmitter:
             if isinstance(v, int):
                 return -v
         if isinstance(n, ast.Unary) and n.op == "&":
+            if isinstance(n.operand, ast.CompoundLit):
+                # §1 row 11 file scope: &literal names an unnamed STATIC
+                # object — its bytes are emitted, the value is its address.
+                return ("lab", self._anon_static(n.operand))
             if isinstance(n.operand, ast.Ident) and n.operand.name in self.globals:
                 return ("lab", n.operand.name)
+        if isinstance(n, ast.CompoundLit):
+            return self._const(n.init)      # scalar literal value
         if isinstance(n, ast.StrLit):
             self._err(n, "'string literal in global initializer' is not in the "
                       "§4 set (integer/char constant or address-of-global; "
@@ -74,6 +125,16 @@ class DataEmitter:
         ty = self._untype(ty)          # §2.6: `static __typeof__(long) gsl`
         if isinstance(init, ast.ZeroFill):
             return [("z", self._size(ty, at))]     # §1 row 10 padding
+        if isinstance(init, ast.CompoundLit):
+            if isinstance(init.ty, (ast.ArrayType, ast.StructType)):
+                if isinstance(self._untype(ty),
+                              (ast.BuiltinType, ast.PtrType)):
+                    # pointer slot initialized from a literal's address
+                    if self._size(ty, at) != 8:
+                        self._err(init, "address initializer needs an "
+                                  "8-byte pointer type (§4)", "initializer")
+                    return [("q", self._anon_static(init))]
+            init = init.init                        # byte-equal braces
         if isinstance(ty, ast.StructType) and ty.is_union \
                 and isinstance(init, ast.InitList):
             # union slots OVERLAP: a sequential byte stream cannot carry

@@ -44,7 +44,9 @@ class ExprParser:
                  expr_type: Callable[[ast.Node], Optional[ast.Node]],
                  parse_stmts: Optional[Callable] = None,
                  fold_truthy: Optional[Callable] = None,
-                 fold_offset: Optional[Callable] = None):
+                 fold_offset: Optional[Callable] = None,
+                 parse_init: Optional[Callable] = None,
+                 norm_init: Optional[Callable] = None):
         self.s = stream
         self.is_typename = is_typename
         self.parse_type = parse_type
@@ -53,6 +55,8 @@ class ExprParser:
         self.parse_stmt_expr = parse_stmts        # §2.4 stmt-expression
         self.fold_truthy = fold_truthy            # §2.6 choose_expr control
         self.fold_offset = fold_offset            # §2.13 offsetof layout
+        self.parse_init = parse_init              # §1 row 11 brace init
+        self.norm_init = norm_init                # §1 row 10 normalization
         self._lenient_calls = False               # inside GNU fold args
 
     # -- entry: assignment level (right-associative) ------------------------
@@ -121,6 +125,14 @@ class ExprParser:
             self.s.next()
             typ = self.parse_type()
             self.s.expect_punct(")")
+            if self.s.at_punct("{") and self.parse_init is not None:
+                # §1 row 11: cast-vs-literal — `(TYPE)` + brace group is a
+                # COMPOUND LITERAL (gnu89 extension), not a cast.
+                init = self.parse_init()
+                if self.norm_init is not None:
+                    init = self.norm_init(typ, init, t)
+                return self._postfix_from(
+                    ast.CompoundLit(t.file, t.line, t.col, typ, init))
             operand = self.parse_unary()
             return ast.Cast(t.file, t.line, t.col, typ, operand)
         return self.parse_postfix()
@@ -131,6 +143,10 @@ class ExprParser:
             if self._starts_type(0):
                 typ = self.parse_type()
                 self.s.expect_punct(")")
+                if self.s.at_punct("{") and self.parse_init is not None:
+                    # sizeof `(int){7}` = sizeof (int): the literal rides
+                    # the TYPE's size (§1 row 11) — consume the group.
+                    self.parse_init()
                 return ast.Sizeof(t.file, t.line, t.col, typ, None)
             expr = self.parse_expression()
             self.s.expect_punct(")")
@@ -145,7 +161,9 @@ class ExprParser:
     # -- postfix chain: call, subscript, member, ++/-- -------------------------
 
     def parse_postfix(self) -> ast.Node:
-        node = self.parse_primary()
+        return self._postfix_from(self.parse_primary())
+
+    def _postfix_from(self, node) -> ast.Node:
         while True:
             t = self.s.peek()
             if t.kind != "punct":
