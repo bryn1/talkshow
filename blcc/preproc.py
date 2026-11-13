@@ -1,7 +1,7 @@
 """M1 GCC-compatible preprocessor: directive dispatch & source bookkeeping
 (plan R1, R2, R4, R10–R14, R17, R20, R21).
 
-LINES (623 > 400): directive dispatch is ONE concern — the #if-conditional
+LINES (628 > 400): directive dispatch is ONE concern — the #if-conditional
 stack, #line origin state and include search must share the per-file state
 machine; splitting would duplicate that state across files.
 
