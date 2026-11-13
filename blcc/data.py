@@ -7,9 +7,27 @@ globals/enums/structs/strings tables plus _size/_decay/_struct_layout/_err/
 _str_label (strings interning stays on Codegen with the rodata pool)."""
 from __future__ import annotations
 
+import dataclasses
+
 from typing import List, Tuple
 
 from blcc import ast
+
+
+def _has_stmtexpr(n: ast.Node) -> bool:
+    """Does this (constant-expression-shaped) initializer subtree contain
+    a statement-expression? Used for the §2.4d file-scope mirror-reject."""
+    if isinstance(n, ast.StmtExpr):
+        return True
+    for f in dataclasses.fields(n) if dataclasses.is_dataclass(n) else ():
+        v = getattr(n, f.name, None)
+        if isinstance(v, ast.Node) and _has_stmtexpr(v):
+            return True
+        if isinstance(v, (tuple, list)):
+            for x in v:
+                if isinstance(x, ast.Node) and _has_stmtexpr(x):
+                    return True
+    return False
 
 
 class DataEmitter:
@@ -40,6 +58,11 @@ class DataEmitter:
         # verifier's (TEST-c4). Until then those two token rows are RED by
         # design — reverting this line to 'found Call/Binary' would UNFIX the
         # product and is the wrong remedy.
+        # §2.4(d) mirror-reject: a file-scope statement-expression gets the
+        # gcc sentence verbatim-classed (measured rc1, no value assigned).
+        if _has_stmtexpr(n):
+            self._err(n, "braced-group within expression allowed only "
+                      "inside a function (§2.4d)", "statement expression")
         self._err(n, "global initializer must be an integer/char constant "
                   "or address-of-global (§4)", self._what(n))
 
@@ -48,6 +71,7 @@ class DataEmitter:
         size(ty) bytes. Zero runs stay COMPRESSED ('z') so _emit_global can
         emit a .zero directive — a materialized byte list is what OOM-killed
         the compiler on large .bss (DA-c2 P2-2, exit 137 outside §2)."""
+        ty = self._untype(ty)          # §2.6: `static __typeof__(long) gsl`
         if isinstance(ty, (ast.BuiltinType, ast.PtrType)):
             sz = self._size(ty, at)
             if isinstance(init, ast.FloatLit):

@@ -56,6 +56,10 @@ def what(n) -> str:
         return "string literal"
     if isinstance(n, ast.LabelAddr):
         return "&&label"
+    if isinstance(n, ast.StmtExpr):
+        return "statement expression"
+    if isinstance(n, ast.TypeOf):
+        return "__typeof__"
     if isinstance(n, ast.Call):
         return "call expression"
     if isinstance(n, ast.Cast):
@@ -79,6 +83,25 @@ def what(n) -> str:
     return "construct"
 
 
+def stmt_children(s):
+    """Statement children of a node — the ONE walk shared by the label
+    pre-pass (§2A M2-C1), the statement-expression type simulation and
+    the jump-depth accounting (Codegen._child_stmts delegates)."""
+    if isinstance(s, ast.Compound):
+        return list(s.body)
+    if isinstance(s, ast.If):
+        return [x for x in (s.then, s.orelse) if x is not None]
+    if isinstance(s, (ast.While, ast.DoWhile, ast.For)):
+        return [s.body]
+    if isinstance(s, ast.Switch):
+        return list(s.body)
+    if isinstance(s, ast.StmtExpr):
+        return list(s.stmts)      # §2.4: labels live inside `({...})`
+    if isinstance(s, (ast.Case, ast.Default, ast.CaseRange, ast.Label)):
+        return [s.stmt] if s.stmt is not None else []
+    return []
+
+
 class TypeMap:
 
     # -- diagnostics ---------------------------------------------------------
@@ -92,7 +115,45 @@ class TypeMap:
 
     # -- type sizing (§4 table lives HERE, never in ast.py) ---------------------
 
+    def _untype(self, ty: ast.Node) -> ast.Node:
+        """§2.6 / §2A M2-C5 leg 3: materialize `__typeof__` into the
+        concrete type node it stands for — `__typeof__(expr)` is the type
+        of the expression (TYPED, never evaluated: `__typeof__(called=1)`
+        leaves `called` untouched, §2.6 measured), `__typeof__(type)` the
+        type itself. Recursive through Ptr/Array wrappers."""
+        if isinstance(ty, ast.TypeOf):
+            if ty.typ is not None:
+                return self._untype(ty.typ)
+            return self._ty(ty.expr)
+        if isinstance(ty, ast.PtrType):
+            return ast.PtrType(ty.file, ty.line, ty.col,
+                               self._untype(ty.inner))
+        if isinstance(ty, ast.ArrayType):
+            return ast.ArrayType(ty.file, ty.line, ty.col,
+                                 self._untype(ty.inner), ty.size)
+        return ty
+
+    def _ty_stmtexpr(self, n: ast.Node) -> ast.Node:
+        """§2.4(c): type of `({...; e;})` = type of the final expression —
+        resolved with the braced group's declarations IN SCOPE (types
+        registered in a locals snapshot; no emission, restore always)."""
+        saved = dict(self.fn.locals)
+        try:
+            stack = list(n.stmts)
+            while stack:
+                s = stack.pop(0)
+                if isinstance(s, ast.VarDecl):
+                    self.fn.locals[s.name] = (0, self._untype(s.type))
+                stack.extend(stmt_children(s))
+            if n.value is None:
+                return ast.BuiltinType(n.file, n.line, n.col, "void")
+            return self._ty(n.value)
+        finally:
+            self.fn.locals = saved
+
     def _size(self, ty: ast.Node, at=None) -> int:
+        if isinstance(ty, (ast.TypeOf, ast.PtrType, ast.ArrayType)):
+            ty = self._untype(ty)
         if isinstance(ty, ast.BuiltinType):
             if ty.name == "void":
                 self._err(ty, "'sizeof(void)' is not in the subset (§4)", "void")
@@ -122,6 +183,36 @@ class TypeMap:
         if isinstance(n, ast.Unary) and n.op in ("-", "+"):
             v = self._fold_const(n.operand, at)
             return -v if n.op == "-" else v
+        if isinstance(n, ast.Unary) and n.op == "!":
+            return 0 if self._fold_const(n.operand, at) else 1
+        if isinstance(n, ast.Sizeof):
+            # M2-C5 (§2.6 e1 leg): sizeof may ride an array-size /
+            # choose_expr control: `char a[sizeof(__typeof__(1L)) - 8]`.
+            if n.typ is not None:
+                return self._size(n.typ, at or n)
+            return self._size(self._ty(n.arg), at or n)
+        if isinstance(n, ast.Binary):
+            if n.op in ("&&", "||"):
+                a = self._fold_const(n.left, at)
+                if n.op == "&&" and a == 0:
+                    return 0
+                if n.op == "||" and a != 0:
+                    return 1
+                return self._fold_const(n.right, at)
+            if n.op in ("<", "<=", ">", ">=", "==", "!="):
+                a = self._fold_const(n.left, at)
+                b = self._fold_const(n.right, at)
+                return {
+                    "<": lambda: a < b, "<=": lambda: a <= b,
+                    ">": lambda: a > b, ">=": lambda: a >= b,
+                    "==": lambda: a == b, "!=": lambda: a != b}[n.op]() and 1 or 0
+            if n.op in ("&", "|", "^"):
+                a = self._fold_const(n.left, at)
+                b = self._fold_const(n.right, at)
+                return {"&": lambda: a & b, "|": lambda: a | b,
+                        "^": lambda: a ^ b}[n.op]()
+        if isinstance(n, ast.Cast):
+            return self._fold_const(n.operand, at)
         if isinstance(n, ast.Binary) and n.op in ("+", "-", "*", "/", "%"):
             a = self._fold_const(n.left, at)
             b = self._fold_const(n.right, at)
@@ -350,12 +441,16 @@ class TypeMap:
             # unsigned long through the ordinary ptr->int path).
             return ast.PtrType(n.file, n.line, n.col,
                                ast.BuiltinType(n.file, n.line, n.col, "void"))
+        if isinstance(n, ast.StmtExpr):
+            # §2.4(c): the type of `({…; e;})` is the type of the final
+            # expression; `({;})` is void (GCC ext).
+            return self._ty_stmtexpr(n)
         if isinstance(n, ast.Sizeof):
             return ast.BuiltinType(n.file, n.line, n.col, "long")
         if isinstance(n, ast.Ident):
-            return self._ident_ty(n)
+            return self._untype(self._ident_ty(n))
         if isinstance(n, ast.Cast):
-            return n.type
+            return self._untype(n.type)
         if isinstance(n, ast.Unary):
             if n.op == "&":
                 return ast.PtrType(n.file, n.line, n.col,

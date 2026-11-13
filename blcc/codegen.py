@@ -21,7 +21,7 @@ from typing import Dict, List, Optional, Tuple
 from blcc import ast
 from blcc.data import DataEmitter
 from blcc.expr_codegen import REG_ARGS, ExprEmitter, _fp
-from blcc.types import TypeMap, _roundup8, is_unsigned
+from blcc.types import TypeMap, _roundup8, is_unsigned, stmt_children
 
 _STORE_OP = {1: "movb", 2: "movw", 4: "movl", 8: "movq"}
 _REG = {1: {"a": "%al", "c": "%cl", "d": "%dl"},
@@ -41,6 +41,28 @@ class _FnState:
         self.temp_top = 0
         self.temp_high = 0
         self.epilogue = ".Lep"
+
+
+def _stmtexprs_in_expr(s):
+    """Statement-expressions reachable through a node's EXPRESSION fields
+    (VarDecl.init, ExprStmt.expr, Return.value, binary operands, call
+    args…). Structural statement fields (stmts/body/then/orelse/stmt) are
+    NOT descended — the statement walk already owns those (one owner, no
+    double-registered labels)."""
+    out = []
+    if not dataclasses.is_dataclass(s):
+        return out
+    for f in dataclasses.fields(s):
+        if f.name in ("stmts", "body", "then", "orelse", "stmt"):
+            continue
+        v = getattr(s, f.name, None)
+        items = v if isinstance(v, (tuple, list)) else (v,)
+        for x in items:
+            if isinstance(x, ast.StmtExpr):
+                out.append(x)
+            elif isinstance(x, ast.Node):
+                out.extend(_stmtexprs_in_expr(x))
+    return out
 
 
 class Codegen(TypeMap, ExprEmitter, DataEmitter):
@@ -101,46 +123,80 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter):
 
     @staticmethod
     def _child_stmts(s):
-        if isinstance(s, ast.Compound):
-            return list(s.body)
-        if isinstance(s, ast.If):
-            return [x for x in (s.then, s.orelse) if x is not None]
-        if isinstance(s, (ast.While, ast.DoWhile, ast.For)):
-            return [s.body]
-        if isinstance(s, ast.Switch):
-            return list(s.body)
-        if isinstance(s, (ast.Case, ast.Default, ast.CaseRange, ast.Label)):
-            return [s.stmt] if s.stmt is not None else []
-        return []
+        return stmt_children(s)
 
     def _collect_labels(self, fd: ast.FuncDecl):
         """Enumerate every C label of the function body (flat function-wide
         namespace, §2.5) and assign the deterministic M2-C1 name
         `.L<fn>_<label>_<k>`. Duplicate label = sema error (gcc: `duplicate
         label 'A'`). Undefined goto/&&label targets resolve to LOUD through
-        _label_ref — never a silently-fresh name (M2-C4)."""
+        _label_ref — never a silently-fresh name (M2-C4). `_lbl_depth`
+        records the statement-expression nesting of each definition: §2.4(d)
+        makes a goto/&&label from OUTSIDE into a `({...})` a mirror-reject
+        (gcc rejects the jump INTO the braced group)."""
         seen: Dict[str, int] = {}
         out: Dict[str, str] = {}
-        stack = list(self._child_stmts(fd.body))
-        while stack:
-            s = stack.pop(0)                      # document order ⇒ k
-            for c in self._child_stmts(s):
-                stack.append(c)
-            if isinstance(s, ast.Label):
-                k = seen.get(s.name, 0)
-                if k:
-                    self._err(s, "duplicate label '{}' in one function "
-                              "(§2.5 — flat function-wide namespace)".format(
-                                  s.name), s.name)
-                seen[s.name] = k + 1
-                out[s.name] = ".L{}_{}_{}".format(fd.name, s.name, k)
+        self._lbl_depth: Dict[str, int] = {}
+
+        def walk(nodes, depth):
+            for s in nodes:                       # document order ⇒ k
+                if isinstance(s, ast.Label):
+                    k = seen.get(s.name, 0)
+                    if k:
+                        self._err(s, "duplicate label '{}' in one function "
+                                  "(§2.5 — flat function-wide namespace)"
+                                  .format(s.name), s.name)
+                    seen[s.name] = k + 1
+                    out[s.name] = ".L{}_{}_{}".format(fd.name, s.name, k)
+                    self._lbl_depth[s.name] = depth
+                walk(self._child_stmts(s),
+                     depth + (1 if isinstance(s, ast.StmtExpr) else 0))
+                # Labels also live in `({...})` groups that ride an
+                # EXPRESSION (`x = ({ __label__ h; h: (long)&&h; });`):
+                # scan the statement's expression fields for braced groups
+                # and walk their statements one level deeper (§2.4d).
+                for e in _stmtexprs_in_expr(s):
+                    walk(e.stmts, depth + 1)
+        walk(self._child_stmts(fd.body), 0)
         return out
+
+    # -- §2.4 statement-expression emission (M2-C5 leg 1) --------------------
+
+    def _se_run(self, n, with_value: bool) -> None:
+        """Emit a `({...})`: its statements execute at this point (all
+        values live in %rax at statement boundaries, §3 ⇒ the final
+        expression's value simply lands in %rax). Names declared inside
+        the braced group DIE at `})` (§2.4a) — locals map snapshot; the
+        frame slots they used stay allocated, which is harmless.
+        Nesting depth guards the §2.4d jump-INTO reject."""
+        saved = dict(self.fn.locals)
+        self._se_depth += 1
+        try:
+            for st in n.stmts:
+                self._stmt(st)
+            if with_value:
+                self._emit_expr(n.value)
+        finally:
+            self._se_depth -= 1
+            self.fn.locals = saved
+
+    def _ex_stmtexpr(self, n) -> None:
+        # §2.4(c): `({;})` is void — legal as a statement, and here it is
+        # used AS A VALUE: gcc's "void value not ignored as it ought to
+        # be" is the wall (never a silent 0).
+        if n.value is None:
+            self._err(n, "void value not ignored as it ought to be (§2.4c)",
+                      "statement expression")
+        self._se_run(n, True)
 
     def _label_ref(self, at, name: str) -> str:
         lbl = self.fn_labels.get(name)
         if lbl is None:
             self._err(at, "label '{}' used but not defined (§2.5)".format(
                 name), name)
+        if self._lbl_depth.get(name, 0) > self._se_depth:
+            self._err(at, "jump INTO a statement-expression is rejected "
+                      "(§2.4d — mirror of the gcc error)", name)
         return lbl
 
     def _t(self) -> str:
@@ -239,6 +295,7 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter):
         # M2-C4: M3's `asm goto (… : : : : L)` label operands MUST resolve
         # through THIS map (self.fn_labels), by C identifier text.
         self.fn_labels = self._collect_labels(fd)
+        self._se_depth = 0        # statement-expression nesting (§2.4d)
         if len(fd.params) > 6:
             self._err(fd, "more than 6 parameters is beyond the §6 call ABI",
                       fd.name, "asm")
@@ -246,7 +303,7 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter):
             self._err(fd, "'struct' returned by value is 'struct assignment' "
                       "(§5) — return a pointer", fd.name, "asm")
         fn.epilogue = self._label("ep_" + fd.name)
-        self._fn_ret = fd.ret_type
+        self._fn_ret = self._untype(fd.ret_type)
         for i, p in enumerate(fd.params):
             pty = self._decay(p.type)
             if _fp(pty):
@@ -288,7 +345,10 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter):
             self._stmt_seq(n.body)
             self.fn.locals = saved
         elif isinstance(n, ast.ExprStmt):
-            if n.expr is not None:
+            if isinstance(n.expr, ast.StmtExpr) and n.expr.value is None:
+                # §2.4(c): a void `({…;})` is legal in STATEMENT position.
+                self._se_run(n.expr, False)
+            elif n.expr is not None:
                 self._emit_expr(n.expr)
         elif isinstance(n, ast.If):
             l_else, l_end = self._label("else"), self._label("endif")
@@ -351,7 +411,7 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter):
         elif isinstance(n, ast.Label):
             # §2A M2-C3: the M2-C1 name, emitted at column 0 at the first
             # byte of its labeled statement, exactly once.
-            self.fn.lines.append("{}:".format(self.fn_labels[n.name]))
+            self.fn.lines.append("{}:".format(self._label_ref(n, n.name)))
             self._stmt(n.stmt)
         elif isinstance(n, ast.Goto):
             self._e("jmp {}".format(self._label_ref(n, n.name)))
@@ -397,7 +457,7 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter):
         # §4: a local `T a[]` gets its size FROM ITS INITIALIZER here — slot,
         # locals entry, sizeof and decay all see the sized type downstream
         # (the node is frozen, so the sized type travels in the local ty).
-        ty = self._sized_array_decl(vd.type, vd.init, vd)
+        ty = self._sized_array_decl(self._untype(vd.type), vd.init, vd)
         off = self._slot(ty, vd)
         # bind the ORIGINAL type: _ex_ident needs sized-arrayness to decay to
         # leaq; pointer behaviour everywhere else comes from _decay in _ty.

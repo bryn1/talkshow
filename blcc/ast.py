@@ -174,6 +174,24 @@ class Switch(Node):
 
 
 @dataclass(frozen=True)
+class StmtExpr(Node):
+    # §1 row 6 / §2.4: GNU statement-expression `({ stmts… final; })`.
+    # stmts run at that point; value = final ExprStmt's expression (None =
+    # void, `({;})`). FILE scope is a mirror-reject (§2.4d) in data.py.
+    stmts: Tuple[Node, ...]
+    value: Optional[Node]
+
+
+@dataclass(frozen=True)
+class TypeOf(Node):
+    # §1 row 6c / §2.6: __typeof__(expr|type) — a TYPE node that stands for
+    # its operand's type; resolved by TypeMap._untype (§2A M2-C5 leg 3).
+    # Exactly one of expr / typ is set. Operand NOT evaluated (only typed).
+    expr: Optional[Node]
+    typ: Optional[Node]
+
+
+@dataclass(frozen=True)
 class Goto(Node):
     name: str
 

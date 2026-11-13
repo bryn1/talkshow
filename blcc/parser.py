@@ -46,7 +46,159 @@ class Parser:
         self._bare_type_ok = False          # a tag/enum definition just read
         self.switch_depth = 0
         self.expr = ExprParser(self.s, self.is_typename, self.parse_type,
-                               self.callable_known, self.expr_type)
+                               self.callable_known, self.expr_type,
+                               self.parse_stmt_expr, self.fold_truthy)
+
+    # -- §2.4 GNU statement-expressions (M2-C5 leg 1) ------------------------
+
+    def parse_stmt_expr(self, open_tok: Token) -> ast.Node:
+        """`({ stmts… final; })` — the primary already consumed `(` AND
+        verified `{` opens the braced group; it is consumed here."""
+        self.s.expect_punct("{")
+        self.scopes.append({})
+        stmts: List[ast.Node] = []
+        while not self.s.at_punct("}"):
+            if self.s.peek().kind == "eof":
+                self._parse_err(open_tok, "unterminated statement expression")
+            stmts.extend(self.parse_block_item())
+        self.scopes.pop()
+        self.s.expect_punct("}")
+        self.s.expect_punct(")")
+        value = None
+        if stmts:
+            # The final statement may carry LABELS (`h: (unsigned long)&&h;`
+            # — kernel.h `_THIS_IP_`): the expression is still the value;
+            # the label chain is rebuilt around an empty statement so the
+            # label's address points AT the value's position.
+            chain: List[ast.Node] = []
+            cur = stmts[-1]
+            while isinstance(cur, ast.Label):
+                chain.append(cur)
+                cur = cur.stmt
+            if isinstance(cur, ast.ExprStmt) and cur.expr is not None:
+                value = cur.expr
+                tail = ast.ExprStmt(cur.file, cur.line, cur.col, None)
+                for lab in reversed(chain):
+                    tail = ast.Label(lab.file, lab.line, lab.col, lab.name,
+                                     tail)
+                stmts = stmts[:-1] + [tail]
+        return ast.StmtExpr(open_tok.file, open_tok.line, open_tok.col,
+                            tuple(stmts), value)
+
+    # -- §2.6 __builtin_choose_expr control folding (M2-C5 leg 4) ------------
+
+    def fold_truthy(self, node: ast.Node) -> Optional[int]:
+        """The arithmetic/sizeof/comparison kernel needed by the kernel's
+        `__inttype`/`__typefits` controls (`sizeof(x) <= sizeof(type)` and
+        nested arithmetic on literals/enums). Returns None when the control
+        is NOT foldable here — the caller LOUDs, never silently chooses."""
+        if isinstance(node, ast.IntLit):
+            return node.value
+        if isinstance(node, ast.CharLit):
+            return node.value - 256 if node.value > 127 else node.value
+        if isinstance(node, ast.Ident):
+            sym = self.lookup(node.name)
+            if sym is not None and sym[0] == "enum":
+                return sym[1]
+            return None
+        if isinstance(node, ast.Unary) and node.op in ("-", "+", "!"):
+            v = self.fold_truthy(node.operand)
+            if v is None:
+                return None
+            if node.op == "-":
+                return -v
+            if node.op == "!":
+                return 0 if v else 1
+            return v
+        if isinstance(node, ast.Cast):
+            return self.fold_truthy(node.operand)
+        if isinstance(node, ast.Sizeof):
+            if node.typ is not None:
+                return self._csize(node.typ)
+            ty = self.expr_type(node.arg)
+            return self._csize(ty) if ty is not None else None
+        if isinstance(node, ast.Binary):
+            op = node.op
+            if op in ("&&", "||"):                      # short-circuit
+                a = self.fold_truthy(node.left)
+                if a is None:
+                    return None
+                if op == "&&" and a == 0:
+                    return 0
+                if op == "||" and a != 0:
+                    return 1
+                return self.fold_truthy(node.right)
+            a = self.fold_truthy(node.left)
+            b = self.fold_truthy(node.right)
+            if a is None or b is None:
+                return None
+            if op == "+":
+                return a + b
+            if op == "-":
+                return a - b
+            if op == "*":
+                return a * b
+            if op == "/" and b != 0:
+                q = abs(a) // abs(b)
+                return -q if (a < 0) != (b < 0) else q
+            if op == "%" and b != 0:
+                q = abs(a) // abs(b)
+                if (a < 0) != (b < 0):
+                    q = -q
+                return a - b * q
+            if op == "<":
+                return 1 if a < b else 0
+            if op == "<=":
+                return 1 if a <= b else 0
+            if op == ">":
+                return 1 if a > b else 0
+            if op == ">=":
+                return 1 if a >= b else 0
+            if op == "==":
+                return 1 if a == b else 0
+            if op == "!=":
+                return 1 if a != b else 0
+            return None
+        return None
+
+    def _csize(self, ty) -> Optional[int]:
+        """Compile-time size for fold_truthy's sizeof arms (mirrors the
+        TypeMap layout rules on the subsets that reach here; None = can't
+        say → caller LOUDs)."""
+        from blcc.types import TYPE_SIZE
+        if ty is None:
+            return None
+        if isinstance(ty, ast.BuiltinType):
+            return TYPE_SIZE.get(ty.name)
+        if isinstance(ty, ast.PtrType):
+            return 8
+        if isinstance(ty, ast.TypeOf):
+            inner = ty.typ if ty.typ is not None else (
+                self.expr_type(ty.expr) if ty.expr is not None else None)
+            return self._csize(inner)
+        if isinstance(ty, ast.ArrayType):
+            if ty.size is None:
+                return None
+            n = self.fold_truthy(ty.size)
+            inner = self._csize(ty.inner)
+            if n is None or inner is None:
+                return None
+            return n * inner
+        if isinstance(ty, ast.StructType):
+            members = self.struct_tags.get(ty.tag)
+            if members is None:
+                return None
+            off = 0
+            align = 1
+            for m in members:
+                ms = self._csize(m.type)
+                if ms is None:
+                    return None
+                align = max(align, min(ms, 8))
+                off = (off + ms - 1) // ms * ms if ms > 1 else off
+                off += ms
+            return (off + align - 1) // align * align
+        return None
 
     # -- diagnostics helpers (§8 format) ------------------------------------
 
@@ -157,6 +309,20 @@ class Parser:
                 return ast.BuiltinType(t.file, t.line, t.col, t.text)
             if t.text == "union":
                 self._sema(t, "'union' is not in the subset (§5)")
+            if t.text in ("typeof", "__typeof__", "__typeof"):
+                # §1 row 6c / §2.6 (M2-C5 leg 3): __typeof__(expr|type) —
+                # a TYPE that stands for its operand's type. Operand is
+                # TYPED, never evaluated (`__typeof__(called=1)` leaves
+                # `called` untouched); resolution rides TypeMap._untype.
+                self.s.next()
+                self.s.expect_punct("(")
+                if self.expr._starts_type(0):
+                    typ = self.parse_type()
+                    self.s.expect_punct(")")
+                    return ast.TypeOf(t.file, t.line, t.col, None, typ)
+                operand = self.expr.parse_expression()
+                self.s.expect_punct(")")
+                return ast.TypeOf(t.file, t.line, t.col, operand, None)
             if t.text in _TYPE_KW:
                 self.s.next()
                 name = t.text

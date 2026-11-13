@@ -398,14 +398,15 @@ def test_2d_excess_initializers_stay_loud():
 
 SIZE_CASES = [
     ("w1", "int main(void){ int n = 3; int a[n]; _sys_exit(0); }\n", "n"),
-    ("w2", "enum { A = 2, B = 3 };\n"
-           "int main(void){ int a[A*B + sizeof(long)]; _sys_exit(0); }\n",
-     "sizeof expression"),
+    # M2 RESYNC (§2.6 e1 leg + §2.15 fold extension): `sizeof(...)` and
+    # `(long)3` ARE constant expressions — gcc 11.4 accepts both array
+    # sizes (measured rc0, run in tests/test_core_m2_gnu.py
+    # test_array_size_fold_gnu_legs). The GA-era narrow folder rejected
+    # them; the sealed w2/w5 LOUD rows are superseded, NOT deleted in
+    # silence.
     ("w3", 'int main(void){ int a["xx"]; _sys_exit(0); }\n', "string literal"),
     ("w4", "int f(void){ return 2; }\n"
            "int main(void){ int a[f()]; _sys_exit(0); }\n", "call expression"),
-    ("w5", "int main(void){ int a[(long)3]; _sys_exit(0); }\n",
-     "cast expression"),
 ]
 
 
