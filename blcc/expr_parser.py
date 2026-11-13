@@ -27,7 +27,8 @@ COMPOUND_ASSIGN_OPS = frozenset(
 _UNARY_PUNCT = frozenset({"-", "+", "!", "~", "&", "*"})
 _CAST_KW = frozenset(
     {"char", "short", "int", "long", "void", "const", "struct", "enum",
-     "float", "double", "unsigned"})
+     "float", "double", "unsigned", "signed", "__signed__", "__signed",
+     "volatile", "__volatile__", "restrict", "__restrict", "__restrict__"})
 _LVALUE_KINDS = (ast.Ident, ast.Index, ast.Select)
 
 
@@ -192,9 +193,14 @@ class ExprParser:
     def parse_primary(self) -> ast.Node:
         t = self.s.next()
         if t.kind == "int":
-            return ast.IntLit(t.file, t.line, t.col, t.value)
+            return ast.IntLit(t.file, t.line, t.col, t.value, t.itype)
         if t.kind == "char":
             return ast.CharLit(t.file, t.line, t.col, t.value)
+        if t.kind == "flt":
+            # §1 row 14 (M2): STORAGE token (IEEE bits). Any arithmetic,
+            # cast or conversion that touches it is a LOUD sema wall.
+            return ast.FloatLit(t.file, t.line, t.col, t.value,
+                                4 if t.itype == "float" else 8)
         if t.kind == "str":
             return ast.StrLit(t.file, t.line, t.col, t.value)
         if t.kind == "id":

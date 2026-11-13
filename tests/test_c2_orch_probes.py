@@ -248,12 +248,16 @@ def test_global_string_init_exact_contract_wording():
     assert_nothing_emitted(out)
 
 
-# -- OBS-1: L suffix is a loud lex diagnostic (contract-conformant today) -------
+# -- OBS-1: integer suffixes are TYPED, not lex walls — re-synced at M2
+# plan-m2-core §1 row 1 (683/692 first-blocker fix). The GA-era pin that
+# `2147483648L` was a loud lex diagnostic is SUPERSEDED: the suffix matrix
+# (typed kinds) lives in tests/test_core_m2_lex.py::test_suffix_lex_table;
+# this row now pins the compile-and-run truth of the same literal.
 
-def test_l_suffix_is_loud_lex_diagnostic():
+def test_l_suffix_compiles_and_runs():
     r, out = compile_src("int main(void){ long x = 2147483648L; "
                          "return (int)x; }\n", "lsuf")
-    assert r.returncode == 2, (r.returncode, r.stderr)
-    assert "lex:" in r.stderr and "2147483648L" in r.stderr, r.stderr
-    assert DIAG_RE.match(r.stderr.strip()), r.stderr
-    assert_nothing_emitted(out)
+    assert r.returncode == 0, (r.returncode, r.stderr)
+    # (int)2147483648 wraps to -2147483648; exit code is that mod 256 == 0.
+    assert subprocess.run([out], timeout=30).returncode == 0
+    os.remove(out)

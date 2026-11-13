@@ -10,7 +10,28 @@ from blcc import ast
 from blcc.lexer import DiagError
 from blcc.runtime import BUILTINS
 
-TYPE_SIZE = {"char": 1, "short": 2, "int": 4, "long": 8, "void": 0}
+TYPE_SIZE = {
+    # M2 §1 row 2 (gcc 11.4 LP64 measured): the full scalar family. Names are
+    # the PARSER-NORMALIZED spellings (`signed int` → `int`, bare `signed`
+    # → `int`; `signed char` keeps its distinct identity).
+    "char": 1, "signed char": 1, "unsigned char": 1,
+    "short": 2, "unsigned short": 2,
+    "int": 4, "unsigned int": 4,
+    "long": 8, "unsigned long": 8,
+    "long long": 8, "unsigned long long": 8,
+    "float": 4, "double": 8,          # STORAGE only (§1 row 14): arith LOUD
+    "void": 0,
+}
+UNSIGNED_NAMES = frozenset({"unsigned char", "unsigned short", "unsigned int",
+                            "unsigned long", "unsigned long long"})
+_RANK = {"int": 1, "unsigned int": 1, "long": 2, "unsigned long": 2,
+         "long long": 3, "unsigned long long": 3}
+_UNSIGNED_OF = {"int": "unsigned int", "long": "unsigned long",
+                "long long": "unsigned long long"}
+
+
+def is_unsigned(ty) -> bool:
+    return isinstance(ty, ast.BuiltinType) and ty.name in UNSIGNED_NAMES
 
 
 def _roundup8(n: int) -> int:
@@ -29,6 +50,8 @@ def what(n) -> str:
         return "integer literal"
     if isinstance(n, ast.CharLit):
         return "char literal"
+    if isinstance(n, ast.FloatLit):
+        return "floating literal"
     if isinstance(n, ast.StrLit):
         return "string literal"
     if isinstance(n, ast.Call):
@@ -271,15 +294,52 @@ class TypeMap:
     def _int(self, n) -> ast.BuiltinType:
         return ast.BuiltinType(n.file, n.line, n.col, "int")
 
+    def _bt(self, n, name: str) -> ast.BuiltinType:
+        return ast.BuiltinType(n.file, n.line, n.col, name)
+
+    def _promote(self, ty: ast.Node) -> ast.Node:
+        """Integer promotion (§2.2): the narrow types → int (unsigned short
+        fits in int on LP64)."""
+        if isinstance(ty, ast.BuiltinType) and ty.name in (
+                "char", "signed char", "unsigned char", "short",
+                "unsigned short"):
+            return ast.BuiltinType(ty.file, ty.line, ty.col, "int")
+        return ty
+
+    def _uac(self, lt: ast.Node, rt: ast.Node, n) -> ast.BuiltinType:
+        """Usual arithmetic conversions (§2.2, gcc 11.4 measured): after
+        promotion — same sign: wider rank wins; unsigned rank >= signed
+        rank: unsigned of the max rank; else the signed type (on LP64 a
+        strictly-higher signed rank represents every value of the lower
+        unsigned rank: long ⊇ uint, long long ⊇ ulong)."""
+        lt, rt = self._promote(lt), self._promote(rt)
+        ln = lt.name if isinstance(lt, ast.BuiltinType) else None
+        rn = rt.name if isinstance(rt, ast.BuiltinType) else None
+        if ln is None or rn is None:
+            self._err(n, "arithmetic on a non-numeric type is not in the "
+                      "subset (§4)", self._what(n))
+        if ln in ("float", "double") or rn in ("float", "double"):
+            self._err(n, "'float' arithmetic is DEFERRED — storage only "
+                      "(§1 row 14)", self._what(n))
+        if ln == rn:
+            return self._bt(n, ln)
+        lu, ru = ln in UNSIGNED_NAMES, rn in UNSIGNED_NAMES
+        lr, rr = _RANK[ln], _RANK[rn]
+        if lu == ru:
+            return self._bt(n, ln if lr >= rr else rn)
+        un, ur = (ln, lr) if lu else (rn, rr)
+        sn, sr = (rn, rr) if lu else (ln, lr)
+        return self._bt(n, un if ur >= sr else sn)
+
     def _ty(self, n: ast.Node) -> ast.Node:
         if isinstance(n, ast.IntLit):
-            # §4: an unsuffixed decimal literal is int when it fits, else
-            # long — the type sizeof and the usual conversions must see.
-            if -2 ** 31 <= n.value < 2 ** 31:
-                return self._int(n)
-            return ast.BuiltinType(n.file, n.line, n.col, "long")
+            # §2.1 (M2): the literal's TYPE is the lexer's typed suffix/range
+            # answer (hex may take unsigned early; decimal signed-first).
+            return self._bt(n, n.itype)
         if isinstance(n, ast.CharLit):
             return self._int(n)
+        if isinstance(n, ast.FloatLit):
+            return self._bt(n, "float" if n.fsize == 4 else "double")
         if isinstance(n, ast.StrLit):
             return ast.PtrType(n.file, n.line, n.col,
                                ast.BuiltinType(n.file, n.line, n.col, "char"))
@@ -332,20 +392,15 @@ class TypeMap:
         rp = isinstance(rt, ast.PtrType)
         if n.op in ("+", "-") and (lp or rp):
             if n.op == "-" and lp and rp:
-                return ast.BuiltinType(n.file, n.line, n.col, "long")
+                return self._bt(n, "long")
             return lt if lp else rt
         if n.op not in ("+", "-") and (lp or rp):
             self._err(n, "'{}' with a pointer operand is not in the subset (§4)"
                       .format(n.op), n.op)
         if n.op in ("<<", ">>"):
             # C: a shift's result type is its promoted LEFT operand alone.
-            if isinstance(lt, ast.BuiltinType) and lt.name == "long":
-                return lt
-            return self._int(n)
-        if isinstance(lt, ast.BuiltinType) and isinstance(rt, ast.BuiltinType) \
-                and TYPE_SIZE[lt.name] < 8 and TYPE_SIZE[rt.name] < 8:
-            return self._int(n)      # int (or narrower) op int -> int (§4)
-        return ast.BuiltinType(n.file, n.line, n.col, "long")
+            return self._promote(lt)
+        return self._uac(lt, rt, n)
 
     def _ident_ty(self, n: ast.Ident) -> ast.Node:
         loc = self.fn.locals.get(n.name)
@@ -356,6 +411,13 @@ class TypeMap:
         gd = self.globals.get(n.name)
         if gd is not None:
             return gd.type
+        if n.name in self.sigs:
+            # §5: a function name used as a VALUE is a function pointer
+            # (M4 DEFER). This is the ONE wall — _ty and _ex_ident share it
+            # so any context (assign, call arg, return) names it identically.
+            self._err(n, "'{}' is a function name used as a value — 'function "
+                      "pointer' is not in the subset (§5)".format(n.name),
+                      n.name)
         self._err(n, "'{}' undeclared — not a local, parameter, global or "
                      "enum constant".format(n.name), n.name)
 

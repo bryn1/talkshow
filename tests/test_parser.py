@@ -240,13 +240,18 @@ def test_switch_empty_body():
 # -- §5 constructs: one test each, diagnostic names it with file:line:col ------
 
 def test_float_is_diagnostic():
-    d = diag("int f(void) { float x; }")
-    assert "'float'" in d.message and d.line == 1 and d.col == 15
+    # M2 RESYNC (§1 row 14): float PARSES as a storage type; the LOUD wall
+    # now guards FP ARITHMETIC (test_independent_negative::test_float_variable).
+    tu = parse_text("int f(void) { float x; }", "t.c")
+    vd = find(tu.decls[0].body, ast.VarDecl)
+    assert isinstance(vd.type, ast.BuiltinType) and vd.type.name == "float"
 
 
 def test_double_is_diagnostic():
-    d = diag("double d;")
-    assert "'double'" in d.message
+    # M2 RESYNC (§1 row 14): double is a STORAGE type (.quad bytes).
+    tu = parse_text("double d;", "t.c")
+    assert isinstance(tu.decls[0].type, ast.BuiltinType)
+    assert tu.decls[0].type.name == "double"
 
 
 def test_goto_and_labels_are_diagnostics():
@@ -312,8 +317,10 @@ def test_non_int_enum_value_is_diagnostic():
 
 
 def test_unsigned_is_diagnostic():
-    d = diag("unsigned int u;")
-    assert "'unsigned'" in d.message
+    # M2 RESYNC (§1 row 2): the unsigned family PARSES (§2.1/§2.2 typing).
+    tu = parse_text("unsigned int u;", "t.c")
+    assert isinstance(tu.decls[0].type, ast.BuiltinType)
+    assert tu.decls[0].type.name == "unsigned int"
 
 
 def test_unsized_array_struct_member_is_diagnostic():

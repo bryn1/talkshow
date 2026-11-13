@@ -15,12 +15,33 @@ from __future__ import annotations
 
 from blcc import ast
 from blcc.runtime import BUILTINS
+from blcc.types import is_unsigned
 
 # §6 call ABI: the first six args; beyond them codegen raises (§6 pin).
 REG_ARGS = ("%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9")
 _SETCC = {"==": "sete", "!=": "setne", "<": "setl", "<=": "setle",
           ">": "setg", ">=": "setge"}
+_SETCC_U = {"==": "sete", "!=": "setne", "<": "setb", "<=": "setbe",
+            ">": "seta", ">=": "setae"}       # §2.2: unsigned compare flavors
 _ARITH = {"+": "addq", "-": "subq", "&": "andq", "|": "orq", "^": "xorq"}
+# §2.2 re-intern templates: the width+sign wrap turning a raw 64-bit slot
+# into the value of the named type ({r}{e}{b}{w} = the register family).
+_CONV = {
+    "int": ("movl {e}, {e}", "movslq {e}, {r}"),
+    "unsigned int": ("movl {e}, {e}",),
+    "char": ("movsbq {b}, {r}",), "signed char": ("movsbq {b}, {r}",),
+    "unsigned char": ("movzbq {b}, {r}",),
+    "short": ("movswq {w}, {r}",), "unsigned short": ("movzwq {w}, {r}",),
+    "long": (), "unsigned long": (), "long long": (),
+    "unsigned long long": (), "void": (),        # (void)expr: value dropped
+}
+_REGFAM = {"%rax": ("%rax", "%eax", "%al", "%ax"),
+           "%rcx": ("%rcx", "%ecx", "%cl", "%cx"),
+           "%rdx": ("%rdx", "%edx", "%dl", "%dx")}
+
+
+def _fp(ty) -> bool:
+    return isinstance(ty, ast.BuiltinType) and ty.name in ("float", "double")
 
 
 class ExprEmitter:
@@ -39,6 +60,22 @@ class ExprEmitter:
 
     def _ex_charlit(self, n) -> None:
         self._imm(n.value - 256 if n.value > 127 else n.value)
+
+    def _ex_floatlit(self, n) -> None:
+        # §1 row 14: STORAGE value only — the raw IEEE-754 bits. A consumer
+        # that needs an integer (arith/cast/return/arg) hits _fp_guard LOUD.
+        self._imm(n.bits)
+
+    def _fp_guard(self, src_ty, tgt_ty, at, what: str = "") -> None:
+        """M2 §1 row 14 / §2.14 v4: float/double values exist ONLY as
+        same-kind storage (movq/movl of bits). Every conversion, cast, call
+        argument or return that would MATERIALIZE an FP value is a LOUD
+        sema wall (gcc uses XMM regs; blcc has no SSE story at M2)."""
+        if (_fp(src_ty) or _fp(tgt_ty)) and not (
+                _fp(src_ty) and _fp(tgt_ty) and src_ty.name == tgt_ty.name):
+            self._err(at, "'float'/'double' cast, conversion, call argument "
+                      "or return is DEFERRED — storage only (§1 row 14)",
+                      what or self._what(at))
 
     def _ex_strlit(self, n) -> None:
         self._e("leaq {}(%rip), %rax".format(self._str_label(n.value)))
@@ -91,6 +128,7 @@ class ExprEmitter:
             self._emit_expr(n.operand)
             self._e("notq %rax")
         elif n.op == "!":
+            self._fp_guard(self._ty(n.operand), self._int(n), n)
             self._emit_expr(n.operand)
             self._e("testq %rax, %rax")
             self._e("sete %al")
@@ -119,8 +157,13 @@ class ExprEmitter:
             self._err(n, "more than 6 arguments is beyond the §6 call ABI",
                       name, "asm")
         slots = []
-        for a in n.args:
+        decl_params = None if name in BUILTINS else self.sigs[name][0]
+        for idx, a in enumerate(n.args):
+            if decl_params is not None:
+                self._fp_guard(self._ty(a), decl_params[idx].type, a)
             self._emit_expr(a)
+            if decl_params is not None:
+                self._convert(decl_params[idx].type, a)  # §2.2 arg conversion
             t = self._t()
             self._e("movq %rax, {}".format(t))
             slots.append(t)
@@ -130,36 +173,26 @@ class ExprEmitter:
         self._e("call {}".format(name))
 
     def _ex_cast(self, n) -> None:
+        self._fp_guard(self._ty(n.operand), n.type, n)
         self._emit_expr(n.operand)
         ty = self._decay(n.type)
-        if isinstance(ty, ast.BuiltinType) and ty.name == "char":
-            self._e("movsbq %al, %rax")
-        elif isinstance(ty, ast.BuiltinType) and ty.name == "short":
-            self._e("movswq %ax, %rax")
-        elif isinstance(ty, ast.BuiltinType) and ty.name == "int":
-            self._e("movl %eax, %eax")                 # narrow to 32-bit (§4)
-            self._e("movslq %eax, %rax")               # re-intern sign (§4 v3)
+        if isinstance(ty, ast.BuiltinType):
+            self._convert(ty, n)          # §2.2 width+sign wrap incl. (unsigned)
+        elif isinstance(ty, ast.StructType):
+            self._err(n, "a cast to 'struct' type is not in the subset (§5)",
+                      "struct")
 
     def _narrow_int(self, ty: ast.Node) -> None:
-        """§4 v3: an int-typed arithmetic result re-interns through its
-        32-bit slot — the wrap matches gcc; long/pointer results stay 64-bit."""
-        if isinstance(ty, ast.BuiltinType) and ty.name == "int":
-            self._e("movl %eax, %eax")
-            self._e("movslq %eax, %rax")
+        """§4 v3 + §2.2 M2: an arithmetic result of a narrower type
+        re-interns through its own width+sign — int movl+movslq, unsigned
+        int movl (zero-fill wrap), long/pointer stay 64-bit."""
+        self._convert(ty)
 
     def _reintern_stored(self, ty: ast.Node) -> None:
         """C: an assignment's value is the CONVERTED STORED value (gcc:
         (xi = 3000000000) is the int -1294967296, not the 64-bit source).
-        Re-intern %rax through the target's own width: int via movl+movslq,
-        short/char via movs*; long and pointer results are already 64-bit."""
-        if isinstance(ty, ast.BuiltinType):
-            if ty.name == "int":
-                self._e("movl %eax, %eax")
-                self._e("movslq %eax, %rax")
-            elif ty.name == "short":
-                self._e("movswq %ax, %rax")
-            elif ty.name == "char":
-                self._e("movsbq %al, %rax")
+        Re-intern %rax through the target's own width (§2.2 table)."""
+        self._convert(ty)
 
     def _ex_select(self, n) -> None:
         self._emit_addr(n)
@@ -175,6 +208,7 @@ class ExprEmitter:
 
     def _ex_assign(self, n) -> None:
         ty = self._decay(self._ty(n.target))
+        self._fp_guard(self._ty(n.value), ty, n)
         if isinstance(ty, ast.StructType):
             self._err(n, "'struct assignment' is not in the subset (§5)", "=")
         if isinstance(n.target, ast.Ident) and not isinstance(
@@ -205,7 +239,9 @@ class ExprEmitter:
         if isinstance(ty, ast.StructType):
             self._err(n, "'struct assignment' is not in the subset (§5)", n.op)
         op = n.op[:-1]
+        nty = self._promote(self._ty(n))       # arithmetic AT the target type
         self._emit_expr(n.value)
+        self._convert(nty, n)                  # E2 converted to promoted T
         t0 = self._t()
         self._e("movq %rax, {}".format(t0))
         self._emit_addr(n.target)
@@ -214,18 +250,24 @@ class ExprEmitter:
         self._load(ty, "(%rax)", at=n)               # old value
         if op in ("/", "%"):
             self._e("movq {}, %rcx".format(t0))
-            self._e("cqto")
-            self._e("idivq %rcx")
+            if is_unsigned(nty):
+                self._e("xorl %edx, %edx")
+                self._e("divq %rcx")
+            else:
+                self._e("cqto")
+                self._e("idivq %rcx")
             if op == "%":
                 self._e("movq %rdx, %rax")
         elif op in ("<<", ">>"):
             self._e("movq {}, %rcx".format(t0))
-            self._e("{} %cl, %rax".format("shlq" if op == "<<" else "sarq"))
+            self._e("{} %cl, %rax".format(
+                "shlq" if op == "<<" else
+                ("shrq" if is_unsigned(nty) else "sarq")))
         elif op == "*":
             self._e("imulq {}, %rax".format(t0))
         else:
             self._e("{} {}, %rax".format(_ARITH[op], t0))
-        self._reintern_stored(self._decay(self._ty(n)))   # = stored value (§4)
+        self._convert(self._ty(n), n)          # = converted stored value (§4)
         self._e("movq {}, %rdx".format(t1))
         self._store(ty, "(%rdx)", at=n)
         self._unt(2)
@@ -256,6 +298,8 @@ class ExprEmitter:
         self._narrow_int(self._ty(n.operand))   # ++/-- result keeps its type
 
     def _short_circuit(self, n) -> None:
+        if _fp(self._ty(n.left)) or _fp(self._ty(n.right)):
+            self._fp_guard(self._ty(n.left), self._int(n), n)
         l_out = self._label("sc")
         if n.op == "&&":
             l_false = self._label("scfalse")   # F1: zero path needs its own
@@ -284,6 +328,41 @@ class ExprEmitter:
             self._e("movl $1, %eax")
             self.fn.lines.append("{}:".format(l_out))
 
+    def _convert(self, to_ty: ast.Node, at=None) -> None:
+        """Truncate+extend the %rax slot to the canonical internment of
+        to_ty (§2.2). A no-op for 64-bit targets and pointers; narrow signed
+        re-signs, narrow unsigned zero-fills (§2.2 wrap both ways)."""
+        to_ty = self._decay(to_ty)
+        if isinstance(to_ty, ast.BuiltinType):
+            ops = _CONV.get(to_ty.name)
+            if ops is None:                     # float/double: storage only
+                self._err(at or self.tu, "'{}' arithmetic is DEFERRED — "
+                          "storage only (§1 row 14)".format(to_ty.name),
+                          to_ty.name)
+            for tmpl in ops:
+                self._e(tmpl.format(r="%rax", e="%eax", b="%al", w="%ax"))
+
+    def _convert_reg(self, to_ty: ast.Node, reg: str, at=None) -> None:
+        """_convert for a named 64-bit register (%rax | %rcx | %rdx)."""
+        to_ty = self._decay(to_ty)
+        if not isinstance(to_ty, ast.BuiltinType):
+            return
+        ops = _CONV.get(to_ty.name)
+        if ops is None:
+            self._err(at or self.tu, "'{}' arithmetic is DEFERRED — "
+                      "storage only (§1 row 14)".format(to_ty.name),
+                      to_ty.name)
+        fam = _REGFAM[reg]
+        for tmpl in ops:
+            self._e(tmpl.format(r=fam[0], e=fam[1], b=fam[2], w=fam[3]))
+
+    def _common_ty(self, n: ast.Binary) -> ast.Node:
+        lt = self._decay(self._ty(n.left))
+        rt = self._decay(self._ty(n.right))
+        if isinstance(lt, ast.PtrType) or isinstance(rt, ast.PtrType):
+            return None                          # pointer op: no scalar wrap
+        return self._uac(lt, rt, n)
+
     def _ex_binary(self, n) -> None:
         op = n.op
         if op in ("&&", "||"):
@@ -297,38 +376,53 @@ class ExprEmitter:
             self._ptr_add(n, op, (lt if lp else rt).inner)
             return
         if op in ("<<", ">>"):
+            # C: a shift's result type is its promoted LEFT operand alone.
             self._emit_expr(n.left)
+            self._convert(self._ty(n), n)
             t = self._t()
             self._e("movq %rax, {}".format(t))
             self._emit_expr(n.right)
             self._e("movq %rax, %rcx")
             self._e("movq {}, %rax".format(t))
             self._unt()
-            self._e("{} %cl, %rax".format("shlq" if op == "<<" else "sarq"))
-            self._narrow_int(self._ty(n))
+            uns = is_unsigned(self._ty(n))
+            self._e("{} %cl, %rax".format("shlq" if op == "<<"
+                                          else ("shrq" if uns else "sarq")))
+            self._convert(self._ty(n), n)
             return
+        # scalar: usual arithmetic conversions bring BOTH operands to the
+        # common type (§2.2) — convert, operate, re-wrap the result.
+        ct = self._common_ty(n)
         self._emit_expr(n.left)
+        self._convert(ct, n)
         t = self._t()
         self._e("movq %rax, {}".format(t))
         self._emit_expr(n.right)
+        self._convert(ct, n)
         self._e("movq %rax, %rcx")
         self._e("movq {}, %rax".format(t))
         self._unt()
+        uns = ct is not None and is_unsigned(ct)
         if op in _SETCC:
             self._e("cmpq %rcx, %rax")
-            self._e("{} %cl".format(_SETCC[op]))   # %cl: right, then result
+            self._e("{} %cl".format((_SETCC_U if uns or lp or rp
+                                     else _SETCC)[op]))
             self._e("movzbq %cl, %rax")
             return                             # 0/1 result: already interned
         elif op == "*":
             self._e("imulq %rcx, %rax")
         elif op in ("/", "%"):
-            self._e("cqto")
-            self._e("idivq %rcx")           # §4: truncate toward zero
+            if uns:
+                self._e("xorl %edx, %edx")
+                self._e("divq %rcx")           # §2.2: unsigned division
+            else:
+                self._e("cqto")
+                self._e("idivq %rcx")          # §4: truncate toward zero
             if op == "%":
                 self._e("movq %rdx, %rax")
         else:
             self._e("{} %rcx, %rax".format(_ARITH[op]))
-        self._narrow_int(self._ty(n))
+        self._convert(ct, n)                    # wrap the result to common type
 
     def _ptr_add(self, n, op, elem_ty) -> None:
         lt = self._decay(self._ty(n.left))

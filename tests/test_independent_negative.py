@@ -71,8 +71,17 @@ def assert_loud(src_text, tag, name, line=None, col=None):
 # -- §5 constructs, each alone, named literally ---------------------------------
 
 def test_float_variable():
-    assert_loud("float f;\nint main(void){ return 0; }\n",
-                "floatvar", "float")
+    # M2 RESYNC (§1 row 14): float DECLARATION is storage — SUPPORT. FP
+    # ARITHMETIC stays LOUD; the wall moved from parse-time to use-time.
+    r, src, out = blcc_compile("float f;\nint main(void){ return 0; }\n",
+                               "floatvar")
+    assert r.returncode == 0, r.stderr
+    if os.path.exists(out):
+        os.remove(out)
+    r, src, out = blcc_compile("float f;\nfloat g;\nint main(void){ g = f + "
+                               "1.0f; return 0; }\n", "floatarith")
+    assert r.returncode == 2, "FP arithmetic must stay LOUD: " + r.stderr
+    assert "float" in r.stderr and "DEFERRED" in r.stderr, r.stderr
 
 
 def test_float_literal():
@@ -80,6 +89,14 @@ def test_float_literal():
 
 
 def test_double_type():
+    # M2 RESYNC (§1 row 14): double STORAGE SUPPORT; int->double CONVERSION
+    # and any FP arith remain the LOUD wall (gcc accepts both — measured;
+    # the contract DEFERs them: blcc has no SSE value materialization).
+    r, src, out = blcc_compile("static double x = 4195835.0;\n"
+                               "int main(void){ return 0; }\n", "dblstore")
+    assert r.returncode == 0, r.stderr
+    if os.path.exists(out):
+        os.remove(out)
     assert_loud("int main(void){ double d = 2; return 0; }\n",
                 "double", "double")
 
@@ -165,8 +182,17 @@ def test_default_outside_switch():
 
 
 def test_unsigned_is_loud():
-    assert_loud("int main(void){ unsigned u = 1; return 0; }\n",
-                "unsigned", "unsigned")
+    # M2 RESYNC (§1 row 2, contract SUPERSEDES the GA wall): the unsigned
+    # family is SUPPORT — declaration, wrap and unsigned compare run.
+    r, src, out = blcc_compile(
+        "int main(void){ unsigned u = 0; u = u - 1; "
+        "if (u != 0xFFFFFFFFU) return 1; return 0; }\n", "unsup")
+    assert r.returncode == 0, r.stderr
+    import subprocess
+    proc = subprocess.run([out], capture_output=True, timeout=10)
+    assert proc.returncode == 0, "unsigned wrap mis-executes (rc={})".format(
+        proc.returncode)
+    os.remove(out)
 
 
 def test_conditional_operator_loud():

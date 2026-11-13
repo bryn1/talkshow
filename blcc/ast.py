@@ -191,11 +191,20 @@ class Default(Node):
 @dataclass(frozen=True)
 class IntLit(Node):
     value: int
+    itype: str = "int"       # §2.1 typed literal kind (lexer suffix/range)
 
 
 @dataclass(frozen=True)
 class CharLit(Node):
     value: int
+
+
+@dataclass(frozen=True)
+class FloatLit(Node):
+    # §1 row 14 (M2): IEEE-754 BITS for double/float STORAGE. Any FP
+    # arithmetic/cast/conversion is a LOUD sema wall (DEFER).
+    bits: int
+    fsize: int = 8
 
 
 @dataclass(frozen=True)

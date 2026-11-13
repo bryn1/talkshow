@@ -50,6 +50,16 @@ class DataEmitter:
         the compiler on large .bss (DA-c2 P2-2, exit 137 outside §2)."""
         if isinstance(ty, (ast.BuiltinType, ast.PtrType)):
             sz = self._size(ty, at)
+            if isinstance(init, ast.FloatLit):
+                # §1 row 14: double/float STORAGE = IEEE-754 .quad/.long
+                # bytes (M44; the .s is byte-anchored vs gcc's .rodata).
+                if not isinstance(ty, ast.BuiltinType) \
+                        or ty.name not in ("float", "double") \
+                        or init.fsize != sz:
+                    self._err(init, "'double'/'float' initializer needs the "
+                              "matching storage type (§1 row 14)",
+                              "floating literal")
+                return [("b", (init.bits >> 8 * i) & 255) for i in range(sz)]
             if init is None:
                 return [("z", sz)]
             if isinstance(init, ast.InitList):

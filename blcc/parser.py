@@ -22,7 +22,13 @@ BUILTINS = frozenset(_RUNTIME_BUILTINS)
 
 _TYPE_KW = ("char", "short", "int", "long", "void")
 _DECL_START_KW = _TYPE_KW + ("const", "struct", "enum", "static", "typedef",
-                             "extern", "float", "double", "union", "unsigned")
+                             "extern", "float", "double", "union", "unsigned",
+                             # M2: the extended specifier vocabulary (§4.1a)
+                             "signed", "__signed__", "__signed", "register",
+                             "inline", "__inline__", "__inline", "volatile",
+                             "__volatile__", "restrict", "__restrict",
+                             "__restrict__", "typeof", "__typeof__",
+                             "__typeof", "__extension__")
 
 
 class Parser:
@@ -128,26 +134,71 @@ class Parser:
             ty = ast.PtrType(star.file, star.line, star.col, ty)
 
     def parse_base_type(self) -> ast.Node:
-        self._accept("const")  # §4 helper signatures use const; layout-irrelevant
+        # M2 §1 rows 2/14: the full scalar specifier family. Qualifiers are
+        # layout-irrelevant and drop (const/volatile/restrict); signedness
+        # combines per C: `unsigned`, bare `signed`, `unsigned long long`,
+        # `long long`, order-free spec words.
+        self._skip_qualifiers()
+        unsigned = signed = False
         t = self.s.peek()
+        while t.kind == "kw" and t.text in ("unsigned", "signed",
+                                            "__signed__"):
+            if t.text == "unsigned":
+                unsigned = True
+            else:
+                signed = True
+            self.s.next()
+            self._skip_qualifiers()
+            t = self.s.peek()
         if t.kind == "kw":
             if t.text in ("float", "double"):
-                self._sema(t, "'{}' is not in the subset (§4: int types only)".format(t.text))
+                self.s.next()          # §1 row 14: storage parses; arith LOUD
+                return ast.BuiltinType(t.file, t.line, t.col, t.text)
             if t.text == "union":
                 self._sema(t, "'union' is not in the subset (§5)")
-            if t.text == "unsigned":
-                self._sema(t, "'unsigned' is not in the subset (§4: signed types only)")
             if t.text in _TYPE_KW:
                 self.s.next()
-                return ast.BuiltinType(t.file, t.line, t.col, t.text)
+                name = t.text
+                if name == "long":       # `long long` (gnu89: C99 in gnu, rc0)
+                    if self._at("long"):
+                        self.s.next()
+                        name = "long long"
+                elif name == "short":
+                    if self._at("int"):
+                        self.s.next()
+                if unsigned:
+                    name = "unsigned " + name
+                elif signed and name == "char":
+                    name = "signed char"
+                return ast.BuiltinType(t.file, t.line, t.col, name)
             if t.text == "struct":
                 return self.parse_struct_type()
             if t.text == "enum":
                 return self.parse_enum_type()
-        if t.kind == "id" and self.is_typename(t.text):
+        if not unsigned and not signed:
+            if t.kind == "id" and self.is_typename(t.text):
+                self.s.next()
+                return self.lookup(t.text)[1]
+        elif t.kind == "id" and self.is_typename(t.text):
+            # `unsigned U` over an integer typedef: the typedef carries the
+            # base; blcc composes the unsigned view of its underlying type.
+            base = self.lookup(t.text)[1]
             self.s.next()
-            return self.lookup(t.text)[1]
+            if unsigned and isinstance(base, ast.BuiltinType) \
+                    and base.name in ("char", "short", "int", "long",
+                                       "long long"):
+                return ast.BuiltinType(t.file, t.line, t.col,
+                                       "unsigned " + base.name)
+            return base
+        elif unsigned or signed:
+            name = "unsigned int" if unsigned else "int"  # bare `unsigned`
+            return ast.BuiltinType(t.file, t.line, t.col, name)
         self._parse_err(t, "expected a type")
+
+    def _skip_qualifiers(self) -> None:
+        while self._at("const", "volatile", "__volatile__", "restrict",
+                       "__restrict", "__restrict__"):
+            self.s.next()
 
     def parse_struct_type(self) -> ast.Node:
         tok = self.s.next()  # 'struct'

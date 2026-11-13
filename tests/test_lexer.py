@@ -1,5 +1,6 @@
 """Lexer unit tests: token kinds, file:line:col, escapes, comments (§3/§8)."""
 import re
+import struct
 
 import pytest
 
@@ -126,18 +127,22 @@ def test_stray_hash_outside_directive():
 
 
 def test_float_literal_is_float_diagnostic():
-    # §9 negative contract: a float literal is a lex diagnostic naming 'float'.
-    with pytest.raises(DiagError) as ei:
-        lex("int x = 1.5;")
-    assert "'float'" in ei.value.message
-    assert ei.value.found == "1.5"
-    assert POS_RE.match(str(ei.value))
+    # M2 §1 row 14 re-sync: a float literal now LEXES as a "flt" token
+    # carrying IEEE-754 bits (double storage support); arithmetic stays
+    # LOUD at sema (tests/test_core_m2_* FP rows). The GA-era lex-diag
+    # pin is SUPERSEDED by plan-m2-core.md row 14 (SUPPORT storage /
+    # DEFER+LOUD arithmetic).
+    toks = [tk for tk in lex("int x = 1.5;") if tk.kind == "flt"]
+    assert len(toks) == 1
+    assert toks[0].value == struct.unpack("<Q", struct.pack("<d", 1.5))[0]
+    assert toks[0].itype == "double"
+    assert toks[0].text == "1.5"
 
 
 def test_float_exponent_is_float_diagnostic():
-    with pytest.raises(DiagError) as ei:
-        lex("int x = 2e3;")
-    assert "'float'" in ei.value.message
+    toks = [tk for tk in lex("int x = 2e3;") if tk.kind == "flt"]
+    assert len(toks) == 1
+    assert toks[0].value == struct.unpack("<Q", struct.pack("<d", 2e3))[0]
 
 
 def test_malformed_number_is_diagnostic():

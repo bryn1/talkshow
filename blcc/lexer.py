@@ -6,6 +6,7 @@ diagnostic naming the offending text.
 """
 from __future__ import annotations
 
+import struct
 from dataclasses import dataclass
 from typing import List, Optional
 
@@ -15,6 +16,14 @@ KEYWORDS = frozenset({
     "case", "default", "break", "continue", "return", "sizeof",
     # §5 constructs kept as keywords so diagnostics can name them exactly:
     "goto", "float", "double", "union", "unsigned",
+    # M2 (plan-m2-core §4.1): the extended declaration-specifier vocabulary
+    # and the GNU spellings the parser must SEE as keywords to fold (or to
+    # reject LOUD with a stable, classifiable diagnostic text):
+    "signed", "__signed__", "__signed", "register", "inline", "__inline__",
+    "__inline", "__typeof",
+    "volatile", "__volatile__", "__label__", "typeof", "__typeof__",
+    "__extension__", "_Generic", "asm", "__asm__", "__attribute__",
+    "__alignof__", "restrict", "__restrict__", "__restrict",
 })
 
 DIGITS = set("0123456789")
@@ -62,7 +71,11 @@ class SourceLine:
 
 @dataclass(frozen=True)
 class Token:
-    """kind: id | kw | int | char | str | punct | eof; value = decoded literal."""
+    """kind: id | kw | int | flt | char | str | punct | eof; value = decoded
+    literal. 'int' tokens carry C's literal TYPE in itype (§2.1: the
+    hex/decimal paths differ — hex may take the unsigned type early,
+    decimal only reaches signed types first); 'flt' value = IEEE-754 bits
+    (8 bytes double, 4 bytes float — suffix f/F)."""
 
     kind: str
     text: str
@@ -70,6 +83,7 @@ class Token:
     line: int
     col: int
     value: object = None
+    itype: str = "int"
 
 
 class DiagError(Exception):
@@ -170,9 +184,20 @@ class Lexer:
         return toks
 
     def _number(self, src: SourceLine, text: str, i: int):
+        """Integer/float literal per §2.1 (gcc 11.4 -std=gnu89 measured).
+        Radices: 0x hex, 0b binary (GNU, rc 0 in gnu89), 0 octal, decimal.
+        Suffixes: u, l, ll (and LL/UU spellings, order-free — `1lU` rc 0);
+        floats take f/F/l/L. Type selection: DECIMAL literals only reach
+        signed types first (int→long→long long→unsigned long long);
+        HEX/OCTAL/BINARY may take the unsigned type early (int→unsigned→
+        long→unsigned long→long long→unsigned long long). 08/09 are LOUD
+        (gcc rc 1); so are bad suffixes and out-of-range values."""
         start = i
         n = len(text)
+        # -- optional radix prefix ------------------------------------------
+        radix = 10
         if text[i] == "0" and i + 1 < n and text[i + 1] in "xX":
+            radix = 16
             i += 2
             j = i
             while j < n and text[j] in HEX_DIGITS:
@@ -181,42 +206,115 @@ class Lexer:
                 raise DiagError("lex", src.file, src.line, start + 1,
                                 "malformed hex integer literal", text[start:j + 1])
             i = j
+        elif text[i] == "0" and i + 1 < n and text[i + 1] in "bB":
+            radix = 2
+            i += 2
+            j = i
+            while j < n and text[j] in "01":
+                j += 1
+            if j == i:
+                raise DiagError("lex", src.file, src.line, start + 1,
+                                "malformed binary integer literal",
+                                text[start:j + 1])
+            i = j
+        elif text[i] == "0" and i + 1 < n and text[i + 1] in DIGITS:
+            radix = 8
+            i += 1
+            j = i
+            while j < n and text[j] in OCT_DIGITS:
+                j += 1
+            if j < n and text[j] in "89":
+                raise DiagError("lex", src.file, src.line, start + 1,
+                                "octal literal has invalid digit '{}'".format(
+                                    text[j]), text[start:j + 1])
+            i = j
         else:
             while i < n and text[i] in DIGITS:
                 i += 1
-            if i < n and text[i] == ".":
+
+        # -- float spellings: '.' exponent part, or e/E exponent ------------
+        is_float = False
+        size_f = 8
+        if radix == 10 and i < n and text[i] == ".":
+            is_float = True
+            i += 1
+            while i < n and text[i] in DIGITS:
                 i += 1
+            if i < n and text[i] in "eE":
+                i += 1
+                if i < n and text[i] in "+-":
+                    i += 1
                 while i < n and text[i] in DIGITS:
                     i += 1
-                if i < n and text[i] in "eE":
-                    i += 1
-                    if i < n and text[i] in "+-":
-                        i += 1
-                    while i < n and text[i] in DIGITS:
-                        i += 1
-                raise DiagError("lex", src.file, src.line, start + 1,
-                                "'float' is not in the subset (§4: int types only)",
-                                text[start:i])
-            if i < n and text[i] in "eE":
-                j = i + 1
-                if j < n and text[j] in "+-":
-                    j += 1
-                k = j
-                while k < n and text[k] in DIGITS:
-                    k += 1
-                if k > j:
-                    raise DiagError("lex", src.file, src.line, start + 1,
-                                    "'float' is not in the subset (§4: int types only)",
-                                    text[start:k])
-        if i < n and (text[i] in ID_CHARS):
+        elif radix == 10 and i < n and text[i] in "eE":
+            j = i + 1
+            if j < n and text[j] in "+-":
+                j += 1
+            k = j
+            while k < n and text[k] in DIGITS:
+                k += 1
+            if k > j:
+                is_float = True
+                i = k
+        if is_float:
+            if i < n and text[i] in "fF":
+                size_f = 4
+                i += 1
+            elif i < n and text[i] in "lL":
+                i += 1
+            raw = text[start:i]
+            bits, = struct.unpack("<Q" if size_f == 8 else "<I",
+                                  struct.pack("<d" if size_f == 8 else "<f",
+                                              float(raw.rstrip("fFlL"))))
+            return Token("flt", raw, src.file, src.line, start + 1,
+                         bits, "double" if size_f == 8 else "float"), i
+
+        # -- integer suffix: u/U + l/ll in any order (measured `1lU` rc 0) --
+        sfx_start = i
+        while i < n and text[i] in "uUlL":
+            i += 1
+        sfx = text[sfx_start:i].lower()
+        if sfx and sfx not in ("u", "l", "ll", "ul", "lu", "ull", "llu"):
             j = i
             while j < n and text[j] in ID_CHARS:
                 j += 1
             raise DiagError("lex", src.file, src.line, start + 1,
                             "malformed number literal", text[start:j])
-        raw = text[start:i]
-        value = int(raw, 16) if raw[:2].lower() == "0x" else int(raw, 10)
-        return Token("int", raw, src.file, src.line, start + 1, value), i
+        if i < n and text[i] in ID_CHARS:
+            j = i
+            while j < n and text[j] in ID_CHARS:
+                j += 1
+            raise DiagError("lex", src.file, src.line, start + 1,
+                            "malformed number literal", text[start:j])
+        raw = text[start:sfx_start]
+        digits = raw[2:] if radix == 16 else \
+            (raw[2:] if radix == 2 else (raw[1:] if radix == 8 else raw))
+        value = int(digits, radix)
+        unsigned = "u" in sfx
+        width = 1 if not sfx or sfx in ("u",) else (2 if sfx in ("l", "ul", "lu")
+                                                    else 3)
+        if radix == 10 and not unsigned:
+            chain = [(1, "int"), (2, "long"), (3, "long long"),
+                     (3, "unsigned long long")]      # decimal: signed first
+        else:
+            chain = [(1, "int"), (1, "unsigned int"), (2, "long"),
+                     (2, "unsigned long"), (3, "long long"),
+                     (3, "unsigned long long")]
+        if unsigned:
+            chain = [(w, t) for (w, t) in chain if t.startswith("unsigned")]
+        if width > 1:
+            chain = [(w, t) for (w, t) in chain if w >= width]
+        _BITS = {"int": 32, "unsigned int": 32, "long": 64,
+                 "unsigned long": 64, "long long": 64,
+                 "unsigned long long": 64}
+        for w, tname in chain:
+            bitsz = _BITS[tname]
+            signed = not tname.startswith("unsigned")
+            if value < 1 << (bitsz - (1 if signed else 0)):
+                return Token("int", text[start:i], src.file, src.line,
+                             start + 1, value, tname), i
+        raise DiagError("lex", src.file, src.line, start + 1,
+                        "integer constant out of range", text[start:i])
 
     def _literal(self, src: SourceLine, text: str, i: int, toks: List[Token]) -> int:
         quote = text[i]

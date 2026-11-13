@@ -20,8 +20,8 @@ from typing import Dict, List, Optional, Tuple
 
 from blcc import ast
 from blcc.data import DataEmitter
-from blcc.expr_codegen import REG_ARGS, ExprEmitter
-from blcc.types import TypeMap, _roundup8
+from blcc.expr_codegen import REG_ARGS, ExprEmitter, _fp
+from blcc.types import TypeMap, _roundup8, is_unsigned
 
 _STORE_OP = {1: "movb", 2: "movw", 4: "movl", 8: "movq"}
 _REG = {1: {"a": "%al", "c": "%cl", "d": "%dl"},
@@ -122,13 +122,17 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter):
 
     def _load(self, ty: ast.Node, mem: str, at=None) -> None:
         sz = self._size(self._decay(ty), at)
+        uns = is_unsigned(ty) and sz < 8
         if sz == 1:
-            self._e("movsbq {}, %rax".format(mem))
+            self._e("movzbq {}, %rax".format(mem) if uns
+                    else "movsbq {}, %rax".format(mem))
         elif sz == 2:
-            self._e("movswq {}, %rax".format(mem))
+            self._e("movzwq {}, %rax".format(mem) if uns
+                    else "movswq {}, %rax".format(mem))
         elif sz == 4:
             self._e("movl {}, %eax".format(mem))     # 32-bit op per §4
-            self._e("movslq %eax, %rax")             # re-intern negatives
+            if not uns:
+                self._e("movslq %eax, %rax")         # re-intern negatives
         elif sz == 8:
             self._e("movq {}, %rax".format(mem))
         else:
@@ -184,8 +188,13 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter):
             self._err(fd, "'struct' returned by value is 'struct assignment' "
                       "(§5) — return a pointer", fd.name, "asm")
         fn.epilogue = self._label("ep_" + fd.name)
+        self._fn_ret = fd.ret_type
         for i, p in enumerate(fd.params):
             pty = self._decay(p.type)
+            if _fp(pty):
+                self._err(fd, "'float'/'double' parameter is DEFERRED — "
+                          "storage only (§1 row 14; System V passes FP in "
+                          "%xmm regs)", p.name or fd.name, "asm")
             if isinstance(pty, ast.StructType):
                 self._err(fd, "'struct' passed by value is 'struct assignment' "
                           "(§5) — pass a pointer", p.name or fd.name, "asm")
@@ -261,7 +270,9 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter):
             self._stmt_for(n)
         elif isinstance(n, ast.Return):
             if n.value is not None:
+                self._fp_guard(self._ty(n.value), self._fn_ret, n)
                 self._emit_expr(n.value)
+                self._convert(self._fn_ret)   # §2.2: result wraps to fn type
             else:
                 self._e("movq $0, %rax")
             self._e("jmp {}".format(self.fn.epilogue))
@@ -342,6 +353,7 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter):
         if isinstance(ty, ast.ArrayType):
             self._err(vd, "array initializer must be a brace list or string "
                       "literal (§4)", self._what(vd.init))
+        self._fp_guard(self._ty(vd.init), ty, vd)
         self._emit_expr(vd.init)
         self._store(self._decay(ty), "{}(%rbp)".format(off), at=vd)
 
