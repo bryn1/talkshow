@@ -205,6 +205,12 @@ class ExprParser:
             return ast.StrLit(t.file, t.line, t.col, t.value)
         if t.kind == "id":
             return ast.Ident(t.file, t.line, t.col, t.text)
+        if t.kind == "punct" and t.text == "&&":
+            # §2.6 (M2 row 4d): &&label — the ADDRESS of a C label (void *),
+            # the `_THIS_IP_` shape. Computed goto stays out (row 4c): this
+            # is ADDRESS-taking only, never `goto *`. (t consumed at head.)
+            lt = self.s.expect_id("parse")
+            return ast.LabelAddr(t.file, t.line, t.col, lt.text)
         if t.kind == "punct" and t.text == "(":
             expr = self.parse_expression()
             self.s.expect_punct(")")

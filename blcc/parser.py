@@ -35,7 +35,8 @@ class Parser:
     _STMT_HANDLERS = {"if": "parse_if", "while": "parse_while",
                       "do": "parse_do_while", "for": "parse_for",
                       "switch": "parse_switch", "case": "parse_nested_label",
-                      "default": "parse_nested_label"}
+                      "default": "parse_nested_label",
+                      "__label__": "parse_label_decl"}
 
     def __init__(self, toks: List[Token]):
         self.s = TokenStream(toks)
@@ -474,7 +475,19 @@ class Parser:
             if handler is not None:
                 return getattr(self, handler)()
             if t.text == "goto":
-                self._sema(t, "'goto' is not in the subset (§5)")
+                # M2 §1 row 4: real goto. `goto *p` stays a LOUD parse wall
+                # (§1 row 4c / M56 — the new grammar must not eat the '*').
+                self.s.next()
+                if self.s.at_punct("*"):
+                    st = self.s.next()
+                    self._parse_err(
+                        st, "a computed 'goto' (goto *ptr) is not in the "
+                        "subset (§5 — DEFER, 0 sites in the 692)")
+                lt = self.s.expect_id()
+                self.s.expect_punct(";")
+                return ast.Goto(t.file, t.line, t.col, lt.text)
+            if t.text == "__label__":
+                return self.parse_label_decl()
             if t.text in ("break", "continue"):
                 self.s.next()
                 self.s.expect_punct(";")
@@ -487,8 +500,15 @@ class Parser:
                 return ast.Return(t.file, t.line, t.col, value)
             if self.starts_decl():
                 self._parse_err(t, "'declaration' in an unbraced statement — use a '{ ... }' block")
-        if t.kind == "id" and self.s.peek(1).kind == "punct" and self.s.peek(1).text == ":":
-            self._sema(t, "'label' (goto label) is not in the subset — only case/default exist (§5)")
+        if t.kind == "id" and self.s.peek(1).kind == "punct" and \
+                self.s.peek(1).text == ":":
+            # M2 §1 row 4: real label statement (`lab: stmt`), flat
+            # function-wide namespace (§2.5); a label and an identifier of
+            # the same spelling COEXIST — the label namespace is separate.
+            self.s.next()                      # the identifier
+            self.s.next()                      # ':'
+            stmt = self.parse_statement()
+            return ast.Label(t.file, t.line, t.col, t.text, stmt)
         if t.kind == "punct" and t.text == "{":
             return self.parse_compound()
         if self.s.at_punct(";"):
@@ -551,6 +571,33 @@ class Parser:
 
     # -- switch -----------------------------------------------------------------------------------
 
+    def parse_label_decl(self) -> ast.Node:
+        # §1 row 4d: `__label__ a, b;` — names ONLY; the labels themselves
+        # are ordinary `a:` statements (M2-C1 map resolves &&a).
+        t = self._accept("__label__")
+        names: List[str] = []
+        while True:
+            names.append(self.s.expect_id("parse").text)
+            if not self.s.accept_punct(","):
+                break
+        self.s.expect_punct(";")
+        return ast.LabelDecl(t.file, t.line, t.col, tuple(names))
+
+    def parse_case_arm(self):
+        """`case EXPR :` or `case EXPR ... EXPR :` (§1 row 4b, gnu89 range
+        extension IN this gcc — measured; reversed range is an EMPTY set,
+        gcc accepts it silently)."""
+        ct = self.s.next()                      # 'case'
+        lo = self.parse_int_constant("'case' label needs an integer "
+                                     "constant (§4)")
+        if self.s.accept_punct("..."):
+            hi = self.parse_int_constant("'case' range bound needs an "
+                                         "integer constant (§4b)")
+            self.s.expect_punct(":")
+            return ("range", (lo, hi), ct)
+        self.s.expect_punct(":")
+        return ("case", lo, ct)
+
     def parse_switch(self) -> ast.Node:
         t = self._accept("switch")
         self.s.expect_punct("(")
@@ -562,10 +609,8 @@ class Parser:
         labels: List[tuple] = []
         while not self.s.at_punct("}") and self.s.peek().kind != "eof":
             if self._at("case"):
-                ct = self.s.next()
-                value = self.parse_int_constant("'case' label needs an integer constant (§4)")
-                self.s.expect_punct(":")
-                labels.append(("case", value, ct))
+                kind, value, ct = self.parse_case_arm()
+                labels.append((kind, value, ct))
                 continue
             if self._at("default"):
                 dt = self.s.next()
@@ -574,31 +619,43 @@ class Parser:
                 continue
             stmt = self.parse_statement()
             for kind, value, ltok in reversed(labels):
-                stmt = ast.Case(ltok.file, ltok.line, ltok.col, value, stmt) if kind == "case" \
-                    else ast.Default(ltok.file, ltok.line, ltok.col, stmt)
+                stmt = self._wrap_case(kind, value, ltok, stmt)
             labels = []
             stmts.append(stmt)
         for kind, value, ltok in labels:  # trailing labels: empty arms are legal
-            stmts.append(ast.Case(ltok.file, ltok.line, ltok.col, value, None) if kind == "case"
-                         else ast.Default(ltok.file, ltok.line, ltok.col, None))
+            stmts.append(self._wrap_case(kind, value, ltok, None))
         self.s.expect_punct("}")
         self.switch_depth -= 1
         self._check_case_labels(stmts)
         return ast.Switch(t.file, t.line, t.col, control, tuple(stmts))
 
+    def _wrap_case(self, kind, value, ltok, stmt) -> ast.Node:
+        if kind == "case":
+            return ast.Case(ltok.file, ltok.line, ltok.col, value, stmt)
+        if kind == "range":
+            return ast.CaseRange(ltok.file, ltok.line, ltok.col,
+                                 value[0], value[1], stmt)
+        return ast.Default(ltok.file, ltok.line, ltok.col, stmt)
+
     def parse_nested_label(self) -> ast.Node:
-        t = self.s.next()  # 'case' / 'default' outside the body loop
+        t = self.s.peek()  # 'case' / 'default' outside the body loop
         if self.switch_depth == 0:
             self._sema(t, "'{}' label outside a 'switch' is not in the subset (§4)".format(t.text))
         if t.text == "case":
-            value = self.parse_int_constant("'case' label needs an integer constant (§4)")
-            self.s.expect_punct(":")
-            return ast.Case(t.file, t.line, t.col, value, self.parse_statement())
+            kind, value, ct = self.parse_case_arm()
+            return self._wrap_case(kind, value, ct, self.parse_statement())
+        self.s.next()
         self.s.expect_punct(":")
         return ast.Default(t.file, t.line, t.col, self.parse_statement())
 
     def _check_case_labels(self, stmts: List[ast.Node]) -> None:
+        # §2.5 dup/overlap RULES (M37; oracle-worded gcc 11.4): duplicate
+        # value = error; value inside an earlier range = "duplicate (or
+        # overlapping) case value"; two overlapping ranges likewise; a
+        # SECOND default in a SECOND switch of one function is FINE (each
+        # switch's labels are its own — the inner-Switch skip below).
         seen: Dict[int, bool] = {}
+        spans: List[tuple] = []              # (lo, hi) ranges
         has_default = False
         stack = list(stmts)
         while stack:
@@ -609,13 +666,38 @@ class Parser:
                 if s.value in seen:
                     self._sema(s, "'duplicate case' label value {} in one switch (§4)".format(s.value))
                 seen[s.value] = True
+                for (lo, hi, _lt) in spans:
+                    if lo <= s.value <= hi:
+                        self._sema(s, "'duplicate (or overlapping) case' "
+                                   "value {} lies in an earlier case range "
+                                   "({} ... {}) (§2.5)".format(
+                                       s.value, lo, hi),
+                                   "duplicate (or overlapping) case value")
+            elif isinstance(s, ast.CaseRange):
+                for v in seen:                             # small, exact
+                    if s.lo <= v <= s.hi:
+                        self._sema(s, "'duplicate (or overlapping) case' "
+                                   "value {} in one switch (§2.5)".format(v),
+                                   "duplicate (or overlapping) case value")
+                if s.lo <= s.hi:
+                    for (lo, hi, lt) in spans:
+                        if lo <= s.hi and s.lo <= hi:
+                            self._sema(s, "'duplicate (or overlapping) "
+                                       "case' range {} ... {} overlaps "
+                                       "{} ... {} (§2.5)".format(
+                                           s.lo, s.hi, lo, hi),
+                                       "duplicate (or overlapping) case value")
+                    spans.append((s.lo, s.hi, s))
             elif isinstance(s, ast.Default):
                 if has_default:
                     self._sema(s, "'default' appears more than once in one switch (§4)", "default")
                 has_default = True
             if isinstance(s, ast.Compound):
                 stack.extend(s.body)
-            elif isinstance(s, (ast.Case, ast.Default)):
+            elif isinstance(s, (ast.Case, ast.Default, ast.CaseRange)):
+                if s.stmt is not None:
+                    stack.append(s.stmt)
+            elif isinstance(s, ast.Label):
                 if s.stmt is not None:
                     stack.append(s.stmt)
             elif isinstance(s, ast.If):

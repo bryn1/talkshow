@@ -54,6 +54,8 @@ def what(n) -> str:
         return "floating literal"
     if isinstance(n, ast.StrLit):
         return "string literal"
+    if isinstance(n, ast.LabelAddr):
+        return "&&label"
     if isinstance(n, ast.Call):
         return "call expression"
     if isinstance(n, ast.Cast):
@@ -343,6 +345,11 @@ class TypeMap:
         if isinstance(n, ast.StrLit):
             return ast.PtrType(n.file, n.line, n.col,
                                ast.BuiltinType(n.file, n.line, n.col, "char"))
+        if isinstance(n, ast.LabelAddr):
+            # §2.6: `&&label` is void* (code address; _THIS_IP_ casts it to
+            # unsigned long through the ordinary ptr->int path).
+            return ast.PtrType(n.file, n.line, n.col,
+                               ast.BuiltinType(n.file, n.line, n.col, "void"))
         if isinstance(n, ast.Sizeof):
             return ast.BuiltinType(n.file, n.line, n.col, "long")
         if isinstance(n, ast.Ident):

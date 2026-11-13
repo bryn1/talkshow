@@ -80,6 +80,11 @@ class ExprEmitter:
     def _ex_strlit(self, n) -> None:
         self._e("leaq {}(%rip), %rax".format(self._str_label(n.value)))
 
+    def _ex_labeladdr(self, n) -> None:
+        # §2.6 `_THIS_IP_` shape: `&&label` = the label's code address, via
+        # the M2-C1 name through the shared map (never a fresh name).
+        self._e("leaq {}(%rip), %rax".format(self._label_ref(n, n.name)))
+
     def _ex_ident(self, n) -> None:
         if n.name in self.fn.locals:
             off, ty = self.fn.locals[n.name]

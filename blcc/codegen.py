@@ -97,6 +97,52 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter):
         self._label_n += 1
         return ".L{}_{}".format(what, self._label_n)
 
+    # -- M2-C1: the label pre-pass (§2A/§2.5, MC 12460) ----------------------
+
+    @staticmethod
+    def _child_stmts(s):
+        if isinstance(s, ast.Compound):
+            return list(s.body)
+        if isinstance(s, ast.If):
+            return [x for x in (s.then, s.orelse) if x is not None]
+        if isinstance(s, (ast.While, ast.DoWhile, ast.For)):
+            return [s.body]
+        if isinstance(s, ast.Switch):
+            return list(s.body)
+        if isinstance(s, (ast.Case, ast.Default, ast.CaseRange, ast.Label)):
+            return [s.stmt] if s.stmt is not None else []
+        return []
+
+    def _collect_labels(self, fd: ast.FuncDecl):
+        """Enumerate every C label of the function body (flat function-wide
+        namespace, §2.5) and assign the deterministic M2-C1 name
+        `.L<fn>_<label>_<k>`. Duplicate label = sema error (gcc: `duplicate
+        label 'A'`). Undefined goto/&&label targets resolve to LOUD through
+        _label_ref — never a silently-fresh name (M2-C4)."""
+        seen: Dict[str, int] = {}
+        out: Dict[str, str] = {}
+        stack = list(self._child_stmts(fd.body))
+        while stack:
+            s = stack.pop(0)                      # document order ⇒ k
+            for c in self._child_stmts(s):
+                stack.append(c)
+            if isinstance(s, ast.Label):
+                k = seen.get(s.name, 0)
+                if k:
+                    self._err(s, "duplicate label '{}' in one function "
+                              "(§2.5 — flat function-wide namespace)".format(
+                                  s.name), s.name)
+                seen[s.name] = k + 1
+                out[s.name] = ".L{}_{}_{}".format(fd.name, s.name, k)
+        return out
+
+    def _label_ref(self, at, name: str) -> str:
+        lbl = self.fn_labels.get(name)
+        if lbl is None:
+            self._err(at, "label '{}' used but not defined (§2.5)".format(
+                name), name)
+        return lbl
+
     def _t(self) -> str:
         self.fn.temp_top += 1
         self.fn.temp_high = max(self.fn.temp_high, self.fn.temp_top)
@@ -181,6 +227,18 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter):
 
     def _emit_func(self, fd: ast.FuncDecl):
         self.fn = fn = _FnState(fd.name)
+        # §2A M2-C1 (VERBATIM contract): "On collecting a function body, a
+        # pre-pass enumerates every C label (nested-block labels included —
+        # C label scope is the whole function) and assigns each a
+        # deterministic asm name (suggested `.L<fn>_<label>_<k>`, k =
+        # duplicate-disambiguator), as a pure function of (function, label
+        # text, occurrence index) — the goto-site `%l` substitution must
+        # know the name at the asm statement, before emission reaches the
+        # label". M2-C2: it runs BEFORE any statement of the function is
+        # emitted (every kernel goto is forward); the name never changes.
+        # M2-C4: M3's `asm goto (… : : : : L)` label operands MUST resolve
+        # through THIS map (self.fn_labels), by C identifier text.
+        self.fn_labels = self._collect_labels(fd)
         if len(fd.params) > 6:
             self._err(fd, "more than 6 parameters is beyond the §6 call ABI",
                       fd.name, "asm")
@@ -286,10 +344,19 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter):
             self._e("jmp {}".format(self.loops[-1][1]))
         elif isinstance(n, ast.Switch):
             self._stmt_switch(n)
-        elif isinstance(n, (ast.Case, ast.Default)):
+        elif isinstance(n, (ast.Case, ast.Default, ast.CaseRange)):
             self.fn.lines.append("{}:".format(self._case_lbl[id(n)]))
             if n.stmt is not None:
                 self._stmt(n.stmt)
+        elif isinstance(n, ast.Label):
+            # §2A M2-C3: the M2-C1 name, emitted at column 0 at the first
+            # byte of its labeled statement, exactly once.
+            self.fn.lines.append("{}:".format(self.fn_labels[n.name]))
+            self._stmt(n.stmt)
+        elif isinstance(n, ast.Goto):
+            self._e("jmp {}".format(self._label_ref(n, n.name)))
+        elif isinstance(n, ast.LabelDecl):
+            pass                     # §1 row 4d: names only, no emission
         elif isinstance(n, ast.VarDecl):
             self._stmt_vardecl(n)
         elif isinstance(n, ast.EnumDecl):
@@ -434,6 +501,22 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter):
         self.loops.append((l_end, outer_continue))
         self._emit_expr(sw.control)
         for node, lab in order:
+            if isinstance(node, ast.CaseRange):
+                # §1 row 4b: `case lo ... hi:` — INCLUSIVE range, both-sided
+                # signed compare (values that fell here matched no earlier
+                # arm; the chain order is source order = C semantics for
+                # the (disjoint) sets gcc accepts — overlaps are a parse
+                # error, §2.5).
+                skip = self._label("rgskip")
+                for bound, cc in ((node.lo, "jl"), (node.hi, "jle")):
+                    if -2 ** 31 <= bound < 2 ** 31:
+                        self._e("cmpq ${}, %rax".format(bound))
+                    else:
+                        self._e("movabsq ${}, %rcx".format(bound))
+                        self._e("cmpq %rcx, %rax")
+                    self._e("{} {}".format(cc, skip if cc == "jl" else lab))
+                self.fn.lines.append("{}:".format(skip))
+                continue
             v = node.value
             if -2 ** 31 <= v < 2 ** 31:
                 self._e("cmpq ${}, %rax".format(v))
@@ -454,6 +537,12 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter):
                 order.append((s, lab))
                 if s.stmt is not None:
                     self._collect_cases([s.stmt], order, default)
+            elif isinstance(s, ast.CaseRange):
+                lab = self._label("rng")
+                self._case_lbl[id(s)] = lab
+                order.append((s, lab))
+                if s.stmt is not None:
+                    self._collect_cases([s.stmt], order, default)
             elif isinstance(s, ast.Default):
                 if default:
                     self._err(s, "'default' appears more than once in one "
@@ -465,6 +554,12 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter):
                     self._collect_cases([s.stmt], order, default)
             elif isinstance(s, ast.Compound):
                 self._collect_cases(s.body, order, default)
+            elif isinstance(s, ast.Label):
+                # label-on-case (`lab3: case 3:` §2.5): the label is
+                # transparent to case collection — the case still heads the
+                # switch, goto lab3 still lands there.
+                if s.stmt is not None:
+                    self._collect_cases([s.stmt], order, default)
             elif isinstance(s, ast.If):
                 self._collect_cases([s.then], order, default)
                 if s.orelse is not None:

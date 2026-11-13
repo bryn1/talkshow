@@ -254,11 +254,14 @@ def test_double_is_diagnostic():
     assert tu.decls[0].type.name == "double"
 
 
-def test_goto_and_labels_are_diagnostics():
-    d = diag("int main(void){ goto end; }")
-    assert "'goto'" in d.message
-    d = diag("int main(void){ end: return 0; }")
-    assert "'label'" in d.message and "goto" in d.message
+def test_goto_and_labels_parse():
+    # M2 RESYNC (§1 row 4): goto + labels are real grammar now (the parse
+    # wall is superseded); §2.5 rules (undefined/duplicate) stay LOUD —
+    # pinned in test_independent_negative + tests/test_core_m2_lab.py.
+    tu = parse_text("int main(void){ goto end; end: ; return 0; }", "t.c")
+    body = tu.decls[0].body.body
+    assert isinstance(body[0], ast.Goto) and body[0].name == "end"
+    assert isinstance(body[1], ast.Label) and body[1].name == "end"
 
 
 def test_union_is_diagnostic():

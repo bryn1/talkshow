@@ -174,9 +174,37 @@ class Switch(Node):
 
 
 @dataclass(frozen=True)
+class Goto(Node):
+    name: str
+
+
+@dataclass(frozen=True)
+class Label(Node):
+    name: str
+    stmt: Node
+
+
+@dataclass(frozen=True)
+class LabelDecl(Node):
+    names: Tuple[str, ...]         # __label__ a, b;  (§1 row 4d)
+
+
+@dataclass(frozen=True)
+class LabelAddr(Node):
+    name: str                      # &&label  (§2.6; _THIS_IP_ shape)
+
+
+@dataclass(frozen=True)
 class Case(Node):
     value: int               # compile-time constant (§4)
     stmt: Optional[Node]
+
+
+@dataclass(frozen=True)
+class CaseRange(Node):
+    lo: int                  # gnu89 `case lo ... hi:` (§1 row 4b; measured
+    hi: int                  # IN in this gcc; reversed range = empty,
+    stmt: Optional[Node]     # gcc accepts it silently)
 
 
 @dataclass(frozen=True)

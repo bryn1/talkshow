@@ -102,12 +102,20 @@ def test_double_type():
 
 
 def test_goto():
-    assert_loud("int main(void)\n{\n    goto done;\n    return 0;\n}\n",
-                "goto", "goto", line=3, col=5)
+    # M2 RESYNC (§1 row 4 / §2.5): goto + labels are SUPPORT. The GA-era
+    # rejection is superseded; what MUST stay LOUD is the §2.5 RULES:
+    # undefined target (gcc: "label 'nosuch' used but not defined") and
+    # duplicate labels — pinned via assert_loud below, run-leg in
+    # tests/test_core_m2_lab.py.
+    assert_loud("int main(void)\n{\n    goto nosuch;\n    return 0;\n}\n",
+                "golabel", "nosuch", line=3, col=5)
 
 
 def test_label():
-    assert_loud("int main(void){ done: return 0; }\n", "label", "label")
+    # duplicate label 'A' (§2.5, gcc rc1 measured) stays LOUD; a plain
+    # label statement COMPILES (acceptance leg lives in test_core_m2_lab).
+    assert_loud("int main(void){ A: ; A: ; return 0; }\n",
+                "dlabel", "A")
 
 
 def test_union():
