@@ -174,12 +174,17 @@ class Preprocessor:
             if kind == "U":
                 self.defs.pop(arg, None)
                 continue
-            name, _, body = arg.partition("=")
+            name, sep, body = arg.partition("=")
             m = re.match(r"[A-Za-z_][A-Za-z0-9_]*", name)
             # -D may spell a function-like macro: SQ(x)=((x)*(x)) (R17).
             if not m or (m.end() != len(name) and name[m.end()] != "("):
                 raise DiagError("pp", "<command-line>", 1, 1,
                                 "-D needs an identifier", arg)
+            if not sep:
+                # NO '=' at all is EXACTLY -Dname=1 (gcc 11.4 -dM spells
+                # `#define name 1`; verdict-c4 F-c4-A, SILENT). An explicit
+                # `-Dname=` keeps its EMPTY body (oracle `int x = ;` rc 0).
+                body = "1"
             text = ("%s %s" % (name, body)) if body else name
             self._define("<command-line>", 1, tokenize(text),
                          warn_ctx="#define " + arg)
