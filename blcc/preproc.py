@@ -1,7 +1,7 @@
 """M1 GCC-compatible preprocessor: directive dispatch & source bookkeeping
 (plan R1, R2, R4, R10–R14, R17, R20, R21).
 
-LINES (654 > 400): directive dispatch is ONE concern — the #if-conditional
+LINES (673 > 400): directive dispatch is ONE concern — the #if-conditional
 stack, #line origin state and include search must share the per-file state
 machine; splitting would duplicate that state across files.
 
@@ -181,12 +181,31 @@ class Preprocessor:
             # bare `-DFOO` -> `1` exactly (F-c4-A, MC 12456) while the
             # explicit `-Dname=` keeps its EMPTY body (oracle `int x = ;`
             # rc 0 — the c6 fix-boundary row).
+            # A directive is a LINE: the synthetic one ends at the first
+            # newline of the operand, and a lone \r ends it too (F-c6-A
+            # S07/S18/S54/S55 + the c8 \r rows, MC 12465). The implicit
+            # ` 1` of a bare -D is appended AFTER the whole operand, so
+            # any clip puts it past the line end: a clipped bare name is
+            # EMPTY (S54 `V V`), while a same-line tail still reads `1`
+            # only with no clip (`-DFOO BAR` -> `BAR 1`, S44 stands). A
+            # '=' past the clip sits on the dead line: it neither
+            # separates (S55/N01 clip the body) nor suppresses. The tail
+            # past the EOL never reaches either reader (N11: no
+            # extra-tokens warning from `-UFOO\nBAR`).
+            eol = min((i for i in (arg.find("\n"), arg.find("\r"))
+                       if i >= 0), default=-1)
+            head = arg if eol < 0 else arg[:eol]
             if kind == "U":
-                self._undef("<command-line>", 1, tokenize(arg),
+                self._undef("<command-line>", 1, tokenize(head),
                             "-U needs an identifier", arg)
                 continue
-            name_part, sep, tail = arg.partition("=")
-            text = (name_part + " " + tail) if sep else (name_part + " 1")
+            name_part, sep, tail = head.partition("=")
+            if sep:
+                text = name_part + " " + tail
+            elif eol >= 0:
+                text = name_part + " "
+            else:
+                text = name_part + " 1"
             self._define("<command-line>", 1, tokenize(text),
                          warn_ctx="-D " + arg,
                          name_msg="-D needs an identifier")
