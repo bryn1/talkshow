@@ -430,7 +430,94 @@ class ExprEmitter(MemFoldMixin):
         Re-intern %rax through the target's own width (§2.2 table)."""
         self._convert(ty)
 
+    # -- §1 row 12 (M45): bitfield extraction and read-modify-write ----------
+
+    _BF_UNS = {"char": "unsigned char", "signed char": "unsigned char",
+               "unsigned char": "unsigned char",
+               "short": "unsigned short",
+               "unsigned short": "unsigned short",
+               "int": "unsigned int", "unsigned int": "unsigned int",
+               "long": "unsigned long", "unsigned long": "unsigned long",
+               "long long": "unsigned long long",
+               "unsigned long long": "unsigned long long"}
+
+    def _bf_addr(self, n: ast.Select) -> None:
+        """Struct base ADDRESS in %rax for a member select."""
+        if n.arrow:
+            self._emit_expr(n.base)
+        else:
+            self._emit_addr(n.base)
+
+    def _bf_mem(self, d) -> str:
+        return ("{}(%rdx)".format(d[0]) if d[0] else "(%rdx)")
+
+    def _ex_bitfield(self, n, d: Tuple) -> None:
+        boff, bit, w, un = d
+        self._bf_addr(n)
+        if boff:
+            self._e("addq ${}, %rax".format(boff))
+        # zero-extend load of the unit: the shifts below decide the sign,
+        # so the load never needs the declared signedness.
+        self._load(ast.BuiltinType(n.file, n.line, n.col,
+                                   self._BF_UNS[un]), "(%rax)", at=n)
+        # (unit << (64 - bit - w)) >> (64 - w): the LEFT shift carries the
+        # field (bits [bit, bit+w)) to the top; the RIGHT shift is sar for
+        # a signed unit (sign-extends from bit w-1, measured E2: int:31 of
+        # 0xFFFFFFFF reads -1) and shr otherwise.
+        left = 64 - bit - w
+        if left:
+            self._e("shlq ${}, %rax".format(left))
+        right = 64 - w
+        if right:
+            signed = self._BF_UNS[un] != un
+            self._e(("sarq" if signed else "shrq") +
+                    " ${}, %rax".format(right))
+        return
+
+    def _bf_store(self, n, d: Tuple) -> None:
+        """Assign to a bitfield: read-modify-write of the containing unit
+        (measured bf3 leg: clearing b leaves a intact). The expression
+        value is the CONVERTED stored value (§4 law), sign/zero-extended
+        from the field width."""
+        boff, bit, w, un = d
+        left = 64 - w
+        unit_bt = ast.BuiltinType(n.file, n.line, n.col, un)
+        uns_bt = ast.BuiltinType(n.file, n.line, n.col, self._BF_UNS[un])
+        signed = un in self._BF_UNS and self._BF_UNS[un] != un
+        self._fp_guard(self._ty(n.value), unit_bt, n)
+        self._emit_expr(n.value)
+        t = self._t()
+        self._e("movq %rax, {}".format(t))
+        self._bf_addr(n.target)
+        self._e("movq %rax, %rdx")
+        self._e("movq {}, %rcx".format(t))
+        if left:
+            self._e("shlq ${}, %rcx".format(left))
+            self._e("shrq ${}, %rcx".format(left))   # low w bits, zero-fill
+        if bit:
+            self._e("shlq ${}, %rcx".format(bit))    # position in the unit
+        self._load(uns_bt, self._bf_mem(d), at=n)    # rax = unit (zext)
+        keep = ~(((1 << w) - 1) << bit) & 0xFFFFFFFFFFFFFFFF
+        if keep >= 1 << 63:
+            keep -= 1 << 64
+        if -2 ** 31 <= keep < 2 ** 31:
+            self._e("andq ${}, %rax".format(keep))
+        else:
+            self._e("movabsq ${}, %rsi".format(keep))
+            self._e("andq %rsi, %rax")
+        self._e("orq %rcx, %rax")
+        self._store(uns_bt, self._bf_mem(d), at=n)   # width from %rax
+        self._e("movq {}, %rax".format(t))           # stored-value law:
+        if left:
+            self._e("shlq ${}, %rax".format(left))
+            self._e(("sarq" if signed else "shrq") + " ${}, %rax".format(left))
+        self._unt()
+
     def _ex_select(self, n) -> None:
+        d = self._bitfield(n)                # §1 row 12 (M45)
+        if d is not None:
+            self._ex_bitfield(n, d)
+            return
         self._emit_addr(n)
         if isinstance(self._ty(n), ast.ArrayType):
             return                         # member array decays to address (§4)
@@ -443,6 +530,11 @@ class ExprEmitter(MemFoldMixin):
         self._load(self._ty(n), "(%rax)", at=n)
 
     def _ex_assign(self, n) -> None:
+        if isinstance(n.target, ast.Select):
+            d = self._bitfield(n.target)     # §1 row 12 (M45)
+            if d is not None:
+                self._bf_store(n, d)
+                return
         ty = self._decay(self._ty(n.target))
         self._fp_guard(self._ty(n.value), ty, n)
         if isinstance(ty, ast.StructType):

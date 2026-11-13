@@ -161,9 +161,15 @@ class DataEmitter:
             # compression rule protects .bss ARRAYS, not these).
             total, slots = self._struct_layout(ty, at)[1:]
             buf = bytearray(total)
-            for i, (sname, sty, mo, ssz) in enumerate(slots):
+            for i, (sname, sty, mo, ssz, bfx) in enumerate(slots):
                 if i < len(init.items) and \
                         not isinstance(init.items[i], ast.ZeroFill):
+                    if bfx is not None:
+                        # §1 row 12 (M45): a bitfield slot may not be
+                        # SUPPLIED (§5 deferral; zero-fill stays green).
+                        self._err(init, "a bitfield member initializer is "
+                                  "not in the subset (§5 — §1 row 12)",
+                                  "initializer")
                     sub = self._bytes_of(sty, init.items[i], at)
                     pos = 0
                     for kind, val in sub:
@@ -239,11 +245,16 @@ class DataEmitter:
                 self._err(init, "struct initializer must be a brace list of "
                           "member constants (§4)", "initializer")
             out = []
-            for i, (sname, sty, mo, ssz) in enumerate(slots):
+            for i, (sname, sty, mo, ssz, bfx) in enumerate(slots):
                 gap = mo - self._bytelen(out)
                 if gap > 0:
                     out.append(("z", gap))
-                if i < len(items):
+                if i < len(items) and \
+                        not isinstance(items[i], ast.ZeroFill):
+                    if bfx is not None:
+                        self._err(init, "a bitfield member initializer is "
+                                  "not in the subset (§5 — §1 row 12)",
+                                  "initializer")
                     out.extend(self._bytes_of(sty, items[i], at))
             if total - self._bytelen(out) > 0:
                 out.append(("z", total - self._bytelen(out)))

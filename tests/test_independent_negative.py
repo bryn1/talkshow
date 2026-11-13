@@ -134,8 +134,26 @@ def test_union():
 
 
 def test_bitfield():
-    assert_loud("struct S { int a : 3; };\nint main(void){ return 0; }\n",
-                "bitfield", "bitfield")
+    # M45 resync (§1 row 12, MC 12460): a scalar-unit bit-field with a
+    # legal width is SUPPORTED — the M1 "bitfield LOUD" pin is retired by
+    # the M2 contract (the same flip pattern as the variadic-params pin).
+    # The §5 wall moved to the shapes gcc 11.4 itself rejects; those legs
+    # are exactly what stays LOUD here.
+    r, src, out = blcc_compile(
+        "struct S { int a : 3; };\nstruct S s;\n"
+        "int main(void){ s.a = 5; return s.a; }\n", "bf-ok")
+    assert r.returncode == 0, \
+        "supported bit-field must compile, got {}: {}".format(
+            r.returncode, r.stderr)
+    if os.path.exists(out):
+        os.remove(out)
+    assert_loud("struct S { int x : 0; };\nint main(void){ return 0; }\n",
+                "bf-named0", "zero width")
+    assert_loud("struct S { unsigned char c : 9; };\n"
+                "int main(void){ return 0; }\n", "bf-wide",
+                "width of 'c' exceeds its type")
+    assert_loud("struct S { int *p : 4; };\nint main(void){ return 0; }\n",
+                "bf-ptr", "bitfield unit")
 
 
 def test_function_pointer_declaration():

@@ -47,7 +47,9 @@ def walk_fields(members, structs):
     for m in members:
         if m.name is not None:
             yield m.name, m.type
-        else:
+        elif getattr(m, "width", None) is None:
+            # §1 row 12 (M45): an ANONYMOUS bitfield has no declarator
+            # too, but contributes NO name — only bits (measured).
             nested = structs.get(m.type.tag)
             if nested:
                 for pair in walk_fields(nested, structs):
@@ -431,7 +433,18 @@ class TypeMap:
                 self._err(at or ty, "undefined struct '{}' — only fully defined "
                           "structs are in the subset (§4)".format(ty.tag), ty.tag)
             packed = self._attr_packed(ty)
-            a = max([self._malign(m, packed, at) for m in members] + [1])
+            a = 1
+            for m in members:
+                if getattr(m, "width", None) is not None:
+                    # §1 row 12 (M45): named bitfields align to their
+                    # unit; anonymous contribute nothing (measured); a
+                    # packed struct containing one DEFERS LOUD.
+                    u = self._bf_unit(m, packed, at)
+                    if m.width == 0 or m.name is None:
+                        continue
+                    a = max(a, max(u, self._mem_raise(m, at) or 0))
+                    continue
+                a = max(a, self._malign(m, packed, at))
             ov = self._tag_aligned(ty, at)
             return max(a, ov or 0)
         return 8
@@ -445,60 +458,145 @@ class TypeMap:
                        at) -> Tuple[Dict[str, int], int, List]:
         """Returns (flat name->byte-offset WITH promoted anonymous-member
         names, total size, declaration-order slots [(name-or-None, type,
-        byte-offset, byte-size)]).
+        byte-offset, byte-size, bit-or-None)]).
 
         Natural C layout (P2-2): each member aligns to its own alignment;
         the struct's align is the widest member's; size rounds to that.
         Anonymous nested members (§1 T+7): the nested aggregate is EMBEDDED
         at the current offset exactly like a named member of that type,
         and its promoted names land at base + inner offset — a nested
-        union's names all share the union's base (§2.8)."""
+        union's names all share the union's base (§2.8).
+
+        M45 §1 row 12 BITFIELDS (gcc 11.4 -std=gnu89 measured law): a
+        member with `width` set allocates BITS in bitnumber order inside
+        the unit its declared type sizes (x86 little-endian, LSB first):
+        the field rides the current aligned unit when it FITS, else moves
+        to the next unit; `width 0` (anonymous only) pads to the next
+        unit; ANONYMOUS fields consume bits but contribute NO alignment,
+        named ones contribute the unit's alignment; a following byte
+        member flushes the partial unit. Bitfields land in slots with
+        byte-size 0 and a bit descriptor (unit byte-offset, bit-in-unit,
+        width, unit type name) as the 5th element — never in the byte
+        `offs` map: addressing/offsetof a bitfield stays LOUD (§2.13)."""
         members = self.structs.get(ty.tag)
         if not members:
             self._err(at or ty, "undefined struct '{}' — only fully defined "
                       "structs are in the subset (§4)".format(ty.tag), ty.tag)
+        if not hasattr(self, "_bf_cache"):
+            self._bf_cache = {}
         offs: Dict[str, int] = {}
         slots: List = []
+        bits: Dict = {}
+        packed = self._attr_packed(ty)
         if ty.is_union:
             # §2.8: EVERY member sits at offset 0; size/align = max member
-            # (within the §2.13 layout table).
+            # (within the §2.13 layout table). M45: a bitfield member's
+            # extent is ceil(w/8) at bit 0 (each union member restarts
+            # the bit cursor — measured U1 word=9 after a=7,b=9).
             total = 0
             align = 1
-            packed = self._attr_packed(ty)
             for m in members:
+                w = getattr(m, "width", None)
+                if w is not None:
+                    u = self._bf_unit(m, packed, at or ty)
+                    if w == 0:
+                        continue
+                    if m.name is not None:
+                        mal = max(u, self._mem_raise(m, at or ty) or 0)
+                        align = max(align, mal)
+                        bits[m.name] = (0, 0, w, m.type.name)
+                    slots.append((m.name, m.type, 0, 0, (0, 0, w,
+                                                         m.type.name)))
+                    total = max(total, (w + 7) // 8)
+                    continue
                 msz = self._size(m.type, at or ty)
                 mal = self._malign(m, packed, at or ty)
                 if m.name is None:
-                    inner = self._struct_layout(m.type, at or ty)[0]
+                    inner, _isz, _isl = self._struct_layout(m.type,
+                                                            at or ty)
                     for n2, o2 in inner.items():
                         offs[n2] = o2
+                    for n2, d2 in self._bf_cache.get(m.type.tag,
+                                                     {}).items():
+                        bits[n2] = (d2[0], d2[1], d2[2], d2[3])
                 else:
                     offs[m.name] = 0
-                slots.append((m.name, m.type, 0, msz))
+                slots.append((m.name, m.type, 0, msz, None))
                 total = max(total, msz)
                 align = max(align, mal)
             ov = self._tag_aligned(ty, at or ty)
             align = max(align, ov or 0)
+            self._bf_cache[ty.tag] = bits
             return offs, (total + align - 1) // align * align, slots
-        off = 0
+        bit = 0
         align = 1
-        packed = self._attr_packed(ty)
         for m in members:
+            w = getattr(m, "width", None)
+            if w is not None:
+                u = self._bf_unit(m, packed, at or ty)
+                ub = u * 8
+                if w == 0:
+                    if bit % ub:
+                        bit = (bit // ub + 1) * ub
+                    continue
+                base = (bit // ub) * ub
+                if bit + w > base + ub:
+                    bit = base + ub
+                d = (base // 8, bit - base, w, m.type.name)
+                if m.name is not None:
+                    mal = max(u, self._mem_raise(m, at or ty) or 0)
+                    align = max(align, mal)
+                    bits[m.name] = d
+                slots.append((m.name, m.type, base // 8, 0, d))
+                bit += w
+                continue
             msz = self._size(m.type, at or ty)
             mal = self._malign(m, packed, at or ty)
             align = max(align, mal)
+            off = (bit + 7) // 8                     # flush partial bits
             off = (off + mal - 1) // mal * mal
             if m.name is None:
                 inner = self._struct_layout(m.type, at or ty)[0]
                 for n2, o2 in inner.items():
                     offs[n2] = off + o2
+                for n2, d2 in self._bf_cache.get(m.type.tag, {}).items():
+                    bits[n2] = (d2[0] + off, d2[1], d2[2], d2[3])
             else:
                 offs[m.name] = off
-            slots.append((m.name, m.type, off, msz))
-            off += msz
+            slots.append((m.name, m.type, off, msz, None))
+            bit = (off + msz) * 8
         ov = self._tag_aligned(ty, at or ty)
         align = max(align, ov or 0)
-        return offs, (off + align - 1) // align * align, slots
+        self._bf_cache[ty.tag] = bits
+        nbytes = (bit + 7) // 8
+        return offs, (nbytes + align - 1) // align * align, slots
+
+    def _bf_unit(self, m, packed, at) -> int:
+        """§1 row 12 (M45): the bitfield allocation unit = the SIZE of the
+        declared type. A PACKED struct with a bitfield DEFERS LOUD: gcc
+        shrinks the unit itself (measured sizeof {unsigned int a:3} packed
+        == 1) — a different allocation law blcc does not model (§5)."""
+        if packed:
+            self._err(at, "packed struct with a bitfield member is DEFERRED "
+                      "(§5: gcc shrinks the unit — §1 row 9 x §1 row 12 "
+                      "interaction)", "packed")
+        name = m.type.name if isinstance(m.type, ast.BuiltinType) else None
+        if name is None or name not in TYPE_SIZE or name == "void" \
+                or name in ("float", "double"):
+            self._err(at, "bitfield unit is not a scalar integer type "
+                      "(§1 row 12)", "bitfield")
+        return TYPE_SIZE[name]
+
+    def _bf_cache_get(self, tag):
+        return getattr(self, "_bf_cache", {}).get(tag, {})
+
+    def _bitfield(self, n: ast.Select):
+        """Bit descriptor (unit byte-offset, bit-in-unit, width, unit type
+        name) for a bitfield member SELECT, else None."""
+        base = self._struct_of(n)
+        if base.tag not in getattr(self, "_bf_cache", {}):
+            self._struct_layout(base, n)
+        return self._bf_cache.get(base.tag, {}).get(n.field)
 
 
     # -- type-of-expression (only what addressing widths need) --------------------
@@ -769,7 +867,8 @@ class TypeMap:
     def _member_ty(self, n: ast.Select) -> ast.Node:
         base = self._struct_of(n)
         offsets = self._struct_layout(base, n)[0]
-        if n.field not in offsets:
+        if n.field not in offsets and n.field not in self._bf_cache_get(
+                base.tag):
             self._err(n, "no member '{}' in struct '{}'".format(n.field, base.tag),
                       n.field)
         for name, mtype in walk_fields(self.structs[base.tag], self.structs):
@@ -793,6 +892,13 @@ class TypeMap:
         base = self._struct_of(n)
         offsets = self._struct_layout(base, n)[0]
         if n.field not in offsets:
+            if n.field in self._bf_cache_get(base.tag):
+                # §1 row 12 (M45): a bitfield has NO address — gcc ERROR
+                # "cannot take address of bit-field"; §2.13's offsetof
+                # mirror above is the fold sibling of this wall.
+                self._err(n, "address of 'bit-field' member '{}' is not in "
+                          "the subset (§1 row 12 — a gcc ERROR)".format(
+                              n.field), n.field)
             self._err(n, "no member '{}' in struct '{}'".format(n.field, base.tag),
                       n.field)
         return offsets[n.field]

@@ -581,16 +581,26 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter):
                 # zero-first, then apply only the designated member
                 # (§1 row 10; the T+9 legs pin gcc's byte picture).
                 self._zero_local(off, self._size(ty, at))
-                for i, (sname, sty, mo, ssz) in enumerate(slots):
+                for i, (sname, sty, mo, ssz, bfx) in enumerate(slots):
                     if i < len(init.items) and \
                             not isinstance(init.items[i], ast.ZeroFill):
+                        if bfx is not None:
+                            # §1 row 12 (M45) deferral (§5): a SUPPLIED
+                            # bitfield value never lands; zero-fill green.
+                            self._err(at, "a bitfield member initializer "
+                                      "is not in the subset (§5 — §1 row "
+                                      "12)", "{")
                         self._init_item(off + mo, sty, init.items[i], at)
                 return
-            for i, (sname, sty, mo, ssz) in enumerate(slots):
+            for i, (sname, sty, mo, ssz, bfx) in enumerate(slots):
                 if placed < mo:
                     self._zero_local(off + placed, mo - placed)
-                if i < len(init.items) and \
-                        not isinstance(init.items[i], ast.ZeroFill):
+                has = (i < len(init.items)
+                       and not isinstance(init.items[i], ast.ZeroFill))
+                if has and bfx is not None:
+                    self._err(at, "a bitfield member initializer is not "
+                              "in the subset (§5 — §1 row 12)", "{")
+                if has:
                     self._init_item(off + mo, sty, init.items[i], at)
                 else:
                     self._zero_local(off + mo, ssz)

@@ -220,6 +220,20 @@ class Parser:
             packed = self._attr_packed(ty)
             a = 1
             for m in members:
+                if getattr(m, "width", None) is not None:
+                    # §1 row 12 (M45): a NAMED bitfield contributes its
+                    # unit's alignment; ANONYMOUS ones contribute nothing
+                    # (measured __alignof__ {int :3; char x;} == 1).
+                    if packed:
+                        return None     # packed+bitfield §5 DEFERRED
+                    if m.width == 0 or m.name is None:
+                        continue
+                    u = TYPE_SIZE.get(m.type.name if isinstance(
+                        m.type, ast.BuiltinType) else "", 0)
+                    if not u:
+                        return None
+                    a = max(a, self._malign_f(m, packed, u, ty))
+                    continue
                 ma = self._calign(m.type)
                 if ma is None:
                     return None
@@ -235,15 +249,22 @@ class Parser:
         fold aligned union members like struct members, gcc 11.4 measures
         offsetof(union U, l) == 0 for EVERY member. Same layout family as
         _csize/_calign (the parse-time fold mirror of TypeMap)."""
+        from blcc.types import TYPE_SIZE
         members = self.struct_tags.get(ty.tag)
         if members is None:
             return None
         out = []
+        packed = self._attr_packed(ty)
         if ty.is_union:
             for m in members:
                 if (self._csize(m.type) is None
                         or self._calign(m.type) is None):
                     return None
+                if getattr(m, "width", None) is not None:
+                    if packed:
+                        return None     # packed+bitfield §5 DEFERRED
+                    continue        # §1 row 12: a bitfield is a gcc ERROR
+                    #                  for offsetof (loudly absent, §2.13)
                 if m.name is None:
                     inner = self._offsetof_flat(m.type)
                     if inner is None:
@@ -253,8 +274,32 @@ class Parser:
                     out.append((m.name, 0, m.type))
             return out
         o = 0
-        packed = self._attr_packed(ty)
         for m in members:
+            w = getattr(m, "width", None)
+            if w is not None:
+                # §1 row 12 (M45): a bitfield NEVER lands in the flat byte
+                # map — offsetof(bitfield) is a gcc ERROR and the §2.13
+                # "no member" LOUD is its shipped mirror. The bits still
+                # occupy their allocation unit for members that FOLLOW.
+                if packed:
+                    return None             # packed+bitfield §5 DEFERRED
+                u = TYPE_SIZE.get(m.type.name if isinstance(
+                    m.type, ast.BuiltinType) else "", 0)
+                if not u:
+                    return None
+                ub = u * 8
+                ob = o * 8
+                if w == 0:
+                    if ob % ub:
+                        ob = (ob // ub + 1) * ub
+                    o = ob // 8
+                    continue
+                base = (ob // ub) * ub
+                if ob + w > base + ub:
+                    ob = base + ub
+                ob += w
+                o = (ob + 7) // 8
+                continue
             msz = self._csize(m.type)
             mal = self._calign(m.type)
             if msz is None or mal is None:
@@ -394,30 +439,78 @@ class Parser:
                 # §2.8 union: SIZE = max member (not the struct sum) —
                 # FINDING c2-F1: the T+6 fold summed union members, which
                 # desynced offsetof of members that FOLLOW a union.
-                mss = [self._csize(m.type) for m in members]
-                if any(ms is None for ms in mss):
+                # M45: a bitfield member measures ceil(w/8) there.
+                mss = []
+                for m in members:
+                    if getattr(m, "width", None) is not None:
+                        if packed:
+                            return None     # packed+bitfield: §5 DEFERRED
+                        if m.width == 0:
+                            continue        # padding consumes nothing
+                        mss.append((m.width + 7) // 8)
+                        continue
+                    cs = self._csize(m.type)
+                    if cs is None:
+                        return None
+                    mss.append(cs)
+                if not mss:
                     return None
                 align = 1
-                for m, ms in zip(members, mss):
+                for m in members:
+                    w = getattr(m, "width", None)
+                    if w is not None:
+                        if w == 0 or m.name is None:
+                            continue        # no alignment contribution (§12)
+                        u = TYPE_SIZE.get(
+                            m.type.name if isinstance(
+                                m.type, ast.BuiltinType) else "", 0)
+                        if not u:
+                            return None
+                        align = max(align, self._malign_f(m, packed, u, ty))
+                        continue
+                    ms = self._csize(m.type)
                     align = max(align, self._malign_f(m, packed,
                                                       min(ms, 8), ty))
                 ov = self._tag_aligned(ty, ty)
                 align = max(align, ov or 0)
                 total = max(mss + [0])
                 return (total + align - 1) // align * align
-            off = 0
+            off_bit = 0
             align = 1
             for m in members:
+                w = getattr(m, "width", None)
+                if w is not None:
+                    # §1 row 12 (M45) fold mirror of TypeMap._struct_layout
+                    if packed:
+                        return None         # packed+bitfield §5 DEFERRED
+                    u = TYPE_SIZE.get(m.type.name if isinstance(
+                        m.type, ast.BuiltinType) else "", 0)
+                    if not u:
+                        return None
+                    ub = u * 8
+                    if w == 0:
+                        if off_bit % ub:
+                            off_bit = (off_bit // ub + 1) * ub
+                        continue
+                    base = (off_bit // ub) * ub
+                    if off_bit + w > base + ub:
+                        off_bit = base + ub
+                    if m.name is not None:
+                        align = max(align, self._malign_f(m, packed, u, ty))
+                    off_bit += w
+                    continue
                 ms = self._csize(m.type)
                 if ms is None:
                     return None
                 mal = self._malign_f(m, packed, min(ms, 8), ty)
                 align = max(align, mal)
+                off = (off_bit + 7) // 8
                 off = (off + mal - 1) // mal * mal if mal > 1 else off
-                off += ms
+                off_bit = (off + ms) * 8
             ov = self._tag_aligned(ty, ty)
             align = max(align, ov or 0)
-            return (off + align - 1) // align * align
+            nbytes = (off_bit + 7) // 8
+            return (nbytes + align - 1) // align * align
         return None
 
     # -- diagnostics helpers (§8 format) ------------------------------------
@@ -812,23 +905,59 @@ class Parser:
                 continue
             pos = self.s.peek()
             msink: List[tuple] = []
-            name, ty, is_fn, _ = self.parse_declarator(base, ctx="member",
-                                                       attr_sink=msink)
-            if name is None:
-                self._parse_err(pos, "struct member needs a name")
-            if is_fn:
-                self._parse_err(pos, "'function' member would be a function pointer")
-            if self.s.accept_punct(":"):
-                self._sema(pos, "'bitfield' members are not in the subset (§5)", ":")
+            width = None
+            if self.s.at_punct(":"):
+                # §1 row 12 (M45): ANONYMOUS bitfield `: w ;` — no
+                # declarator at all (gcc gnu89 measured: it consumes bits,
+                # contributes NO alignment; w==0 pads to the next unit).
+                self.s.next()
+                name, ty, is_fn = None, base, False
+                width = self._bitfield_width(None, base, pos)
+            else:
+                name, ty, is_fn, _ = self.parse_declarator(
+                    base, ctx="member", attr_sink=msink)
+                if name is None:
+                    self._parse_err(pos, "struct member needs a name")
+                if is_fn:
+                    self._parse_err(pos, "'function' member would be a function pointer")
+                if self.s.accept_punct(":"):
+                    width = self._bitfield_width(name, ty, pos)
             self.s.expect_punct(";")
             if name in seen:
                 # measured gcc 11.4: plain `int a; int a;` is the SAME
                 # ERROR "duplicate member 'a'" the promoted names join.
                 self._sema(pos, "duplicate member '{}'".format(name))
             seen.add(name)
-            members.append(ast.Member(name, ty, tuple(msink)))
+            members.append(ast.Member(name, ty, tuple(msink), width))
         self.s.expect_punct("}")
         return tuple(members)
+
+    def _bitfield_width(self, name, unit_ty, pos) -> int:
+        """§1 row 12 (M45): bitfield `: width` with the gcc-11.4 gnu89
+        error law measured this session — the UNIT must be a scalar
+        integer type (its SIZE is the allocation unit); a NAMED zero
+        width is the gcc ERROR "zero width for bit-field"; a width that
+        exceeds the unit type is the gcc ERROR "width of 'a' exceeds its
+        type"; negatives LOUD too. Family `sema` throughout."""
+        from blcc.types import TYPE_SIZE
+        w = self.parse_int_constant("bitfield width")
+        uname = unit_ty.name if isinstance(unit_ty, ast.BuiltinType) \
+            else None
+        if uname is None or uname == "void" or uname in ("float", "double"):
+            self._sema(pos, "bitfield unit '{}' is not a scalar integer "
+                       "type (§1 row 12)".format(uname or "non-scalar"))
+        if w < 0:
+            self._sema(pos, "negative width '{}' for bit-field '{}' "
+                       "(§1 row 12, gcc error)".format(w, name))
+        if name is not None and w == 0:
+            self._sema(pos, "zero width for bit-field '{}' (§1 row 12, "
+                       "gcc error: only ANONYMOUS fields may be : 0)"
+                       .format(name))
+        if w > TYPE_SIZE[uname] * 8:
+            self._sema(pos, "width of '{}' exceeds its type (§1 row 12: "
+                       "'{}' units are {} bits)".format(
+                           name, uname, TYPE_SIZE[uname] * 8))
+        return w
 
     def parse_enum_type(self) -> ast.Node:
         tok = self.s.next()  # 'enum'

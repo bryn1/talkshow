@@ -281,8 +281,25 @@ def test_union_parses_as_flagged_struct_type():
 
 
 def test_bitfield_is_diagnostic():
-    d = diag("struct S { int flags : 4; };")
-    assert "'bitfield'" in d.message
+    # M45 resync (§1 row 12): a well-formed scalar bit-field is now a
+    # SUPPORTED member (the M1 "bitfield LOUD" pin is retired by the M2
+    # contract) — `int flags : 4;` parses into a Member carrying width 4.
+    # The wall MOVES to the shapes gcc itself rejects (§5), covered below.
+    tu = parse_text("struct S { int flags : 4; };", "t.c")
+    mem = find(tu, ast.Member)
+    assert mem.name == "flags" and mem.width == 4
+
+
+def test_bitfield_bad_unit_is_diagnostic():
+    # §1 row 12 / §5: a non-scalar bit-field unit stays LOUD (a gcc error).
+    d = diag("struct S { int *p : 4; };")
+    assert "bitfield unit" in d.message
+
+
+def test_bitfield_named_zero_width_is_diagnostic():
+    # §1 row 12: only ANONYMOUS fields may be `: 0` (gcc error otherwise).
+    d = diag("struct S { int x : 0; };")
+    assert "zero width" in d.message
 
 
 def test_function_pointer_declaration_is_diagnostic():

@@ -57,6 +57,11 @@ class Member:
     name: str
     type: Node
     attrs: Tuple[tuple, ...] = ()   # §1 row 9 layout attrs: (name, arg)
+    # M45 §1 row 12: bitfield width (gnu89 `name : w ;`). None = ordinary
+    # byte member. 0 = anonymous padding bitfield (gcc gnu89: a NAMED
+    # `x : 0` is an ERROR, rejected at the parse hook). The declared type
+    # IS the allocation unit (measured gcc 11.4 -std=gnu89 layout law).
+    width: Optional[int] = None
 
 
 @dataclass(frozen=True)
