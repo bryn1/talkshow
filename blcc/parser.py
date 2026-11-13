@@ -132,6 +132,15 @@ class Parser:
             return v
         if isinstance(node, ast.Cast):
             return self.fold_truthy(node.operand)
+        if isinstance(node, ast.Cond):
+            # §1c (MC 12486): constant `?:` folds — TEST first, then ONLY
+            # the chosen arm (C11 6.6: the dead arm need not be constant).
+            v = self.fold_truthy(node.test)
+            if v is None:
+                return None
+            if node.gnu:
+                return v if v != 0 else self.fold_truthy(node.arm2)
+            return self.fold_truthy(node.arm1 if v != 0 else node.arm2)
         if isinstance(node, ast.Sizeof):
             if node.typ is not None:
                 return self._csize(node.typ)
@@ -1144,8 +1153,13 @@ class Parser:
         is_static = False
         static_tok = self._accept("static")
         if static_tok is not None:
-            if not at_file:
-                self._sema(static_tok, "'static' inside a function is not in the subset (§4)")
+            # §1c AMENDMENT v4.2 (MC 12486): function-scope `static`
+            # locals are SUPPORTED. Static storage, the SAME constant-
+            # initializer law as file scope (enforced by the §4 _const
+            # walk at the data layer, gcc "initializer element is not
+            # constant" rc1 measured); codegen binds the name to the
+            # gcc-form `name.N` LOCAL symbol and it SHADOWS the same-
+            # name global for the whole function (both measured).
             is_static = True
         extern_tok = self._accept("extern")
         is_extern = extern_tok is not None
@@ -1226,6 +1240,14 @@ class Parser:
                 # defining — no size is needed here (the §1 row 10 walk
                 # hit this wall on 7 corpus files behind the fn-ptr gate).
                 self._sema(pos, "'array' declaration without size needs an initializer list (§4)")
+            if (is_static and not at_file
+                    and name in self.scopes[-1]):
+                # gcc rc1 measured: "'x' redeclared as different kind of
+                # symbol" — a static local may not re-share a PARAMETER
+                # (or same-scope object) name inside the function.
+                self._sema(pos, "'static' local '{}' collides with a name "
+                           "declared in this scope (parameter or object)"
+                           .format(name))
             self.define(name, ("var", ty), pos)
             out.append(ast.VarDecl(pos.file, pos.line, pos.col, name, ty,
                                    init, is_static,

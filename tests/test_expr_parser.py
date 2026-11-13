@@ -204,10 +204,15 @@ def test_compound_assignment_shape():
 
 # -- §5 constructs met in/around expressions ---------------------------------------------
 
-def test_ternary_operator_is_diagnostic():
-    d = diag("int main(void){ int x = 1 ? 2 : 3; return x; }")
-    assert "'?:'" in d.message
-    assert d.found == "?"
+def test_assign_to_conditional_is_diagnostic():
+    # §1c AMENDMENT v4.2 (MC 12486): `?:` is SUPPORTED — the M1
+    # "?: LOUD" pin is retired by the contract (same flip pattern as
+    # the union/bitfield pins). What MUST stay LOUD: the §4 l-value
+    # rule over the conditional's result (measured this build, gcc
+    # rc1 on the same shape as a syntax/constraint failure).
+    d = diag("int x, y, c;\nint main(void){ (c ? x : y) = 1; return x; }")
+    assert "non-l-value" in d.message
+    assert d.found == "conditional expression"
 
 
 def test_struct_assignment_is_diagnostic():

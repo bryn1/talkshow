@@ -76,8 +76,12 @@ class DataEmitter:
         flush()
         return lines
 
-    def _const(self, n: ast.Node):
-        """-> int | ('lab', label) for address-of-global constants."""
+    def _const(self, n: ast.Node, ctx: str = "global"):
+        """-> int | ('lab', label) for address-of-global constants.
+        CTX names the initializer being folded for §8 construct wording:
+        "global" (default — the shipped sentences, byte-identical) or
+        "static" for a function-scope `static` local (§1c, MC 12486),
+        which carries the SAME constant-expression law."""
         if isinstance(n, ast.IntLit):
             return n.value
         if isinstance(n, ast.CharLit):
@@ -95,7 +99,7 @@ class DataEmitter:
             if n.name in getattr(self, "sigs", {}):
                 return ("lab", n.name)
         if isinstance(n, ast.Unary) and n.op == "-":
-            v = self._const(n.operand)
+            v = self._const(n.operand, ctx)
             if isinstance(v, int):
                 return -v
         if isinstance(n, ast.Unary) and n.op == "&":
@@ -106,11 +110,11 @@ class DataEmitter:
             if isinstance(n.operand, ast.Ident) and n.operand.name in self.globals:
                 return ("lab", n.operand.name)
         if isinstance(n, ast.CompoundLit):
-            return self._const(n.init)      # scalar literal value
+            return self._const(n.init, ctx)  # scalar literal value
         if isinstance(n, ast.StrLit):
-            self._err(n, "'string literal in global initializer' is not in the "
+            self._err(n, "'string literal in {} initializer' is not in the "
                       "§4 set (integer/char constant or address-of-global; "
-                      "string bytes belong in a char array initializer)",
+                      "string bytes belong in a char array initializer)".format(ctx),
                       "string literal")
         # §8 construct-naming (DA-c3 P1-1 completed at lead ruling): even the
         # two forms test_c2_orch_probes once pinned by node-class token are
@@ -133,10 +137,11 @@ class DataEmitter:
         if _has_stmtexpr(n):
             self._err(n, "braced-group within expression allowed only "
                       "inside a function (§2.4d)", "statement expression")
-        self._err(n, "global initializer must be an integer/char constant "
-                  "or address-of-global (§4)", self._what(n))
+        self._err(n, "{} initializer must be an integer/char constant "
+                  "or address-of-global (§4)".format(ctx), self._what(n))
 
-    def _bytes_of(self, ty: ast.Node, init, at) -> List[Tuple[str, int]]:
+    def _bytes_of(self, ty: ast.Node, init, at,
+                  ctx: str = "global") -> List[Tuple[str, int]]:
         """-> list of ('b', byte) | ('q', label) | ('z', count) covering
         size(ty) bytes. Zero runs stay COMPRESSED ('z') so _emit_global can
         emit a .zero directive — a materialized byte list is what OOM-killed
@@ -170,7 +175,7 @@ class DataEmitter:
                         self._err(init, "a bitfield member initializer is "
                                   "not in the subset (§5 — §1 row 12)",
                                   "initializer")
-                    sub = self._bytes_of(sty, init.items[i], at)
+                    sub = self._bytes_of(sty, init.items[i], at, ctx)
                     pos = 0
                     for kind, val in sub:
                         if kind == "b":
@@ -199,7 +204,7 @@ class DataEmitter:
                 return [("z", sz)]
             if isinstance(init, ast.InitList):
                 self._err(init, "brace initializer for a scalar (§4)", "{")
-            v = self._const(init)
+            v = self._const(init, ctx)
             if isinstance(v, int):
                 return [("b", (v >> 8 * i) & 255) for i in range(sz)]
             if sz != 8:
@@ -235,7 +240,7 @@ class DataEmitter:
                 if mode == "zero":
                     out.append(("z", a))
                 else:
-                    out.extend(self._bytes_of(a, b, at))
+                    out.extend(self._bytes_of(a, b, at, ctx))
             return out
         if isinstance(ty, ast.StructType):
             total, slots = self._struct_layout(ty, at)[1:]
@@ -259,7 +264,7 @@ class DataEmitter:
                         self._err(init, "a bitfield member initializer is "
                                   "not in the subset (§5 — §1 row 12)",
                                   "initializer")
-                    out.extend(self._bytes_of(sty, items[i], at))
+                    out.extend(self._bytes_of(sty, items[i], at, ctx))
             if total - self._bytelen(out) > 0:
                 out.append(("z", total - self._bytelen(out)))
             return out
@@ -274,8 +279,8 @@ class DataEmitter:
         return sum(1 if k == "b" else (8 if k == "q" else v)
                    for k, v in entries)
 
-    def _emit_global(self, vd: ast.VarDecl):
-        items = self._bytes_of(vd.type, vd.init, vd)
+    def _emit_global(self, vd: ast.VarDecl, ctx: str = "global"):
+        items = self._bytes_of(vd.type, vd.init, vd, ctx)
         total = self._bytelen(items)
         # .align precedes the label (.data AND .bss): a label written before
         # its padding binds to the pre-padding address, not to the bytes.

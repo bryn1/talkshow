@@ -38,6 +38,10 @@ class _FnState:
         self.name = name
         self.lines: List[str] = []
         self.locals: Dict[str, Tuple[int, ast.Node]] = {}
+        # §1c (MC 12486): function-scope `static` locals — name to
+        # (asm-symbol, type). Checked BEFORE locals/globals everywhere:
+        # the static local SHADOWS the same-name global (gcc w4 law).
+        self.statics: Dict[str, Tuple[str, ast.Node]] = {}
         self.frame = 0
         self.temp_top = 0
         self.temp_high = 0
@@ -81,6 +85,11 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter):
         self.strings: Dict[bytes, str] = {}
         self._str_order: List[Tuple[str, bytes]] = []
         self._label_n = 0
+        # §1c (MC 12486): static-local symbol counter — gcc's `name.N`
+        # FORM (nm law; the VALUE is a gcc SSA artifact — blcc's own law
+        # is declaration order, deterministic per TU).
+        self._static_n = 0
+        self.static_objs: List[ast.VarDecl] = []
         self.fn = _FnState("<none>")
         self.loops: List[Tuple[str, Optional[str]]] = []
         self._case_lbl: Dict[int, str] = {}
@@ -316,6 +325,13 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter):
                 # §2.8 nm parity: an external object binds GLOBAL (D/B).
                 lines = ["    .globl {}".format(name)] + lines
             (data if section == "data" else bss).extend(lines)
+        for vd in self.static_objs:
+            # §1c (MC 12486): function-scope `static` locals bind to
+            # TU-level storage with file-scope's .bss/.data law (zero ->
+            # .bss, constant -> .data, init never re-runs) and LOCAL
+            # nm binding — vd.is_static suppresses the .globl.
+            section, lines = self._emit_global(vd, "static")
+            (data if section == "data" else bss).extend(lines)
         out.append("    .data")
         out.extend(data)
         for lab, lit in getattr(self, "_clit_anons", []):
@@ -521,6 +537,21 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter):
         self.fn.locals = saved
 
     def _stmt_vardecl(self, vd: ast.VarDecl) -> None:
+        if vd.is_static:
+            # §1c AMENDMENT v4.2 (MC 12486): a function-scope `static`
+            # local gets NO frame slot and NO runtime initialization —
+            # the data layer (§4 _const/_bytes_of, same constant law as
+            # file scope, LOUD below anything else) carries it as a
+            # LOCAL-binding `name.N` object; the name resolves %rip-
+            # relative and shadows the same-name global (both gcc laws,
+            # w4/w5/w10 measured).
+            ty = self._sized_array_decl(self._untype(vd.type), vd.init, vd)
+            sym = "{}.{}".format(vd.name, self._static_n)
+            self._static_n += 1
+            self.fn.statics[vd.name] = (sym, ty)
+            self.static_objs.append(ast.VarDecl(vd.file, vd.line, vd.col,
+                                                sym, ty, vd.init, True))
+            return
         # §4: a local `T a[]` gets its size FROM ITS INITIALIZER here — slot,
         # locals entry, sizeof and decay all see the sized type downstream
         # (the node is frozen, so the sized type travels in the local ty).

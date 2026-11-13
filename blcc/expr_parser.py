@@ -68,9 +68,11 @@ class ExprParser:
         t = self.s.peek()
         if t.kind == "punct":
             if t.text == "?":
-                raise DiagError(
-                    "parse", t.file, t.line, t.col,
-                    "'?:' conditional operator is not in the subset (§4)", "?")
+                # §1c AMENDMENT v4.2 (MC 12486): assignment binds LOOSER
+                # than `?:` — the conditional is the entry level's operator,
+                # and its THIRD operand is a conditional-expression (no
+                # assignment: `a ? b : c = d` is a syntax error, gcc rc1).
+                return self._parse_cond_after_test(left, t)
             if t.text == "=" or t.text in COMPOUND_ASSIGN_OPS:
                 self.s.next()
                 value = self.parse_expression()
@@ -85,6 +87,39 @@ class ExprParser:
                                       left, value)
                 return ast.AssignOp(left.file, left.line, left.col,
                                     t.text, left, value)
+        return left
+
+    def _parse_cond_after_test(self, test: ast.Node, t) -> ast.Node:
+        """`? [middle] : third` — test already parsed (binary level)."""
+        self.s.next()                                    # consume '?'
+        if self.s.at_punct(":"):
+            # GNU `a ?: b` — MEASURED gcc 11.4 gnu89 SUPPORT (the kernel
+            # uses it): a evaluated ONCE, its value when true.
+            self.s.next()
+            return ast.Cond(t.file, t.line, t.col, test, None,
+                            self._parse_cond_tail(), gnu=True)
+        middle = self.parse_comma_expression()           # full expr, commas
+        self.s.expect_punct(":")
+        return ast.Cond(t.file, t.line, t.col, test, middle,
+                        self._parse_cond_tail())
+
+    def _parse_cond_tail(self) -> ast.Node:
+        """A conditional-expression: binary + nested `?:` (right-assoc
+        chains ride the recursion) — WITHOUT the assignment level."""
+        left = self.parse_binary(0)
+        t = self.s.peek()
+        if t.kind == "punct" and t.text == "?":
+            return self._parse_cond_after_test(left, t)
+        return left
+
+    def parse_comma_expression(self) -> ast.Node:
+        """C grammar's `expression`: assignment-expressions joined by the
+        comma operator (§1c: admitted at the conditional's MIDDLE operand,
+        where gcc 11.4 gnu89 measures rc0 for `1 ? 2, 3 : 4`)."""
+        left = self.parse_expression()
+        while self.s.accept_punct(","):
+            right = self.parse_expression()
+            left = ast.Comma(left.file, left.line, left.col, left, right)
         return left
 
     # -- binary: precedence climbing, left-associative -----------------------

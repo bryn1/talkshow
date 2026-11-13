@@ -89,6 +89,10 @@ def what(n) -> str:
         return "sizeof expression"
     if isinstance(n, ast.Binary):
         return "{} expression".format(n.op)
+    if isinstance(n, ast.Cond):
+        return "conditional expression"        # §1c (MC 12486), §8 style
+    if isinstance(n, ast.Comma):
+        return "comma expression"              # §1c, §8 style
     if isinstance(n, ast.Unary):
         return "{} expression".format(n.op)
     if isinstance(n, ast.BuiltinType):
@@ -261,6 +265,15 @@ class TypeMap:
                 return ((v + 2 ** 63) % 2 ** 64) - 2 ** 63
         if isinstance(n, ast.Cast):
             return self._fold_const(n.operand, at)
+        if isinstance(n, ast.Cond):
+            # §1c (MC 12486): constant `?:` folds like C's own constant
+            # expression rule — fold the TEST, then ONLY the chosen arm
+            # (the dead arm is never folded: `0 ? gv : 1` is a legal
+            # constant even when gv is not — C11 6.6 "not both").
+            v = self._fold_const(n.test, at)
+            if n.gnu:
+                return v if v != 0 else self._fold_const(n.arm2, at)
+            return self._fold_const(n.arm1 if v != 0 else n.arm2, at)
         if isinstance(n, ast.Binary) and n.op in ("+", "-", "*", "/", "%"):
             a = self._fold_const(n.left, at)
             b = self._fold_const(n.right, at)
@@ -811,6 +824,14 @@ class TypeMap:
             return self._ty(n.operand)
         if isinstance(n, ast.Binary):
             return self._binary_ty(n)
+        if isinstance(n, ast.Cond):
+            # §1c AMENDMENT v4.2 (MC 12486): the result type of the
+            # runtime conditional — measured gcc 11.4 gnu89 in
+            # _cond_ty below.
+            return self._cond_ty(n)
+        if isinstance(n, ast.Comma):
+            # §1c: the comma operator's value is its RIGHT operand.
+            return self._ty(n.right)
         if isinstance(n, ast.Call):
             name = n.callee.name
             if name in BUILTINS:
@@ -864,6 +885,61 @@ class TypeMap:
             return base.inner
         self._err(n, "cannot type this expression", self._what(n))
 
+    def _cond_ty(self, n: ast.Cond) -> ast.Node:
+        """§1c AMENDMENT v4.2 (MC 12486) — the conditional's result type,
+        every row measured against gcc 11.4 -std=gnu89 THIS card
+        (sizeof(__typeof__(ternary)) + assignability + run witnesses):
+        * both arms the same type -> that type (scalars, pointers,
+          structs — sizeof(c?s1:s2)==4 folds; the §5 struct-VALUE wall
+          stops only the RUNTIME arm in codegen);
+        * void arms: BOTH void -> void (statement shape, gcc rc0); a void
+          arm mixed with a value arm -> LOUD BOTH sides (gcc: "'void'
+          value not ignored as it ought to be", rc1);
+        * pointer arms: void* + T* -> void* (C11 6.5.15p6); T* + a NULL
+          POINTER CONSTANT (folded 0) -> T*; two pointers -> the FIRST
+          arm's type (gcc WARNS on incompatibility, rc0, and the
+          assignability probe measured int*/long* answering int*);
+        * pointer + a NON-null integer: gnu89 warning-only (rc0,
+          sizeof==8) -> the POINTER arm's type;
+        * numeric arms: the USUAL ARITHMETIC CONVERSIONS, the exact law
+          the binary family uses (_uac — measured i/u/l/ll matrix incl.
+          promotion of char/short); float arms same kind type (4/8),
+          mixed kinds LOUD through _uac's row-14 posture.
+        * GNU `a ?: b` (arm1 None): the operands are TEST and arm2."""
+        lt = self._decay(self._ty(n.test if n.gnu else n.arm1))
+        rt = self._decay(self._ty(n.arm2))
+        lv = isinstance(lt, ast.BuiltinType) and lt.name == "void"
+        rv = isinstance(rt, ast.BuiltinType) and rt.name == "void"
+        if lv or rv:
+            if not (lv and rv):
+                self._err(n, "'?:' with one void operand is 'void value "
+                          "not ignored' (§1c measured: gcc rc1)", "?:")
+            return self._bt(n, "void")
+        ls = isinstance(lt, ast.StructType)
+        rs = isinstance(rt, ast.StructType)
+        if ls or rs:
+            if not (ls and rs) or lt.tag != rt.tag:
+                self._err(n, "'?:' arms of incompatible 'struct' types are "
+                          "not in the subset (§4)", "?:")
+            return lt
+        lp = isinstance(lt, ast.PtrType)
+        rp = isinstance(rt, ast.PtrType)
+        if lp and rp:
+            if isinstance(lt.inner, ast.BuiltinType) and \
+                    lt.inner.name == "void":
+                return lt
+            if isinstance(rt.inner, ast.BuiltinType) and \
+                    rt.inner.name == "void":
+                return rt                          # C11 6.5.15p6: void* wins
+            return lt                              # gcc posture on mismatch
+        if lp or rp:
+            # pointer vs scalar: NPC (folded 0) takes the other arm's
+            # pointer type (constraint-clean); any other integer is the
+            # gnu89 warning class — the pointer type still answers
+            # (sizeof(__typeof__(pi?pi:1))==8, pi?1:pi measured likewise).
+            return lt if lp else rt
+        return self._uac(lt, rt, n)
+
     def _binary_ty(self, n: ast.Binary) -> ast.Node:
         if n.op in ("==", "!=", "<", "<=", ">", ">=", "&&", "||"):
             return self._int(n)
@@ -887,6 +963,11 @@ class TypeMap:
         loc = self.fn.locals.get(n.name)
         if loc is not None:
             return loc[1]
+        # §1c (MC 12486): a function-scope `static` local SHADOWS the
+        # same-name global for the whole function (gcc law, w4 measured).
+        st = getattr(self.fn, "statics", None)
+        if st is not None and n.name in st:
+            return st[n.name][1]
         if n.name in self.enums:
             return self._int(n)
         gd = self.globals.get(n.name)

@@ -316,9 +316,16 @@ def test_variadic_decl_parses():
     assert fd is not None and getattr(fd, "variadic", False) is True
 
 
-def test_static_inside_function_is_diagnostic():
-    d = diag("void f(void) { static int q; }")
-    assert "'static'" in d.message and d.line == 1 and d.col == 16
+def test_static_local_param_collision_is_diagnostic():
+    # §1c AMENDMENT v4.2 (MC 12486): a function-scope `static` local is
+    # SUPPORTED — the M1 "'static' inside a function" pin is retired by
+    # the contract. The §5 RULE that stays (gcc 11.4 gnu89 rc1 measured,
+    # "'x' redeclared as different kind of symbol"): the static local may
+    # not re-share a PARAMETER (or same-scope object) name.
+    d = parse("void f(void) { static int q; }")  # plain static local: OK now
+    assert d is not None
+    d = diag("int f(int x){ static int x; return x; }")
+    assert "'static'" in d.message and d.found == "x"
 
 
 def test_static_at_file_scope_is_accepted():

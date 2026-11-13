@@ -128,9 +128,13 @@ def test_label():
 def test_union():
     # M2 resync (§2.8): union is SUPPORTED (M1 pin retired; coverage
     # moved to tests/test_core_m2_link.py run-pairs). The §8 sweep rides
-    # a construct VERIFIED LOUD this very build: the `?:` operator.
-    assert_loud("int main(void){ return 1 ? 2 : 3; }\n",
-                "union", "conditional")
+    # a construct VERIFIED LOUD this very build: a struct-valued
+    # conditional arm (the §5 struct-VALUE wall; `?:` itself flipped to
+    # SUPPORT with §1c AMENDMENT v4.2, MC 12486 — see
+    # test_core_m2_tern.py for the support legs).
+    assert_loud("struct S{int x;} s,t; int c;\n"
+                "int main(void){ struct S z = c ? s : t; return z.x; }\n",
+                "union", "struct")
 
 
 def test_bitfield():
@@ -205,7 +209,12 @@ def test_angle_include_names_construct():
 
 
 def test_static_inside_function():
-    assert_loud("int main(void){ static int s = 1; return s; }\n",
+    # §1c AMENDMENT v4.2 (MC 12486): function-scope `static` locals are
+    # SUPPORTED (M1 "'static' inside a function" pin retired; coverage
+    # moved to tests/test_core_m2_static.py run-pairs + nm legs). The
+    # §5 RULE that stays (gcc rc1 "initializer element is not constant",
+    # measured): a static initializer must be a constant expression.
+    assert_loud("int gv;\nint main(void){ static int s = gv; return s; }\n",
                 "staticfn", "static")
 
 
@@ -240,8 +249,13 @@ def test_unsigned_is_loud():
 
 
 def test_conditional_operator_loud():
-    assert_loud("int main(void){ return 1 ? 2 : 3; }\n",
-                "condop", "?")
+    # §1c AMENDMENT v4.2 (MC 12486): the runtime `?:` is SUPPORTED (M1
+    # "'?:' not in the subset" pin retired; run-pairs + fold + elvis +
+    # pointer-arm legs in tests/test_core_m2_tern.py). The §4 l-value
+    # RULE over the conditional's result stays LOUD (gcc rejects the
+    # same shape; found renders the construct literally, §8).
+    assert_loud("int x, y, c;\nint main(void){ (c ? x : y) = 1; return x; }\n",
+                "condop", "non-l-value")
 
 
 def test_user_array_size_beyond_simple_decl():

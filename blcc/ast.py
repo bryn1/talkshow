@@ -1,3 +1,6 @@
+# LINES reason: the node inventory is ONE declaration surface — every AST
+# shape the grammar and both emitters share; splitting node declarations
+# across files would scatter the grammar itself (§3 concern boundary).
 """AST node dataclasses ONLY (ARCHITECTURE.md §3) — no behavior beyond fields.
 
 Every node carries file:line:col (from the Node base). Type nodes are recorded
@@ -122,7 +125,8 @@ class VarDecl(Node):
     name: str
     type: Node
     init: Optional[Node]     # None = no initializer
-    is_static: bool = False  # only ever True at file scope (§5 elsewhere)
+    is_static: bool = False  # file scope AND (since §1c, MC 12486)
+                             # function-scope `static` locals
     is_extern: bool = False  # §2.8: `extern T x;` re-decl — never emits
 
 
@@ -381,6 +385,28 @@ class Overflow(Node):
     a: Node
     b: Node
     ptr: Node
+
+
+@dataclass(frozen=True)
+class Cond(Node):
+    """§1c AMENDMENT v4.2 (MC 12486): the RUNTIME conditional
+    `test ? arm1 : arm2`. gnu=True is the GCC extension `test ?: arm2`
+    (arm1 is None; the true-side value is TEST itself — evaluated ONCE;
+    gcc 11.4 gnu89 measured SUPPORT, result type = UAC of the operands)."""
+    test: Node
+    arm1: Optional[Node]
+    arm2: Node
+    gnu: bool = False
+
+
+@dataclass(frozen=True)
+class Comma(Node):
+    """§1c (MC 12486): the comma operator AT THE ONE GRAMMAR SITE C
+    grammar admits it in today — the MIDDLE operand of a conditional
+    (`a ? (b, c) : d`, measured gcc rc0 without the parens). The
+    top-level/statement comma operator stays the shipped §5 wall."""
+    left: Node
+    right: Node
 
 
 @dataclass(frozen=True)

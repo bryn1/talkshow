@@ -87,6 +87,16 @@ class ExprEmitter(MemFoldMixin):
         self._e("leaq {}(%rip), %rax".format(self._label_ref(n, n.name)))
 
     def _ex_ident(self, n) -> None:
+        if n.name in self.fn.statics:
+            # §1c (MC 12486): a function-scope `static` local lives in
+            # TU storage and SHADOWS the same-name global — checked
+            # first, %rip-accessed (gcc w4 law).
+            sym, ty = self.fn.statics[n.name]
+            if isinstance(ty, ast.ArrayType) and ty.size is not None:
+                self._e("leaq {}(%rip), %rax".format(sym))  # decay (§4)
+            else:
+                self._load(ty, "{}(%rip)".format(sym), at=n)
+            return
         if n.name in self.fn.locals:
             off, ty = self.fn.locals[n.name]
             if isinstance(ty, ast.ArrayType) and ty.size is not None:
@@ -646,7 +656,11 @@ class ExprEmitter(MemFoldMixin):
         if isinstance(n.target, ast.Ident) and not isinstance(
                 self._ty(n.target), ast.ArrayType):
             self._emit_expr(n.value)
-            if n.target.name in self.fn.locals:
+            if n.target.name in self.fn.statics:
+                # §1c (MC 12486): store through the static's TU symbol.
+                sym, _ = self.fn.statics[n.target.name]
+                self._store(ty, "{}(%rip)".format(sym), at=n)
+            elif n.target.name in self.fn.locals:
                 self._store(ty, "{}(%rbp)".format(
                     self.fn.locals[n.target.name][0]), at=n)
             elif n.target.name in self.globals:
@@ -728,6 +742,66 @@ class ExprEmitter(MemFoldMixin):
         else:
             self._unt()
         self._narrow_int(self._ty(n.operand))   # ++/-- result keeps its type
+
+    def _ex_comma(self, n) -> None:
+        """§1c (MC 12486): comma operator — evaluate LEFT for its side
+        effects (value dropped), then RIGHT becomes the value. Reached
+        only through the conditional's MIDDLE operand (§5 keeps the
+        top-level comma wall)."""
+        self._emit_expr(n.left)
+        self._emit_expr(n.right)
+
+    def _ex_cond(self, n) -> None:
+        """§1c AMENDMENT v4.2 (MC 12486): runtime conditional,
+        SHORT-CIRCUIT: the condition is evaluated EXACTLY once and
+        exactly ONE arm runs (test_core_m2_tern pins both directions
+        with side-effect counters). Arms are converted to the result
+        type (_convert — the §2.2 re-intern; pointers and void skip the
+        scalar wrap, as _ex_binary's pointer path does). GNU `a ?: b`
+        keeps TEST's own value — never re-evaluated."""
+        ty = self._decay(self._ty(n))
+        if isinstance(ty, ast.StructType):
+            # The TYPE law lives in _cond_ty (sizeof folds); the VALUE
+            # is the shipped §5 struct wall — mirrored, never silent.
+            self._err(n, "'struct assignment' is not in the subset (§5) — "
+                      "the conditional arm would copy a struct", "?:")
+        if _fp(ty):
+            # row 14: bits-only. Same-kind arms already intern their
+            # storage; mixed kinds were LOUD at _ty via _uac.
+            self._fp_guard(
+                self._decay(self._ty(n.test if n.gnu else n.arm1)), ty, n)
+            self._fp_guard(self._decay(self._ty(n.arm2)), ty, n)
+        l_arm2 = self._label("tern")
+        l_end = self._label("ternend")
+        self._emit_expr(n.test)
+        self._e("testq %rax, %rax")
+        self._e("je {}".format(l_arm2))
+        if n.gnu:
+            # true-side value is TEST itself — already in %rax; only the
+            # re-intern to the result type may still be owed.
+            self._arm_convert(ty, self._decay(self._ty(n.test)), n)
+        else:
+            self._emit_expr(n.arm1)
+            self._arm_convert(ty, self._decay(self._ty(n.arm1)), n)
+        self._e("jmp {}".format(l_end))
+        self.fn.lines.append("{}:".format(l_arm2))
+        self._emit_expr(n.arm2)
+        self._arm_convert(ty, self._decay(self._ty(n.arm2)), n)
+        self.fn.lines.append("{}:".format(l_end))
+
+    def _arm_convert(self, to_ty, arm_ty, at) -> None:
+        """Convert one conditional arm to the result type (§1c): the
+        scalar re-intern rides _convert; pointer slots and the void
+        statement shape carry the 64-bit interned value untouched (the
+        same law _ex_binary's pointer path applies); fp bits are guarded
+        once in _ex_cond and never re-wrapped (row 14)."""
+        if isinstance(to_ty, ast.PtrType):
+            return
+        if _fp(to_ty):
+            return                              # bits already guarded
+        if isinstance(to_ty, ast.BuiltinType) and to_ty.name == "void":
+            return
+        self._convert(to_ty, at)
 
     def _short_circuit(self, n) -> None:
         if _fp(self._ty(n.left)) or _fp(self._ty(n.right)):
@@ -940,6 +1014,11 @@ class ExprEmitter(MemFoldMixin):
             self._e("leaq {}(%rbp), %rax".format(off))
             return
         if isinstance(n, ast.Ident):
+            if n.name in self.fn.statics:
+                # §1c (MC 12486): &static-local = its TU symbol (§1c law).
+                sym, _ = self.fn.statics[n.name]
+                self._e("leaq {}(%rip), %rax".format(sym))
+                return
             if n.name in self.fn.locals:
                 self._e("leaq {}(%rbp), %rax".format(self.fn.locals[n.name][0]))
                 return
