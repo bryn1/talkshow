@@ -416,7 +416,59 @@ class Parser:
         t = self.s.peek()
         if t.kind == "kw" and t.text in _DECL_START_KW:
             return True
+        if self._at_attr():
+            return True                    # §1 row 9: attr rides decls
         return t.kind == "id" and self.is_typename(t.text)
+
+    # -- §1 row 9: gcc __attribute__ (parse + strip) --------------------------
+
+    _ATTR_WORDS = ("__attribute__", "__attribute")
+    _LAYOUT_ATTRS = ("packed", "aligned", "aligned_with")
+
+    def _at_attr(self) -> bool:
+        t = self.s.peek()
+        # the lexer keeps `__attribute__` a KEYWORD (§4.1 vocabulary) and
+        # the single-underscore spelling an identifier — accept both kinds.
+        return t.text in self._ATTR_WORDS and t.kind in ("id", "kw")
+
+    def _skip_gnu_attrs(self) -> None:
+        """PARSE + STRIP `__attribute__((...))` lists at a declaration
+        head/specifier or a declarator/tag tail (§1 row 9, §2.9). The
+        ignore-class (§1 row 9 list + gnu_inline/unused/section/error/…)
+        is parsed and DROPPED: it changes no code blcc emits. The
+        layout-class (`packed`/`aligned`) stays a §5 LOUD wall until the
+        M42 layout rule lands — silently ignoring it would LIE about
+        offsets the §2.13 legs pin. Names match after underscore-strip
+        (`__aligned__` = `aligned`)."""
+        while self._at_attr():
+            tok = self.s.next()
+            self.s.expect_punct("(")
+            self.s.expect_punct("(")
+            while not self.s.at_punct(")"):
+                name_tok = self.s.peek()
+                if name_tok.kind not in ("id", "kw"):
+                    # `const`/`inline` attr names are KEYWORDS to the lexer
+                    self._parse_err(name_tok, "malformed '__attribute__' "
+                                              "list (§1 row 9)")
+                nm = name_tok.text.strip("_")
+                if nm in self._LAYOUT_ATTRS:
+                    self._sema(tok, "'__attribute__(({}))' is a layout-"
+                               "class attribute and is not in the subset "
+                               "(§1 row 9)".format(name_tok.text),
+                               name_tok.text)
+                self.s.next()
+                if self.s.accept_punct("("):
+                    depth = 1
+                    while depth:
+                        t = self.s.next()
+                        if t.kind == "punct" and t.text == "(":
+                            depth += 1
+                        elif t.kind == "punct" and t.text == ")":
+                            depth -= 1
+                if not self.s.accept_punct(","):
+                    break
+            self.s.expect_punct(")")
+            self.s.expect_punct(")")
 
     # -- types ------------------------------------------------------------------
 
@@ -449,6 +501,7 @@ class Parser:
         # __builtin_types_compatible_p and the association types of
         # _Generic. The wrapper is stripped by every other consumer.
         quals: List = []
+        self._skip_gnu_attrs()          # decl-head/specifier position (§1 row 9)
         ty = self._base_type_core(quals)
         for q, qt in sorted(set(quals)):
             ty = ast.Qualified(qt.file, qt.line, qt.col, q, ty)
@@ -554,6 +607,7 @@ class Parser:
             tag = self.s.expect_id("parse").text
         if self.s.accept_punct("{"):
             members = self.parse_struct_members()
+            self._skip_gnu_attrs()      # tag-definition tail (§1 row 9)
             if tag in self.struct_tags:
                 self._sema(tok, "struct/union '{}' is already defined"
                            .format(tag))
@@ -635,6 +689,7 @@ class Parser:
             if not self.s.accept_punct(","):
                 break
         self.s.expect_punct("}")
+        self._skip_gnu_attrs()          # enum tag-definition tail (§1 row 9)
         self._pending.append(ast.EnumDecl(tok.file, tok.line, tok.col, tuple(consts)))
         self._bare_type_ok = True
         return int_ty
@@ -695,6 +750,7 @@ class Parser:
                 self._parse_err(pos, "'function' declarator is not allowed here")
             params = self.parse_params()
             is_fn = True
+        self._skip_gnu_attrs()          # declarator tail (§1 row 9)
         return name, ty, is_fn, params
 
     def parse_params(self) -> Tuple[ast.Param, ...]:
@@ -733,6 +789,9 @@ class Parser:
 
     def parse_decl(self, at_file: bool) -> List[ast.Node]:
         out: List[ast.Node] = []
+        # §1 row 9: attributes may lead a declaration (`__attribute__((x))
+        # static int f(...)`) — skip BEFORE the storage-class keywords.
+        self._skip_gnu_attrs()
         is_static = False
         static_tok = self._accept("static")
         if static_tok is not None:
@@ -745,6 +804,7 @@ class Parser:
         # only LINKAGE acts — blcc never inlines and has NO DCE.
         inline_tok = None
         while True:
+            self._skip_gnu_attrs()      # attrs may interleave the keywords
             tok = (self._accept("inline") or self._accept("__inline__")
                    or self._accept("__inline"))
             if tok is None:
