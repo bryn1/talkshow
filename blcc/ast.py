@@ -372,6 +372,18 @@ class Sizeof(Node):
 
 
 @dataclass(frozen=True)
+class Overflow(Node):
+    """§1 row 16 (M53): `__builtin_{add,sub,mul}_overflow(a, b, &r)` —
+    op in {"add","sub","mul"}. The store through PTR is a SIDE EFFECT,
+    so the node NEVER folds; codegen answers the gcc-law width matrix
+    (test_core_m2_oflo pins every leg). Result type is int (0/1)."""
+    op: str
+    a: Node
+    b: Node
+    ptr: Node
+
+
+@dataclass(frozen=True)
 class Call(Node):
     callee: Node
     args: Tuple[Node, ...]

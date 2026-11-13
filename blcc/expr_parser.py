@@ -255,6 +255,25 @@ class ExprParser:
                                       "unsigned long")
                     continue
                 if isinstance(node, ast.Ident) and node.name in (
+                        "__builtin_add_overflow", "__builtin_sub_overflow",
+                        "__builtin_mul_overflow"):
+                    # §1 row 16 (M53): the OVERFLOW TRIO lowers to an
+                    # Overflow NODE, never a fold — the store through the
+                    # result pointer is a SIDE EFFECT (gcc -O0 emits the
+                    # width-flag / truncation-check sequence; the law is
+                    # measured in .tmp/m2-scratch/c6/probes/oflo3.c).
+                    args = self._parse_call_args(t)
+                    if len(args) != 3:
+                        raise DiagError(
+                            "sema", t.file, t.line, t.col,
+                            "'{}' takes exactly 3 arguments (§1 row 16)"
+                            .format(node.name), node.name)
+                    node = ast.Overflow(t.file, t.line, t.col,
+                                        node.name[len("__builtin_"):
+                                                  -len("_overflow")],
+                                        args[0], args[1], args[2])
+                    continue
+                if isinstance(node, ast.Ident) and node.name in (
                         "__builtin_expect", "__builtin_choose_expr"):
                     # §2.6: DEAD arms must not be analyzed — even the
                     # callable-existence check is analysis

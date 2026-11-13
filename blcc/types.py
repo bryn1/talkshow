@@ -760,6 +760,9 @@ class TypeMap:
                   "with any association (§2.6d)", "_Generic")
 
     def _ty(self, n: ast.Node) -> ast.Node:
+        if isinstance(n, ast.Overflow):
+            # §1 row 16 (M53): the trio answers int 0/1 (gcc measured).
+            return self._bt(n, "int")
         if isinstance(n, ast.CompoundLit):
             return self._untype(n.ty)          # §1 row 11
         if isinstance(n, ast.IntLit):

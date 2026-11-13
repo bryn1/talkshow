@@ -16,7 +16,7 @@ from __future__ import annotations
 from blcc import ast, predef
 from blcc.memfold import MemFoldMixin
 from blcc.runtime import BUILTINS
-from blcc.types import is_unsigned
+from blcc.types import TYPE_SIZE, is_unsigned
 
 # §6 call ABI: the first six args; beyond them codegen raises (§6 pin).
 REG_ARGS = ("%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9")
@@ -145,6 +145,110 @@ class ExprEmitter(MemFoldMixin):
     def _ex_sizeof(self, n) -> None:
         self._imm(self._size(n.typ, n) if n.typ is not None
                   else self._size(self._ty(n.arg), n))
+
+    _OF_SFX = {1: "b", 2: "w", 4: "l", 8: "q"}
+    _OF_IDX = {8: 0, 4: 1, 1: 2, 2: 3}          # into _REGFAM tuples
+
+    def _of_scalar(self, ty) -> bool:
+        return (isinstance(ty, ast.BuiltinType)
+                and ty.name in TYPE_SIZE and ty.name != "void"
+                and ty.name not in ("float", "double"))
+
+    def _ex_overflow(self, n) -> None:
+        """§1 row 16 (M53): __builtin_{add,sub,mul}_overflow(a, b, &r).
+        The gcc-11.4 -std=gnu89 law measured in oflo3.c/ofshape.c:
+        flag = the TRUE result is outside the RESULT type (0/1 only);
+        stored = low bits reinterpreted as the result. WIDTH legs (both
+        operands at the result width AND same sign) ride ONE hardware op
+        at that width with seto (signed) / setc (unsigned); everything
+        else is the gcc f1..f6 mirror: 64-bit op + (jno when add/sub on
+        all-signed arithmetic) + a truncation-equality fit check. Values
+        are INTERNED 64-bit, so the slot values ARE the true operands;
+        char/short MUL rides the wide path (no imulb/imulw exist)."""
+        pty = self._decay(self._ty(n.ptr))
+        if not isinstance(pty, ast.PtrType):
+            self._err(n, "'__builtin_{}_overflow' result argument needs a "
+                      "pointer to the result type (§1 row 16)".format(n.op),
+                      n.op)
+        rt = self._untype(pty.inner)
+        ta = self._decay(self._untype(self._ty(n.a)))
+        tb = self._decay(self._untype(self._ty(n.b)))
+        if not (self._of_scalar(rt) and self._of_scalar(ta)
+                and self._of_scalar(tb)):
+            self._err(n, "'__builtin_{}_overflow' needs scalar integer "
+                      "operands and result type (§1 row 16)".format(n.op),
+                      "overflow")
+        w = TYPE_SIZE[rt.name]
+        ru = is_unsigned(rt)
+        sa = is_unsigned(ta)
+        sb = is_unsigned(tb)
+        # evaluate b, then a into interned slots, then the result pointer
+        # (_t RESERVES the slot; the caller stores — existing convention)
+        self._emit_expr(n.b)
+        tb_slot = self._t()
+        self._e("movq %rax, {}".format(tb_slot))
+        self._emit_expr(n.a)
+        ta_slot = self._t()
+        self._e("movq %rax, {}".format(ta_slot))
+        self._emit_expr(n.ptr)
+        self._e("movq %rax, %rdx")
+        self._e("movq {}, %rcx".format(tb_slot))
+        self._e("movq {}, %rax".format(ta_slot))
+        self._unt(2)
+        case_a = (sa == sb == ru and TYPE_SIZE[ta.name] == w
+                  and TYPE_SIZE[tb.name] == w
+                  and not (n.op == "mul" and (w < 4 or ru)))
+        ra, rc = _REGFAM["%rax"], _REGFAM["%rcx"]
+        i = self._OF_IDX[w]
+        if case_a:
+            sfx = self._OF_SFX[w]
+            if n.op == "mul":                    # signed, w>=4 (gcc shape)
+                self._e("imul{} {}, {}".format(sfx, rc[i], ra[i]))
+            else:
+                self._e("{}{} {}, {}".format(n.op, sfx, rc[i], ra[i]))
+            # b/w ops define ONLY the low byte/word and clobber FLAGS, so
+            # re-INTERN %rax (the store's source contract) BEFORE reading
+            # the flag — setcc survives the movsx/movzx (they don't write
+            # flags). The 0/1 rides %rbx while %rax carries the value.
+            if w == 1:
+                self._e(("movzbl %al, %eax" if ru else "movsbq %al, %rax"))
+            elif w == 2:
+                self._e(("movzwq %ax, %rax" if ru else "movswq %ax, %rax"))
+            self._e("set{} %bl".format("c" if ru else "o"))
+            self._e("movzbl %bl, %ebx")
+            self._store(rt, "(%rdx)")            # wrapped value, §1 row 16
+            self._e("movq %rbx, %rax")
+            return
+        # ---- wide path (gcc f1..f6 mirror) ------------------------------
+        opw = {"add": "addq", "sub": "subq", "mul": "imulq"}[n.op]
+        self._e("{} %rcx, %rax".format(opw))
+        self._e("xorl %esi, %esi")
+        if n.op in ("add", "sub") and not (sa or sb or ru):
+            # OF-leg of the 64-bit SIGNED math — gcc emits it ONLY when
+            # operands and result are all signed (f1/f2 asm have none).
+            lbl = self._label("oflo")
+            self._e("jno {}".format(lbl))
+            self._e("movl $1, %esi")
+            self._e(lbl + ":")
+        self._store(rt, "(%rdx)")                # stored BEFORE the fit
+        #                                   check frees %rdx as scratch
+        if w < 8:
+            # truncation-equality check, gcc f1..f6 shape. NOTE there is
+            # no "movzlq": 32-bit zero-extension is the plain 32-bit MOV.
+            mov = ((("movsbq %al, %rdx", "movswq %ax, %rdx",
+                     "movslq %eax, %rdx") if not ru else
+                    ("movzbq %al, %rdx", "movzwq %ax, %rdx",
+                     "movl %eax, %edx"))[0 if w == 1 else w // 2])
+            lbl = self._label("oflo")
+            self._e(mov)
+            self._e("cmpq %rdx, %rax")
+            self._e("je {}".format(lbl))
+            self._e("movl $1, %esi")
+            self._e(lbl + ":")
+        # w == 8: the truncation-equality check is the identity — gcc
+        # f4 emits exactly that (ULONG_MAX+1 into a uint* is caught by
+        # the w<8 arm; into a ulong* NOTHING flags, gcc included).
+        self._e("movq %rsi, %rax")
 
     def _va_intrinsic(self, n, name) -> None:
         if name == "__builtin_va_start":
