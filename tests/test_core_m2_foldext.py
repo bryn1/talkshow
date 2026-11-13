@@ -111,3 +111,25 @@ int main(void) {
     return 0;
 }
 """, "f-arr")
+
+
+def test_register_keyword_run_pair():
+    # M47 keyword row: bare `register` is a hint — it parses and drops
+    # (blcc is a stack machine: no allocation choice exists to make).
+    both_run("""
+int f(void) {
+    register int y = 2;            /* gnu89: address-of-register = gcc ERROR
+                                      (measured rc1) — trees never take it;
+                                      blcc's stack machine treats register
+                                      as a hint and does not implement the
+                                      error side (documented laxness). */
+    return y + 7;
+}
+int main(void) {
+    register int x;
+    x = 4;
+    register long z = x + f();
+    if (z != 13) return 1;
+    return (int)z - 13;
+}
+""", "g-register")

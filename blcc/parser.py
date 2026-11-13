@@ -982,6 +982,12 @@ class Parser:
                            else "static-inline" if is_static else "inline")
         if self._accept("typedef"):
             return self._parse_typedef()
+        # M47 keyword row (T+12): bare `register` is a hint — parses and
+        # DROPS (the stack machine has no allocation choice to make).
+        # gnu89's address-of-register ERROR side is NOT implemented
+        # (documented laxness; the run-pair leg takes no address).
+        while self._accept("register") is not None:
+            self._skip_gnu_attrs()
         base = self.parse_base_type()
         out.extend(self._drain_pending())
         if self._bare_type_ok and self.s.accept_punct(";"):

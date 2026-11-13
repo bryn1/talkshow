@@ -42,3 +42,4 @@ T+9b 14:0x: M55 COMPOUND LITERALS (§1 row 11): parse disambiguation + postfix +
 T+10  M42 layout attrs ACT: packed/aligned (tag/member/typedef-tail), packed-union max-size law, aligned_with LOUD kept; 9-leg run-pair suite; T+8a interim walls retired same-commit; RED 8f/1p -> GREEN 9/9, plain 694+49s, kernel 743.
 T+10b fold closure: shifts/bitwise/~/full-expr enums+cases/global-init folder (FINDING c2-F3 oracle-law, probes re-signed), Qualified in mirrors, star-qualifiers, ptr-table decay; foldext 4/4; plain 699+49s kernel 748.
 T+11 M49-misc intrinsics: bswap/ctz/clz/unreachable/prefetch/extract_return_addr-id/object-size-fold/return+frame-address(0), levels>=1 LOUD; extern-unsized-array fix (7 corpus files); RED 7f -> 7/7; plain 706+49s kernel 755.
+T+12 M47 keyword row: register parses-and-drops (addr-of-register laxness documented, gcc-rc1 measured); RED 1f -> GREEN 5/5; plain 707+49s kernel 756.
