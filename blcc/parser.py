@@ -421,7 +421,7 @@ class Parser:
         t = self.s.peek()
         if t.kind == "kw" and t.text in _DECL_START_KW:
             return True
-        if self._at_attr():
+        if self._at_attr() or self._at_extension():
             return True                    # §1 row 9: attr rides decls
         return t.kind == "id" and self.is_typename(t.text)
 
@@ -429,6 +429,10 @@ class Parser:
 
     _ATTR_WORDS = ("__attribute__", "__attribute")
     _LAYOUT_ATTRS = ("packed", "aligned", "aligned_with")
+
+    def _at_extension(self) -> bool:
+        tok = self.s.peek()
+        return tok.kind == "kw" and tok.text == "__extension__"
 
     def _at_attr(self) -> bool:
         t = self.s.peek()
@@ -445,6 +449,8 @@ class Parser:
         M42 layout rule lands — silently ignoring it would LIE about
         offsets the §2.13 legs pin. Names match after underscore-strip
         (`__aligned__` = `aligned`)."""
+        while self._at_extension():
+            self.s.next()             # GNU no-op marker (§1 row 9 family)
         while self._at_attr():
             tok = self.s.next()
             self.s.expect_punct("(")

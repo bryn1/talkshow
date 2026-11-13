@@ -145,3 +145,23 @@ def test_aligned_struct_loud_wall():
     loud("struct A { int a; } __attribute__((aligned(16)));\n"
          "int main(void){ return (int)sizeof(struct A); }\n",
          "attr-aligned", "aligned")
+
+
+def test_extension_marker_typedef_run_pair():
+    # §1 row 9 spelling family: `__extension__` is the GNU no-op marker.
+    # TREE-MEASURED (grep over 5.10): the ONLY shape in the whole tree is
+    # `__extension__ typedef` at include/uapi/asm-generic/int-ll64.h:30/31
+    # (`__s64`/`__u64`) — and it is the sweep re-harvest first-blocker in
+    # 690/692 files. Oracle: gcc 11.4 gnu89 accepts it as nothing.
+    both_run("""
+__extension__ typedef __signed__ long long __s64;
+__extension__ typedef unsigned long long __u64;
+__s64 g = -5;
+int main(void) {
+    __u64 u = (__u64)g;
+    if (g != -5) return 1;
+    if (u >> 63 != 1) return 2;
+    if (sizeof(__s64) != 8 || sizeof(__u64) != 8) return 3;
+    return 0;
+}
+""", "x-marker")
