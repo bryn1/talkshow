@@ -56,7 +56,8 @@ class Parser:
         self.switch_depth = 0
         self.expr = ExprParser(self.s, self.is_typename, self.parse_type,
                                self.callable_known, self.expr_type,
-                               self.parse_stmt_expr, self.fold_truthy)
+                               self.parse_stmt_expr, self.fold_truthy,
+                               self.resolve_offsetof)
 
     # -- §2.4 GNU statement-expressions (M2-C5 leg 1) ------------------------
 
@@ -169,6 +170,84 @@ class Parser:
                 return 1 if a != b else 0
             return None
         return None
+
+    def _calign(self, ty) -> Optional[int]:
+        """alignof mirror of TypeMap._align (scalars by size, arrays by
+        element, structs by widest member) for the §2.13 fold."""
+        from blcc.types import TYPE_SIZE
+        if ty is None:
+            return None
+        if isinstance(ty, ast.BuiltinType):
+            return TYPE_SIZE.get(ty.name)
+        if isinstance(ty, ast.PtrType):
+            return 8
+        if isinstance(ty, ast.ArrayType):
+            return self._calign(ty.inner)
+        if isinstance(ty, ast.TypeOf):
+            inner = ty.typ if ty.typ is not None else (
+                self.expr_type(ty.expr) if ty.expr is not None else None)
+            return self._calign(inner)
+        if isinstance(ty, ast.StructType):
+            members = self.struct_tags.get(ty.tag)
+            if members is None:
+                return None
+            a = 1
+            for m in members:
+                ma = self._calign(m.type)
+                if ma is None:
+                    return None
+                a = max(a, ma)
+            return a
+        return None
+
+    def resolve_offsetof(self, ty, chain, at):
+        # §2.13 fold: walk the layout table for the member chain. A
+        # MISSING member LOUDs — a bitfield member never lands in
+        # struct_tags (its declaration is itself LOUD), mirroring gcc's
+        # ERROR "attempt to take address of bit-field structure member":
+        # never a silent number.
+        cur = ty
+        off = 0
+        for step in chain:
+            if isinstance(step, int):
+                if not isinstance(cur, ast.ArrayType):
+                    self._parse_err(at, "__builtin_offsetof: indexed "
+                                        "member is not an array (§2.13)")
+                esz = self._csize(cur.inner)
+                if esz is None:
+                    self._parse_err(at, "__builtin_offsetof: element "
+                                        "size unknown (§2.13)")
+                off += step * esz
+                cur = cur.inner
+                continue
+            if not isinstance(cur, ast.StructType):
+                self._parse_err(at, "__builtin_offsetof: '{}' is a member "
+                                    "path into a non struct/union type "
+                                    "(§2.13)".format(step))
+            members = self.struct_tags.get(cur.tag)
+            if members is None:
+                self._parse_err(at, "undefined struct/union '{}' "
+                                    "(§2.13)".format(cur.tag))
+            o = 0
+            found = None
+            for m in members:
+                msz = self._csize(m.type)
+                mal = self._calign(m.type)
+                if msz is None or mal is None:
+                    self._parse_err(at, "__builtin_offsetof: incomplete "
+                                        "member layout (§2.13)")
+                o = (o + mal - 1) // mal * mal
+                if m.name == step:
+                    found = (o, m.type)
+                    break
+                o += msz
+            if found is None:
+                self._parse_err(at, "no member '{}' in '{}' (§2.13; a "
+                                    "bitfield member is a gcc ERROR and "
+                                    "stays LOUD)".format(step, cur.tag))
+            off += found[0]
+            cur = found[1]
+        return off
 
     def _csize(self, ty) -> Optional[int]:
         """Compile-time size for fold_truthy's sizeof arms (mirrors the

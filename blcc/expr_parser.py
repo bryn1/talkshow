@@ -43,7 +43,8 @@ class ExprParser:
                  callable_known: Callable[[str], bool],
                  expr_type: Callable[[ast.Node], Optional[ast.Node]],
                  parse_stmts: Optional[Callable] = None,
-                 fold_truthy: Optional[Callable] = None):
+                 fold_truthy: Optional[Callable] = None,
+                 fold_offset: Optional[Callable] = None):
         self.s = stream
         self.is_typename = is_typename
         self.parse_type = parse_type
@@ -51,6 +52,7 @@ class ExprParser:
         self.expr_type = expr_type
         self.parse_stmt_expr = parse_stmts        # §2.4 stmt-expression
         self.fold_truthy = fold_truthy            # §2.6 choose_expr control
+        self.fold_offset = fold_offset            # §2.13 offsetof layout
         self._lenient_calls = False               # inside GNU fold args
 
     # -- entry: assignment level (right-associative) ------------------------
@@ -174,6 +176,28 @@ class ExprParser:
                     # folds, folded at codegen (needs TypeMap).
                     args = self._parse_type_args(t)
                     node = ast.Call(t.file, t.line, t.col, node, args)
+                    continue
+                if isinstance(node, ast.Ident) and node.name == (
+                        "__builtin_constant_p"):
+                    # §2.11 ARG-CLASS TABLE (no-lie rule): 1 ONLY for the
+                    # constant closure (fold_truthy answers) plus string
+                    # literals; EVERYTHING else answers 0 — the safe
+                    # direction that selects the runtime arm.
+                    args = self._parse_call_args(t)
+                    if len(args) != 1:
+                        raise DiagError(
+                            "sema", t.file, t.line, t.col,
+                            "'__builtin_constant_p' takes exactly 1 "
+                            "argument (§2.11)", "__builtin_constant_p")
+                    known = isinstance(args[0], ast.StrLit) or (
+                        self.fold_truthy is not None
+                        and self.fold_truthy(args[0]) is not None)
+                    node = ast.IntLit(t.file, t.line, t.col, 1 if known
+                                      else 0, "int")
+                    continue
+                if isinstance(node, ast.Ident) and node.name == (
+                        "__builtin_offsetof"):
+                    node = self._fold_offsetof(t)
                     continue
                 if isinstance(node, ast.Ident) and node.name in (
                         "__builtin_expect", "__builtin_choose_expr"):
@@ -307,6 +331,45 @@ class ExprParser:
             return self._parse_call_args(t)
         finally:
             self._lenient_calls = old
+
+    def _fold_offsetof(self, t):
+        # §2.13: `__builtin_offsetof(TYPE, m [ [n] ] . m …)` folds at the
+        # sema layer — TYPE resolves through the SAME parse_type (typedefs
+        # and sizeof already resolved), the member chain walks the layout
+        # table; NO second tokenization (§5 perf rule).
+        self.s.expect_punct("(")
+        d = self.s.peek()
+        if not ((d.kind == "kw")
+                or (d.kind == "id" and self.is_typename(d.text))):
+            raise DiagError(
+                "sema", t.file, t.line, t.col,
+                "'__builtin_offsetof' first argument is a TYPE (§2.13)",
+                d.text)
+        ty = self.parse_type()
+        self.s.expect_punct(",")
+        chain = []
+        while True:
+            chain.append(self.s.expect_id("parse").text)
+            while self.s.accept_punct("["):
+                idx = self.parse_binary(1)
+                self.s.expect_punct("]")
+                v = self.fold_truthy(idx) if self.fold_truthy else None
+                if v is None:
+                    raise DiagError(
+                        "sema", t.file, t.line, t.col,
+                        "__builtin_offsetof index is not a compile-time "
+                        "constant (§2.13)", "__builtin_offsetof")
+                chain.append(v)
+            if self.s.accept_punct("."):
+                continue
+            break
+        self.s.expect_punct(")")
+        if self.fold_offset is None:
+            raise DiagError("sema", t.file, t.line, t.col,
+                            "__builtin_offsetof is unavailable (§2.13)",
+                            "__builtin_offsetof")
+        return ast.IntLit(t.file, t.line, t.col,
+                          self.fold_offset(ty, chain, t), "int")
 
     def _fold_gnu_builtin(self, t, name: str, args):
         # §2A M2-C5 legs 2+4 (VERBATIM rows): __builtin_expect(a,b) folds
