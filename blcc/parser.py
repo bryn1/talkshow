@@ -51,6 +51,7 @@ class Parser:
                                                predef.VA_LIST_TY)
         self.struct_tags: Dict[str, Tuple[ast.Member, ...]] = {
             predef.TAG: predef.VA_MEMBERS}
+        self._anon_n = 0                  # unique minted-tag counter (T+7)
         self._pending: List[ast.Node] = []  # Struct/EnumDecls made by types
         self._bare_type_ok = False          # a tag/enum definition just read
         self.switch_depth = 0
@@ -200,6 +201,47 @@ class Parser:
             return a
         return None
 
+    def _offsetof_flat(self, ty):
+        """Flat [(name, byte-offset, type)] walk for the §2.13 fold:
+        anonymous nested members are PROMOTED (T+7), and every union
+        member sits at the union's base — §2.8, FINDING c2-F1: the T+6
+        fold aligned union members like struct members, gcc 11.4 measures
+        offsetof(union U, l) == 0 for EVERY member. Same layout family as
+        _csize/_calign (the parse-time fold mirror of TypeMap)."""
+        members = self.struct_tags.get(ty.tag)
+        if members is None:
+            return None
+        out = []
+        if ty.is_union:
+            for m in members:
+                if (self._csize(m.type) is None
+                        or self._calign(m.type) is None):
+                    return None
+                if m.name is None:
+                    inner = self._offsetof_flat(m.type)
+                    if inner is None:
+                        return None
+                    out += inner
+                else:
+                    out.append((m.name, 0, m.type))
+            return out
+        o = 0
+        for m in members:
+            msz = self._csize(m.type)
+            mal = self._calign(m.type)
+            if msz is None or mal is None:
+                return None
+            o = (o + mal - 1) // mal * mal
+            if m.name is None:
+                inner = self._offsetof_flat(m.type)
+                if inner is None:
+                    return None
+                out += [(n, o + io, t) for (n, io, t) in inner]
+            else:
+                out.append((m.name, o, m.type))
+            o += msz
+        return out
+
     def resolve_offsetof(self, ty, chain, at):
         # §2.13 fold: walk the layout table for the member chain. A
         # MISSING member LOUDs — a bitfield member never lands in
@@ -228,19 +270,15 @@ class Parser:
             if members is None:
                 self._parse_err(at, "undefined struct/union '{}' "
                                     "(§2.13)".format(cur.tag))
-            o = 0
+            flat = self._offsetof_flat(cur)
+            if flat is None:
+                self._parse_err(at, "__builtin_offsetof: incomplete "
+                                    "member layout (§2.13)")
             found = None
-            for m in members:
-                msz = self._csize(m.type)
-                mal = self._calign(m.type)
-                if msz is None or mal is None:
-                    self._parse_err(at, "__builtin_offsetof: incomplete "
-                                        "member layout (§2.13)")
-                o = (o + mal - 1) // mal * mal
-                if m.name == step:
-                    found = (o, m.type)
+            for n, o, t in flat:
+                if n == step:
+                    found = (o, t)
                     break
-                o += msz
             if found is None:
                 self._parse_err(at, "no member '{}' in '{}' (§2.13; a "
                                     "bitfield member is a gcc ERROR and "
@@ -276,6 +314,16 @@ class Parser:
             members = self.struct_tags.get(ty.tag)
             if members is None:
                 return None
+            if ty.is_union:
+                # §2.8 union: SIZE = max member (not the struct sum) —
+                # FINDING c2-F1: the T+6 fold summed union members, which
+                # desynced offsetof of members that FOLLOW a union.
+                mss = [self._csize(m.type) for m in members]
+                if any(ms is None for ms in mss):
+                    return None
+                align = max([min(ms, 8) for ms in mss] + [1])
+                total = max(mss + [0])
+                return (total + align - 1) // align * align
             off = 0
             align = 1
             for m in members:
@@ -340,9 +388,12 @@ class Parser:
             if node.arrow and isinstance(base, ast.PtrType):
                 base = base.inner
             if isinstance(base, ast.StructType):
-                for m in self.struct_tags.get(base.tag, ()):
-                    if m.name == node.field:
-                        return m.type
+                from blcc.types import walk_fields
+                for name, mtype in walk_fields(
+                        self.struct_tags.get(base.tag, ()),
+                        self.struct_tags):
+                    if name == node.field:
+                        return mtype
             return None
         if isinstance(node, ast.Unary) and node.op == "*":
             base = self.expr_type(node.operand)
@@ -494,7 +545,11 @@ class Parser:
         tok = self.s.next()  # 'struct' or 'union'
         is_union = tok.text == "union"
         if self.s.at_punct("{"):
-            tag = "<anon@{}:{}>".format(tok.file, tok.line)
+            # Minted tags must be UNIQUE: post-pp kernel streams place
+            # whole structs on one line, so file:line was not enough for
+            # two inline definitions (T+7 same-line leg).
+            self._anon_n += 1
+            tag = "<anon@{}:{}#{}>".format(tok.file, tok.line, self._anon_n)
         else:
             tag = self.s.expect_id("parse").text
         if self.s.accept_punct("{"):
@@ -512,12 +567,35 @@ class Parser:
             self._bare_type_ok = True
         return ast.StructType(tok.file, tok.line, tok.col, tag, is_union)
 
+    def _flat_member_names(self, members) -> List[str]:
+        from blcc.types import walk_fields
+        return [n for n, _t in walk_fields(members, self.struct_tags)]
+
     def parse_struct_members(self) -> Tuple[ast.Member, ...]:
         members: List[ast.Member] = []
+        seen: set = set()             # flat member namespace, promoted §
         while not self.s.at_punct("}"):
             if self.s.accept_punct(";"):
                 continue
             base = self.parse_base_type()
+            if isinstance(base, ast.StructType) and self.s.at_punct(";"):
+                pos = self.s.next()   # the terminating ';'
+                if base.tag.startswith("<anon@"):
+                    # §1 T+7 ANONYMOUS MEMBER: untagged inline struct/union
+                    # with no declarator (gcc gnu89: names PROMOTED into
+                    # this struct's namespace; layout embeds at this point).
+                    for n in self._flat_member_names(
+                            self.struct_tags.get(base.tag, ())):
+                        if n in seen:
+                            self._sema(pos, "duplicate member '{}'".format(n))
+                        seen.add(n)
+                    members.append(ast.Member(None, base))
+                else:
+                    # Tagged specifier with NO declarator: gnu89 measures
+                    # "declaration does not declare anything" (rc0) — the
+                    # tag is registered, there is NO member (§1 T+7 pin).
+                    pass
+                continue
             pos = self.s.peek()
             name, ty, is_fn, _ = self.parse_declarator(base, ctx="member")
             if name is None:
@@ -527,6 +605,11 @@ class Parser:
             if self.s.accept_punct(":"):
                 self._sema(pos, "'bitfield' members are not in the subset (§5)", ":")
             self.s.expect_punct(";")
+            if name in seen:
+                # measured gcc 11.4: plain `int a; int a;` is the SAME
+                # ERROR "duplicate member 'a'" the promoted names join.
+                self._sema(pos, "duplicate member '{}'".format(name))
+            seen.add(name)
             members.append(ast.Member(name, ty))
         self.s.expect_punct("}")
         return tuple(members)

@@ -562,20 +562,18 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter):
                 else:
                     self._init_item(off + o, a, b, at)
         elif isinstance(ty, ast.StructType):
-            offsets, _ = self._struct_layout(ty, at)
-            members = self.structs[ty.tag]
-            if len(init.items) > len(members):
+            slots = self._struct_layout(ty, at)[2]
+            if len(init.items) > len(slots):
                 self._err(at, "too many struct initializers (§4)", "initializer")
             placed = 0
-            for i, m in enumerate(members):
-                mo = offsets[m.name]
+            for i, (sname, sty, mo, ssz) in enumerate(slots):
                 if placed < mo:
                     self._zero_local(off + placed, mo - placed)
                 if i < len(init.items):
-                    self._init_item(off + mo, m.type, init.items[i], at)
+                    self._init_item(off + mo, sty, init.items[i], at)
                 else:
-                    self._zero_local(off + mo, self._size(m.type, at))
-                placed = mo + self._size(m.type, at)
+                    self._zero_local(off + mo, ssz)
+                placed = mo + ssz
         else:
             self._err(at, "brace initializer for a scalar local (§4)", "{")
 

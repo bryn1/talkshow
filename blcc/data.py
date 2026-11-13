@@ -127,20 +127,19 @@ class DataEmitter:
                     out.extend(self._bytes_of(a, b, at))
             return out
         if isinstance(ty, ast.StructType):
-            offsets, total = self._struct_layout(ty, at)
-            members = self.structs[ty.tag]
+            total, slots = self._struct_layout(ty, at)[1:]
             items = init.items if isinstance(init, ast.InitList) else \
                 ([] if init is None else None)
-            if items is None or len(items) > len(members):
+            if items is None or len(items) > len(slots):
                 self._err(init, "struct initializer must be a brace list of "
                           "member constants (§4)", "initializer")
             out = []
-            for i, m in enumerate(members):
-                gap = offsets[m.name] - self._bytelen(out)
+            for i, (sname, sty, mo, ssz) in enumerate(slots):
+                gap = mo - self._bytelen(out)
                 if gap > 0:
                     out.append(("z", gap))
                 if i < len(items):
-                    out.extend(self._bytes_of(m.type, items[i], at))
+                    out.extend(self._bytes_of(sty, items[i], at))
             if total - self._bytelen(out) > 0:
                 out.append(("z", total - self._bytelen(out)))
             return out

@@ -38,6 +38,23 @@ def _roundup8(n: int) -> int:
     return (n + 7) & ~7
 
 
+def walk_fields(members, structs):
+    """Flat (name, type) view of a member list with anonymous nested
+    struct/union members PROMOTED (gcc 11.4 -std=gnu89 measured, MC 12460
+    stage T+7: an untagged inline definition with no declarator is an
+    anonymous member whose names join the enclosing namespace; a TAGGED
+    specifier without declarator is never a Member record at all)."""
+    for m in members:
+        if m.name is not None:
+            yield m.name, m.type
+        else:
+            nested = structs.get(m.type.tag)
+            if nested:
+                for pair in walk_fields(nested, structs):
+                    yield pair
+
+
+
 def what(n) -> str:
     """§8 literal-naming: the offending CONSTRUCT as found '...' — never a
     Python node class name (DA-c3 P1-1). Identifiers render as their own
@@ -368,35 +385,59 @@ class TypeMap:
             return ast.PtrType(ty.file, ty.line, ty.col, ty.inner)
         return ty
 
-    def _struct_layout(self, ty: ast.StructType, at) -> Tuple[Dict[str, int], int]:
+    def _struct_layout(self, ty: ast.StructType,
+                       at) -> Tuple[Dict[str, int], int, List]:
+        """Returns (flat name->byte-offset WITH promoted anonymous-member
+        names, total size, declaration-order slots [(name-or-None, type,
+        byte-offset, byte-size)]).
+
+        Natural C layout (P2-2): each member aligns to its own alignment;
+        the struct's align is the widest member's; size rounds to that.
+        Anonymous nested members (§1 T+7): the nested aggregate is EMBEDDED
+        at the current offset exactly like a named member of that type,
+        and its promoted names land at base + inner offset — a nested
+        union's names all share the union's base (§2.8)."""
         members = self.structs.get(ty.tag)
         if not members:
             self._err(at or ty, "undefined struct '{}' — only fully defined "
                       "structs are in the subset (§4)".format(ty.tag), ty.tag)
-        # Natural C layout (P2-2): each member aligns to its own alignment;
-        # the struct's align is the widest member's; size rounds to that.
+        offs: Dict[str, int] = {}
+        slots: List = []
         if ty.is_union:
             # §2.8: EVERY member sits at offset 0; size/align = max member
             # (within the §2.13 layout table).
             total = 0
             align = 1
-            offs: Dict[str, int] = {}
             for m in members:
-                offs[m.name] = 0
-                total = max(total, self._size(m.type, at or ty))
-                align = max(align, self._align(m.type, at or ty))
-            return offs, (total + align - 1) // align * align
+                msz = self._size(m.type, at or ty)
+                mal = self._align(m.type, at or ty)
+                if m.name is None:
+                    inner = self._struct_layout(m.type, at or ty)[0]
+                    for n2, o2 in inner.items():
+                        offs[n2] = o2
+                else:
+                    offs[m.name] = 0
+                slots.append((m.name, m.type, 0, msz))
+                total = max(total, msz)
+                align = max(align, mal)
+            return offs, (total + align - 1) // align * align, slots
         off = 0
         align = 1
-        offsets: Dict[str, int] = {}
         for m in members:
             msz = self._size(m.type, at or ty)
             mal = self._align(m.type, at or ty)
             align = max(align, mal)
             off = (off + mal - 1) // mal * mal
-            offsets[m.name] = off
+            if m.name is None:
+                inner = self._struct_layout(m.type, at or ty)[0]
+                for n2, o2 in inner.items():
+                    offs[n2] = off + o2
+            else:
+                offs[m.name] = off
+            slots.append((m.name, m.type, off, msz))
             off += msz
-        return offsets, (off + align - 1) // align * align
+        return offs, (off + align - 1) // align * align, slots
+
 
     # -- type-of-expression (only what addressing widths need) --------------------
 
@@ -640,13 +681,13 @@ class TypeMap:
 
     def _member_ty(self, n: ast.Select) -> ast.Node:
         base = self._struct_of(n)
-        offsets, _ = self._struct_layout(base, n)
+        offsets = self._struct_layout(base, n)[0]
         if n.field not in offsets:
             self._err(n, "no member '{}' in struct '{}'".format(n.field, base.tag),
                       n.field)
-        for m in self.structs[base.tag]:
-            if m.name == n.field:
-                return self._untype(m.type)   # §2.12 marker never leaks
+        for name, mtype in walk_fields(self.structs[base.tag], self.structs):
+            if name == n.field:
+                return self._untype(mtype)   # §2.12 marker never leaks
         self._err(n, "no member '{}' in struct '{}'".format(n.field, base.tag),
                   n.field)
 
@@ -663,7 +704,7 @@ class TypeMap:
 
     def _member_off(self, n: ast.Select) -> int:
         base = self._struct_of(n)
-        offsets, _ = self._struct_layout(base, n)
+        offsets = self._struct_layout(base, n)[0]
         if n.field not in offsets:
             self._err(n, "no member '{}' in struct '{}'".format(n.field, base.tag),
                       n.field)
