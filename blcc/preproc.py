@@ -1,7 +1,7 @@
 """M1 GCC-compatible preprocessor: directive dispatch & source bookkeeping
 (plan R1, R2, R4, R10–R14, R17, R20, R21).
 
-LINES (673 > 400): directive dispatch is ONE concern — the #if-conditional
+LINES (825 > 400): directive dispatch is ONE concern — the #if-conditional
 stack, #line origin state and include search must share the per-file state
 machine; splitting would duplicate that state across files.
 
@@ -41,6 +41,109 @@ _MERGE2_OPS = ("<<=", ">>=", "...", "->", "++", "--", "<<", ">>", "&&",
                "||", "==", "!=", "<=", ">=", "+=", "-=", "*=", "/=", "%=",
                "&=", "^=", "|=")
 
+# --- CLI-operand identifier charclass (F-X05, MC 12469). MEASURED libcpp
+# rule, locale-INDEPENDENT (re-ran this session under LC_ALL=C, C.UTF-8,
+# ISO-8859-1 and GB18030 — identical): raw chars >= 0xAA and `$` are
+# identifier-constituent, and a glued `\uXXXX`/`\UXXXXXXXX` UCN continues
+# the identifier (bytes 0x80..0xA9 — C1 controls, NBSP — are NOT name
+# chars: gcc emits those RAW, never UCN-ized). blcc's token model is
+# ASCII (the expander's is_id gate; UCN fold is not implemented), so the
+# c7/c8 operand reader EXTENDS its charclass to take the libcpp run as
+# ONE token: the name gate (`_NAME_RE`, the M1 ASCII C-identifier subset)
+# then LOUD-refuses any run it cannot represent — a half-name def at
+# rc 0 is IMPOSSIBLE (ARCHITECTURE §5). An INCOMPLETE `\u` escape is no
+# UCN (gcc emits it as written, rc 0) and glues nothing; a syntactically
+# complete UCN whose code point is below U+00A0 (`\u0041`) is not a valid
+# identifier UCN and is loud both sides.
+_IDRUN_TOK = re.compile(r"[A-Za-z0-9_$\u00aa-\U0010ffff]+$")
+_UCN_SHAPE = re.compile(r"([uU])([0-9a-fA-F]{8}|[0-9a-fA-F]{4,})")
+
+
+def _ucn_cp(tok: str) -> Optional[int]:
+    """Code point of the UCN payload when `tok` is the token glued after a
+    backslash, or None when it does not spell a COMPLETE UCN."""
+    m = _UCN_SHAPE.match(tok)
+    if not m:
+        return None
+    want = 8 if m[1] == "U" else 4
+    if len(m[2]) < want:
+        return None
+    return int(m[2][:want], 16)
+
+
+def _merge_id_runs(toks, path: str, ln: int) -> List[str]:
+    r"""Reader charclass extension (NOT a second reader): merge the glued
+    pieces of one libcpp identifier run — ASCII ident chunks, `$`, raw
+    chars >= 0xAA and `\u`/`\U` UCNs — into a single token, keeping the
+    spelled text. Names outside what M1 can represent (anything the
+    `_NAME_RE` gate rejects) reach the shared name reader as ONE whole
+    name and go LOUD there; the split-halves silent wrong-def (X05) is
+    gone by construction.
+    """
+    out: List[str] = []
+    i, n = 0, len(toks)
+
+    def glued_ucn(j: int) -> Optional[int]:
+        v = _ucn_cp(toks[j])
+        if v is not None and v < 0xA0:
+            raise DiagError("pp", path, ln, 1,
+                            "\\U%08x is not a valid universal character" % v,
+                            "\\" + toks[j])
+        return v
+
+    while i < n:
+        t = toks[i]
+        if is_ws(t) or (t != "\\" and not _IDRUN_TOK.match(t)):
+            out.append(t)
+            i += 1
+            continue
+        if t == "\\":
+            if glued_ucn(i + 1) if i + 1 < n else None:
+                run = "\\" + toks[i + 1]
+                i += 2
+            else:
+                out.append(t)
+                i += 1
+                continue
+        else:
+            run = t
+            i += 1
+        while i < n and not is_ws(toks[i]):
+            if toks[i] == "\\":
+                if i + 1 >= n or glued_ucn(i + 1) is None:
+                    break
+                run += "\\" + toks[i + 1]
+                i += 2
+                continue
+            if _IDRUN_TOK.match(toks[i]):
+                run += toks[i]
+                i += 1
+                continue
+            break
+        out.append(run)
+    return out
+
+
+# --- -E token serialization (F-X20, MC 12469). Measured gcc 11.4: an
+# identifier token carrying non-ASCII prints as lowercase UCNs per char
+# (`ó` -> `\U000000f3`, 漢 -> `\U00006f22`, U+1F600 -> `\U0001f600`); the
+# `\uXXXX` spelling normalizes to the 8-digit `\U` form; STRING/CHAR-
+# LITERAL contents stay RAW BYTES; non-name bytes (< 0xAA, e.g. NBSP)
+# print raw.
+_U_LOWER_RE = re.compile(r"\\u([0-9a-fA-F]{4})")
+_U_UPPER_RE = re.compile(r"\\U([0-9a-fA-F]{8})")
+
+
+def _ucn_spell(tok: str) -> str:
+    if tok and tok[0] in "\"'":
+        return tok
+    if (not any(ord(c) >= 0x80 for c in tok)
+            and "\\u" not in tok and "\\U" not in tok):
+        return tok
+    t = _U_LOWER_RE.sub(lambda m: "\\U0000" + m.group(1).lower(), tok)
+    t = _U_UPPER_RE.sub(lambda m: "\\U" + m.group(1).lower(), t)
+    return "".join(c if ord(c) < 0xAA else "\\U%08x" % ord(c) for c in t)
+
 
 def _emit_join(toks: List[str]) -> str:
     """Serialize an expanded token list, separating two tokens whose bare
@@ -48,16 +151,19 @@ def _emit_join(toks: List[str]) -> str:
     multi-char-operator prefixes, comment starts). Source whitespace
     between tokens survives untouched."""
     out: List[str] = []
+    spelled: List[str] = []
     for t in toks:
         if out:
-            a, b = out[-1], t
+            a, b = spelled[-1], t
             if a and b and not is_ws(a[-1]) and not is_ws(b[0]):
                 j = a[-1] + b[0]
                 if ((_IDENTC_RE.match(j[0]) and _IDENTC_RE.match(j[1]))
                         or any(op.startswith(j) for op in _MERGE2_OPS)
                         or j in ("/*", "*/", "//")):
                     out.append(" ")
-        out.append(t)
+                    spelled.append(" ")
+        out.append(_ucn_spell(t))
+        spelled.append(t)
     return "".join(out)
 
 
@@ -162,6 +268,16 @@ class Preprocessor:
         for name in self.opts.preinclude:
             self._include(path, 1, '"%s"' % name, preinclude=True)
         self._process(path, text)
+        # gcc's -E stream ENDS at the last content line + one \n — no
+        # trailing blank lines at EOF, measured (even `V FOO\n\n\n`
+        # collapses to zero); blcc's per-line output carried one empty
+        # trailing SourceLine in EVERY run. Invisible to norm() as plain
+        # whitespace, VISIBLE when the final token is an unterminated
+        # string, which swallows to end-of-stream (F-X12 token diff, MC
+        # 12469). Drop the trailing blank run; INTERNAL blanks stay
+        # (measured mid-file: 2 blank lines survive on both sides).
+        while self.out and self.out[-1].text == "":
+            self.out.pop()
         return self.out
 
     def preprocess_file(self, path: str) -> List[SourceLine]:
@@ -192,11 +308,25 @@ class Preprocessor:
             # separates (S55/N01 clip the body) nor suppresses. The tail
             # past the EOL never reaches either reader (N11: no
             # extra-tokens warning from `-UFOO\nBAR`).
+            if any("\ud800" <= c <= "\udfff" for c in arg):
+                # An argv byte that is not valid UTF-8 arrives through
+                # Python's surrogateescape and CANNOT reach the text-mode
+                # -E stream at all (it used to ICE the write with rc 1 —
+                # §8 violation). Unrepresentable -> LOUD naming the
+                # operand (F-X05 family, §5; gcc emits raw bytes rc 0,
+                # the disclosed loud-divergence row).
+                raise DiagError("pp", "<command-line>", 1, 1,
+                                "-%s operand is not valid UTF-8" % kind,
+                                "-%s %s" % (kind, arg.encode(
+                                    "utf-8", "backslashreplace").decode(
+                                        "ascii")))
             eol = min((i for i in (arg.find("\n"), arg.find("\r"))
                        if i >= 0), default=-1)
             head = arg if eol < 0 else arg[:eol]
             if kind == "U":
-                self._undef("<command-line>", 1, tokenize(head),
+                self._undef("<command-line>", 1,
+                            _merge_id_runs(tokenize(head), "<command-line>",
+                                           1),
                             "-U needs an identifier", arg)
                 continue
             name_part, sep, tail = head.partition("=")
@@ -206,7 +336,29 @@ class Preprocessor:
                 text = name_part + " "
             else:
                 text = name_part + " 1"
-            self._define("<command-line>", 1, tokenize(text),
+            toks = _merge_id_runs(tokenize(text), "<command-line>", 1)
+            for tok in toks:
+                # the operand's unterminated literal tier (F-X12): gcc
+                # warns `missing terminating " character` on the operand
+                # parse itself (rc stays 0, the clipped body still
+                # defines); blcc had no such warning.
+                if tok[:1] in ("'", '"') and not re.fullmatch(
+                        tok[0] + r"(?:\\.|[^" + tok[0] + r"\\])*" + tok[0],
+                        tok):
+                    self._warn("<command-line>", 1, 1,
+                               "missing terminating %s character" % tok[0])
+            # A backslash glued after the NAME (the UCN spellings that did
+            # not merge into one run, e.g. the incomplete `-DA\u00e=5`
+            # that gcc takes as name `A` + warn + body `5`) half-parses
+            # exactly like X05 — the M1 subset cannot represent it, so it
+            # is refused LOUD before the shared reader. `-DFOO-x` (dash
+            # tail) is NOT a libcpp name char and stays tail-tolerated
+            # (fairness rows c7/X-measured, def `-x 1` both sides).
+            tk = self._skip_ws(toks)
+            if tk[1:2] == ["\\"]:
+                raise DiagError("pp", "<command-line>", 1, 1,
+                                "-D needs an identifier", "-D " + arg)
+            self._define("<command-line>", 1, toks,
                          warn_ctx="-D " + arg,
                          name_msg="-D needs an identifier")
 
