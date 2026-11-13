@@ -142,8 +142,11 @@ def test_data_labels_bind_at_their_own_bytes():
     # .data (cycle-1 F3: label bound before its .align padding).
     syms = subprocess.run(["objdump", "-t", out], capture_output=True,
                           text=True, timeout=10).stdout
+    # M2 resync (§2.8 nm parity): file-scope objects with external linkage
+    # now bind GLOBAL ('g'); the probe's concern is byte-binding, not
+    # symbol scope, so both scopes are in the symbol set.
     addrs = dict((m.group(2), int(m.group(1), 16)) for m in re.finditer(
-        r"^([0-9a-f]+) l\s+\.data\s+0+\s+(\w+)$", syms, re.M))
+        r"^([0-9a-f]+) [lg]\s+\.data\s+0+\s+(\w+)$", syms, re.M))
     blob = subprocess.run(["objdump", "-s", "-j", ".data", out],
                           capture_output=True, text=True, timeout=10).stdout
     data = bytearray()
@@ -206,8 +209,11 @@ def test_allowed_global_init_forms_still_work():
     # §4: 0 -> .bss, non-zero -> .data; address-of-global is 8-byte .quad
     syms = subprocess.run(["objdump", "-t", out], capture_output=True,
                           text=True, timeout=10).stdout
+    # M2 resync (§2.8): external-linkage objects are 'g'; section membership
+    # (0 -> .bss, non-zero -> .data) is the invariant under test, so scan
+    # both symbol scopes.
     sect = dict((m.group(2), m.group(1)) for m in re.finditer(
-        r"^[0-9a-f]+ l\s+\.(\w+)\s+0+\s+(\w+)$", syms, re.M))
+        r"^[0-9a-f]+ [lg]\s+\.(\w+)\s+0+\s+(\w+)$", syms, re.M))
     assert sect.get("zero") == "bss" and sect.get("arr") == "bss", sect
     assert sect.get("gp") == "data" and sect.get("s") == "data", sect
     os.remove(out)

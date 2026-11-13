@@ -119,8 +119,11 @@ def test_label():
 
 
 def test_union():
-    assert_loud("union U { int a; long b; };\nint main(void){ return 0; }\n",
-                "union", "union")
+    # M2 resync (§2.8): union is SUPPORTED (M1 pin retired; coverage
+    # moved to tests/test_core_m2_link.py run-pairs). The §8 sweep rides
+    # a construct VERIFIED LOUD this very build: the `?:` operator.
+    assert_loud("int main(void){ return 1 ? 2 : 3; }\n",
+                "union", "conditional")
 
 
 def test_bitfield():
@@ -182,8 +185,11 @@ def test_static_inside_function():
 
 
 def test_extern():
-    assert_loud("extern int e;\nint main(void){ return 0; }\n",
-                "extern", "extern")
+    # M2 resync (§2.8): extern is SUPPORTED (M1 pin retired; coverage
+    # moved to tests/test_core_m2_link.py). Sweep continuity rides another
+    # VERIFIED-LOUD subset boundary: VLA-style unsized array local (§4).
+    assert_loud("int main(void){ int a[]; return 0; }\n",
+                "extern", "array")
 
 
 def test_case_outside_switch():

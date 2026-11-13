@@ -271,9 +271,13 @@ def test_goto_and_labels_parse():
     assert isinstance(body[1], ast.Label) and body[1].name == "end"
 
 
-def test_union_is_diagnostic():
-    d = diag("union U { int a; int b; };")
-    assert "'union'" in d.message
+def test_union_parses_as_flagged_struct_type():
+    # M2 resync (§2.8): union is SUPPORTED — the M1 "'union' LOUD" pin is
+    # retired; layout rides the is_union flag (all members at offset 0).
+    tu = parse_text("union U { int a; int b; };")
+    sd = find(tu, ast.StructDecl)
+    assert sd is not None and sd.is_union is True
+    assert sd.members is not None and len(sd.members) == 2
 
 
 def test_bitfield_is_diagnostic():
@@ -305,9 +309,12 @@ def test_static_at_file_scope_is_accepted():
     assert tu.decls[0].is_static
 
 
-def test_extern_is_diagnostic():
-    d = diag("extern int shared;")
-    assert "'extern'" in d.message
+def test_extern_parses_as_extern_decl():
+    # M2 resync (§2.8): extern is SUPPORTED — the M1 pin is retired; the
+    # flag is what keeps the re-decl out of the emission.
+    tu = parse_text("extern int shared;")
+    vd = find(tu, ast.VarDecl)
+    assert vd is not None and vd.is_extern is True and vd.init is None
 
 
 def test_default_or_case_outside_switch_is_diagnostic():
