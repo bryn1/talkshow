@@ -68,7 +68,7 @@ int main(void) {
     a16 = 0x00ff; a32 = 0x00000100u; a64 = 0x100UL;
     if (__builtin_bswap16(a16) != 0xff00) return 4;
     if (__builtin_bswap32(a32) != 0x00010000u) return 5;
-    if (__builtin_bswap64(a64) != 0x0100000000000000UL) return 6;
+    if (__builtin_bswap64(a64) != 0x0001000000000000UL) return 6;
     return 0;
 }
 """, "x-bswap")
@@ -113,18 +113,15 @@ def test_frame_return_address_run_pair():
     # address, so frame_address(0)[1] == return_address(0) and the two
     # are distinct from the frame pointer itself.
     both_run("""
-unsigned long fa(void) { return (unsigned long)__builtin_frame_address(0); }
-unsigned long ra(void) { return (unsigned long)__builtin_return_address(0); }
-unsigned long ra_via_fa(void) {
+int check(void) {
     unsigned long *f = (unsigned long *)__builtin_frame_address(0);
-    return f[1];
-}
-int main(void) {
-    if (ra() == 0 || fa() == 0) return 1;
-    if (ra() == fa()) return 2;
-    if (ra_via_fa() != ra()) return 3;
+    if (f[1] != (unsigned long)__builtin_return_address(0)) return 1;
+    if ((unsigned long)__builtin_return_address(0) == (unsigned long)f)
+        return 2;
+    if (f[1] == 0) return 3;
     return 0;
 }
+int main(void) { return check(); }
 """, "x-addr")
 
 

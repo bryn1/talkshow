@@ -697,6 +697,20 @@ class TypeMap:
                 return ast.PtrType(n.file, n.line, n.col,
                                    ast.BuiltinType(n.file, n.line, n.col,
                                                    "char"))
+            if name in predef.INTRINSIC_FOLDS:
+                # §1 row 19 TYPE arm (mirror of the codegen folds):
+                # bswap16/32 and every ctz/clz spelling return int;
+                # bswap64 returns unsigned long; the level-0 frame/return
+                # address builtins return void* (gcc's type).
+                if name == "__builtin_bswap64":
+                    return ast.BuiltinType(n.file, n.line, n.col,
+                                           "unsigned long")
+                if name in ("__builtin_return_address",
+                            "__builtin_frame_address"):
+                    return ast.PtrType(n.file, n.line, n.col,
+                                       ast.BuiltinType(n.file, n.line,
+                                                       n.col, "void"))
+                return ast.BuiltinType(n.file, n.line, n.col, "int")
             return self.sigs[name][1]
         if isinstance(n, ast.Generic):
             # §2.6d: the type of the SELECTED association's expression.

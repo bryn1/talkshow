@@ -227,6 +227,24 @@ class ExprEmitter(MemFoldMixin):
         self._e("addq $8, {}(%rsi)".format(predef.VA_OVF_OFF))
         self.fn.lines.append("{}:".format(lab_end))
 
+    def _frame_level0(self, n, name, line):
+        """§1 row 19: level 0 ONLY. blcc's frame model (pushq %rbp;
+        movq %rsp,%rbp) puts the return address at 8(%rbp) and the frame
+        base in %rbp — the same slot gcc's frame-pointer layout uses,
+        which the run-pair pins. Levels >= 1 walk the caller chain and
+        stay §5-DEFER (LOUD)."""
+        if len(n.args) != 1:
+            self._err(n, "'{}' takes exactly 1 argument (§1 row 19)"
+                      .format(name), name)
+        try:
+            lvl = self._fold_const(n.args[0], n)
+        except Exception:
+            lvl = None
+        if lvl != 0:
+            self._err(n, "'{}' levels above 0 are not in the subset (§5)"
+                      .format(name), name)
+        self._e(line)
+
     def _ex_call(self, n) -> None:
         name = n.callee.name
         if name in predef.VA_FOLDS:
@@ -249,6 +267,59 @@ class ExprEmitter(MemFoldMixin):
                           "2 arguments (§2.12)", name)
             self._imm(1 if self._types_compatible(n.args[0], n.args[1])
                       else 0)
+            return
+        if name in ("__builtin_bswap16", "__builtin_bswap32",
+                    "__builtin_bswap64", "__builtin_ctz", "__builtin_ctzll",
+                    "__builtin_clz", "__builtin_clzll"):
+            # §1 row 19 bit-manipulation intrinsics. Sequences are the
+            # x86-64 primitives gcc itself lowers these to (operand in
+            # %rax, result in %rax; run-pairs in test_core_m2_intrinsics).
+            if len(n.args) != 1:
+                self._err(n, "'{}' takes exactly 1 argument (§1 row 19)"
+                          .format(name), name)
+            self._emit_expr(n.args[0])
+            if name == "__builtin_bswap16":
+                self._e("movzwl %ax, %eax")
+                self._e("rorw $8, %ax")
+            elif name == "__builtin_bswap32":
+                self._e("bswapl %eax")
+            elif name == "__builtin_bswap64":
+                self._e("bswapq %rax")
+            elif name == "__builtin_ctz":
+                self._e("bsrl %eax, %eax")       # 0-input = UB (gcc too)
+            elif name == "__builtin_ctzll":
+                self._e("bsfq %rax, %rax")
+            elif name == "__builtin_clz":
+                self._e("bsrl %eax, %ecx")
+                self._e("movl $31, %eax")
+                self._e("subl %ecx, %eax")
+            else:
+                self._e("bsrq %rax, %rcx")
+                self._e("movl $63, %eax")
+                self._e("subl %ecx, %eax")
+            return
+        if name == "__builtin_unreachable":
+            # §1 row 19: the hint emits NOTHING (gcc -Os measured: zero
+            # instructions); UB if reached, and blcc does not optimize on
+            # the hint — the run-pair legs never reach it.
+            if n.args:
+                self._err(n, "'__builtin_unreachable' takes no arguments "
+                          "(§1 row 19)", name)
+            self._imm(0)
+            return
+        if name == "__builtin_prefetch":
+            # §1 row 19: pure hint — gcc emits no code and does not
+            # evaluate the address operand's side effects.
+            if not 1 <= len(n.args) <= 3:
+                self._err(n, "'__builtin_prefetch' takes 1-3 arguments "
+                          "(§1 row 19)", name)
+            self._imm(0)
+            return
+        if name == "__builtin_return_address":
+            self._frame_level0(n, name, "movq 8(%rbp), %rax")
+            return
+        if name == "__builtin_frame_address":
+            self._frame_level0(n, name, "movq %rbp, %rax")
             return
         variadic = False
         if name in BUILTINS:

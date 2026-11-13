@@ -56,6 +56,14 @@ VA_FOLDS = frozenset({"__builtin_va_start", "__builtin_va_arg",
 # §2.17 mem* SIZE-CLASS fold (MC 12460 cycle-2): the __builtin_* spellings
 # ALWAYS fold; a plain name folds unless the TU carries a visible DEFINITION
 # (the self.funcs check lives codegen-side — memfold.MemFoldMixin).
+# §1 row 19 (M49-misc): the bit/frame intrinsics — same "folds, not
+# callables" posture: no symbol, no sigs entry; the codegen arms answer.
+INTRINSIC_FOLDS = frozenset({
+    "__builtin_bswap16", "__builtin_bswap32", "__builtin_bswap64",
+    "__builtin_ctz", "__builtin_ctzll", "__builtin_clz", "__builtin_clzll",
+    "__builtin_unreachable", "__builtin_prefetch",
+    "__builtin_return_address", "__builtin_frame_address",
+})
 MEM_FOLDS = frozenset({"__builtin_memcpy", "__builtin_memset",
                        "__builtin_memcmp", "__builtin_memmove"})
 MEM_PLAIN = frozenset({"memcpy", "memset", "memcmp", "memmove"})

@@ -46,7 +46,8 @@ class ExprParser:
                  fold_truthy: Optional[Callable] = None,
                  fold_offset: Optional[Callable] = None,
                  parse_init: Optional[Callable] = None,
-                 norm_init: Optional[Callable] = None):
+                 norm_init: Optional[Callable] = None,
+                 objsize: Optional[Callable] = None):
         self.s = stream
         self.is_typename = is_typename
         self.parse_type = parse_type
@@ -57,6 +58,7 @@ class ExprParser:
         self.fold_offset = fold_offset            # §2.13 offsetof layout
         self.parse_init = parse_init              # §1 row 11 brace init
         self.norm_init = norm_init                # §1 row 10 normalization
+        self.objsize = objsize                    # §1 row 19 object_size
         self._lenient_calls = False               # inside GNU fold args
 
     # -- entry: assignment level (right-associative) ------------------------
@@ -216,6 +218,41 @@ class ExprParser:
                 if isinstance(node, ast.Ident) and node.name == (
                         "__builtin_offsetof"):
                     node = self._fold_offsetof(t)
+                    continue
+                if isinstance(node, ast.Ident) and node.name == (
+                        "__builtin_extract_return_addr"):
+                    # §1 row 19 IDENTITY FOLD: on x86-64 the canonical
+                    # address IS the address (gcc 11.4 measured: the whole
+                    # builtin lowers to movq %rdi,%rax). The argument rides
+                    # on untouched; no call, no codegen arm.
+                    args = self._parse_call_args(t)
+                    if len(args) != 1:
+                        raise DiagError(
+                            "sema", t.file, t.line, t.col,
+                            "'__builtin_extract_return_addr' takes exactly "
+                            "1 argument (§1 row 19)", node.name)
+                    node = args[0]
+                    continue
+                if isinstance(node, ast.Ident) and node.name == (
+                        "__builtin_object_size"):
+                    # §1 row 19: the compile-time object-size query folds
+                    # to an INTEGER constant (SIZE_MAX when unidentified)
+                    # — gcc emits no runtime code for it at all.
+                    args = self._parse_call_args(t)
+                    if len(args) != 2:
+                        raise DiagError(
+                            "sema", t.file, t.line, t.col,
+                            "'__builtin_object_size' takes 2 arguments "
+                            "(§1 row 19)", node.name)
+                    if (self.fold_truthy is None
+                            or self.fold_truthy(args[1]) not in (0, 1, 2, 3)):
+                        raise DiagError(
+                            "sema", args[1].file, args[1].line, args[1].col,
+                            "'__builtin_object_size' needs a constant "
+                            "0..3 type argument (§1 row 19)", node.name)
+                    v = self.objsize(args[0]) if self.objsize else -1
+                    node = ast.IntLit(t.file, t.line, t.col, v,
+                                      "unsigned long")
                     continue
                 if isinstance(node, ast.Ident) and node.name in (
                         "__builtin_expect", "__builtin_choose_expr"):

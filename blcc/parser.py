@@ -60,7 +60,8 @@ class Parser:
                                self.parse_stmt_expr, self.fold_truthy,
                                self.resolve_offsetof,
                                parse_init=self.parse_initializer,
-                               norm_init=self._norm_init)
+                               norm_init=self._norm_init,
+                               objsize=self.resolve_objsize)
 
     # -- §2.4 GNU statement-expressions (M2-C5 leg 1) ------------------------
 
@@ -270,6 +271,48 @@ class Parser:
             o += msz
         return out
 
+    def resolve_objsize(self, e) -> int:
+        """§1 row 19: __builtin_object_size(p, n)'s compile-time answer.
+        Walk the lvalue spine (casts, &, [], +CONST) to the naming object;
+        its remaining size, else -1 (= SIZE_MAX, gcc's unidentified
+        answer — measured on extern char ext[])."""
+        off = 0
+        while True:
+            if isinstance(e, ast.Cast):
+                e = e.operand
+                continue
+            if isinstance(e, ast.Unary) and e.op == "&":
+                e = e.operand
+                continue
+            if isinstance(e, ast.Index):
+                e = e.base
+                continue
+            if isinstance(e, ast.Binary) and e.op == "+":
+                v = self.fold_truthy(e.right)
+                if v is not None:
+                    off += v
+                    e = e.left
+                    continue
+                v = self.fold_truthy(e.left)
+                if v is not None:
+                    off += v
+                    e = e.right
+                    continue
+                return -1
+            break
+        try:
+            t = self.expr_type(e)
+        except DiagError:
+            return -1
+        if t is None:
+            return -1
+        while isinstance(t, ast.Qualified):
+            t = t.inner
+        sz = self._csize(t)
+        if sz is None:
+            return -1
+        return sz - off if sz > off else 0
+
     def resolve_offsetof(self, ty, chain, at):
         # §2.13 fold: walk the layout table for the member chain. A
         # MISSING member LOUDs — a bitfield member never lands in
@@ -412,6 +455,8 @@ class Parser:
         if name in predef.VA_FOLDS:
             # §2.7: the va intrinsics are FOLDS, not callables (row 19
             # "folds, not callables" posture) — no symbol, no sigs entry.
+            return True
+        if name in predef.INTRINSIC_FOLDS:
             return True
         if name in predef.MEM_FOLDS:
             # §2.17: same posture for the mem* builtins — the fold needs
@@ -986,7 +1031,11 @@ class Parser:
                 self.s.expect_punct(";")
                 break
             if (isinstance(ty, ast.ArrayType) and ty.size is None
-                    and not isinstance(init, (ast.InitList, ast.StrLit))):
+                    and not isinstance(init, (ast.InitList, ast.StrLit))
+                    and not is_extern):
+                # T+10b: `extern unsigned char _ctype[];` declares without
+                # defining — no size is needed here (the §1 row 10 walk
+                # hit this wall on 7 corpus files behind the fn-ptr gate).
                 self._sema(pos, "'array' declaration without size needs an initializer list (§4)")
             self.define(name, ("var", ty), pos)
             out.append(ast.VarDecl(pos.file, pos.line, pos.col, name, ty,
