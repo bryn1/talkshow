@@ -48,6 +48,13 @@ DIAG_RE = re.compile(r"^(\S+):(\d+):(\d+): (lex|pp|parse|sema|asm): .+, "
 
 def assert_loud(src_text, tag, name, line=None, col=None):
     r, src, out = blcc_compile(src_text, tag)
+    # Sweep hygiene (MC 12460, lead ruling): a leg that FAILS because the
+    # construct became SUPPORTED must not seed the NEXT run's sweep with a
+    # leftover binary — the flip is evidenced by the failed assertion
+    # below, never by a stray .out. One mechanism: every negative leg is
+    # self-cleaning.
+    if os.path.exists(out):
+        os.remove(out)
     assert r.returncode == 2, \
         "{}: expected exit 2, got {} stdout={!r} stderr={!r}".format(
             tag, r.returncode, r.stdout, r.stderr)
