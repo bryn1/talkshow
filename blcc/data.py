@@ -252,6 +252,10 @@ class DataEmitter:
                 if i < len(items) and \
                         not isinstance(items[i], ast.ZeroFill):
                     if bfx is not None:
+                        if bfx == ("fam",):
+                            self._err(init, "a flexible array member "
+                                      "initializer is not in the subset "
+                                      "(§5 — §1 row 13)", "initializer")
                         self._err(init, "a bitfield member initializer is "
                                   "not in the subset (§5 — §1 row 12)",
                                   "initializer")

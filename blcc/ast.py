@@ -40,6 +40,13 @@ class PtrType(Node):
 class ArrayType(Node):
     inner: Node
     size: Optional[Node]   # IntLit; None only for parameters (§4)
+    # §1 row 13 (M46): a flexible array member `T v[];` — the LAST member
+    # of a struct (never a union, never alone). sizeof(struct) is the
+    # header only; the member contributes 0 bytes but its element
+    # alignment joins the struct's. This is the incomplete `T v[]`
+    # spelling; gcc's legacy `T v[0];` is a COMPLETED zero-size array
+    # (size = IntLit(0), sizeof == 0) — a different shape, both pinned.
+    fam: bool = False
 
 
 @dataclass(frozen=True)

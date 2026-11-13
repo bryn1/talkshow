@@ -361,8 +361,17 @@ def test_unsigned_is_diagnostic():
 
 
 def test_unsized_array_struct_member_is_diagnostic():
+    # M46 resync (§1 row 13): the single-bracket `int v[];` declarator is
+    # the FLEXIBLE ARRAY MEMBER now — this source LOUDs for a DIFFERENT
+    # reason (a FAM may not be the struct's only named content, the gcc
+    # "structure has no members" error). The remaining §5 wall shape is
+    # an unsized MULTI-dimensional member (gcc: "array size missing").
     d = diag("struct S { int tail[]; };")
+    assert "flexible array member" in d.message
+    d = diag("struct S { int m[][4]; int n; };")
     assert "'array'" in d.message
+    d = diag("struct S { int a[]; int b; };")
+    assert "not at the end" in d.message
 
 
 def test_for_init_beyond_one_simple_declaration():

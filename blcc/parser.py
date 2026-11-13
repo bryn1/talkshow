@@ -300,6 +300,16 @@ class Parser:
                 ob += w
                 o = (ob + 7) // 8
                 continue
+            if isinstance(m.type, ast.ArrayType) and m.type.fam:
+                # §1 row 13 (M46): offsetof(S, fam) is legal and equals
+                # the header end aligned to the element (§1 row 13 fold
+                # mirror; the FAM is last, so o does not advance).
+                mal = self._calign(m.type)
+                if mal is None:
+                    return None
+                o = (o + mal - 1) // mal * mal
+                out.append((m.name, o, m.type))
+                continue
             msz = self._csize(m.type)
             mal = self._calign(m.type)
             if msz is None or mal is None:
@@ -498,6 +508,14 @@ class Parser:
                     if m.name is not None:
                         align = max(align, self._malign_f(m, packed, u, ty))
                     off_bit += w
+                    continue
+                if isinstance(m.type, ast.ArrayType) and m.type.fam:
+                    # §1 row 13 (M46) fold mirror: zero size contribution,
+                    # element align joins the struct's (FD align 8).
+                    mal = self._calign(m.type)
+                    if mal is None:
+                        return None
+                    align = max(align, self._malign_f(m, packed, mal, ty))
                     continue
                 ms = self._csize(m.type)
                 if ms is None:
@@ -852,7 +870,7 @@ class Parser:
         else:
             tag = self.s.expect_id("parse").text
         if self.s.accept_punct("{"):
-            members = self.parse_struct_members()
+            members = self.parse_struct_members(is_union)
             tsink: List[tuple] = []
             self._skip_gnu_attrs(tsink)  # tag-definition tail (§1 row 9)
             if tag in self.struct_tags:
@@ -878,7 +896,7 @@ class Parser:
         from blcc.types import walk_fields
         return [n for n, _t in walk_fields(members, self.struct_tags)]
 
-    def parse_struct_members(self) -> Tuple[ast.Member, ...]:
+    def parse_struct_members(self, is_union=False) -> Tuple[ast.Member, ...]:
         members: List[ast.Member] = []
         seen: set = set()             # flat member namespace, promoted §
         while not self.s.at_punct("}"):
@@ -929,6 +947,32 @@ class Parser:
                 self._sema(pos, "duplicate member '{}'".format(name))
             seen.add(name)
             members.append(ast.Member(name, ty, tuple(msink), width))
+        # §1 row 13 (M46) FAM PLACEMENT law — every arm measured as a
+        # gcc gnu89 ERROR: a flexible array in a union; a FAM with ANY
+        # member after it ("flexible array member is not at the end");
+        # and a struct whose only named content IS the FAM ("structure
+        # has no members").
+        fam_at = [i for i, m in enumerate(members)
+                  if isinstance(m.type, ast.ArrayType) and m.type.fam]
+        for i in fam_at:
+            m = members[i]
+            if is_union:
+                self._sema(m.type, "flexible array member in a union is a "
+                           "gcc ERROR (§1 row 13)", m.name)
+            if i != len(members) - 1:
+                self._sema(m.type, "flexible array member '{}' is not at "
+                           "the end (§1 row 13, gcc error)".format(
+                               m.name), m.name)
+        if fam_at:
+            from blcc.types import walk_fields
+            named = {n for n, t in walk_fields(members, self.struct_tags)
+                     if not (isinstance(t, ast.ArrayType) and t.fam)}
+            if not named:
+                self._sema(members[fam_at[0]].type,
+                           "structure has no named member besides the "
+                           "flexible array member (§1 row 13, gcc: "
+                           "structure has no members)",
+                           members[fam_at[0]].name)
         self.s.expect_punct("}")
         return tuple(members)
 
@@ -1029,15 +1073,25 @@ class Parser:
             bracket = self.s.next()
             size = (None if self.s.at_punct("]") else self.expr.parse_expression())
             self.s.expect_punct("]")
-            if size is None and ctx == "member":
-                self._sema(bracket, "'array' members of a struct must have a fixed size (§5)")
             dims.append((bracket, size))
+        # §1 row 13 (M46): `int v[];` — a member's SINGLE unsized bracket
+        # is the FLEXIBLE ARRAY declarator (gcc gnu89; the last-member/
+        # union/alone rules belong to the member list, checked by
+        # parse_struct_members). Any other unsized member dimension keeps
+        # the M1 wall (gcc: "array size missing").
+        fam_dim = (ctx == "member" and len(dims) == 1
+                   and dims[0][1] is None)
+        if (any(s is None for _, s in dims) and ctx == "member"
+                and not fam_dim):
+            self._sema(dims[0][0], "'array' members of a struct must "
+                       "have a fixed size (§5)")
         # C reads declarators right-to-left: in `int m[2][3]` the bracket
         # CLOSEST to m ([2]) is the OUTERMOST array — array of 2 rows of 3.
         # Wrapping each successive bracket outward reversed the dimensions
         # (DA-c3 P0-2: stride 8, false "too many initializers", m[i][j] off).
         for bracket, size in reversed(dims):
-            ty = ast.ArrayType(bracket.file, bracket.line, bracket.col, ty, size)
+            ty = ast.ArrayType(bracket.file, bracket.line, bracket.col,
+                               ty, size, fam=fam_dim)
         params: Tuple[ast.Param, ...] = ()
         is_fn = False
         if self.s.at_punct("("):

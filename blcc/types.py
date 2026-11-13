@@ -152,8 +152,12 @@ class TypeMap:
             return ast.PtrType(ty.file, ty.line, ty.col,
                                self._untype(ty.inner))
         if isinstance(ty, ast.ArrayType):
+            # §1 row 13 (M46): the FAM marker must SURVIVE materialization
+            # — dropping it turned sizeof(s.v) into the silent 8 of param
+            # decay instead of the gcc ERROR (caught by test_fam_sof).
             return ast.ArrayType(ty.file, ty.line, ty.col,
-                                 self._untype(ty.inner), ty.size)
+                                 self._untype(ty.inner), ty.size,
+                                 getattr(ty, "fam", False))
         return ty
 
     def _ty_stmtexpr(self, n: ast.Node) -> ast.Node:
@@ -189,6 +193,14 @@ class TypeMap:
         if isinstance(ty, ast.ArrayType):
             esz = self._size(ty.inner, at)
             if ty.size is None:        # parameter: decays to pointer (§4)
+                if getattr(ty, "fam", False):
+                    # §1 row 13 (M46): gcc ERROR "invalid application of
+                    # sizeof to incomplete type" — the legacy v[0] (a
+                    # COMPLETED zero-size array) reads 0 instead; both
+                    # pinned in test_core_m2_fam.
+                    self._err(at or self.tu, "cannot apply 'sizeof' to a "
+                              "flexible array member (gcc ERROR: incomplete "
+                              "type, §1 row 13)", "sizeof")
                 return 8
             return esz * self._arrlen(ty, at)
         self._err(at or self.tu, "cannot size this type", self._what(ty))
@@ -549,6 +561,23 @@ class TypeMap:
                     bits[m.name] = d
                 slots.append((m.name, m.type, base // 8, 0, d))
                 bit += w
+                continue
+            if isinstance(m.type, ast.ArrayType) and m.type.fam:
+                # §1 row 13 (M46): the flexible member spans ZERO bytes at
+                # the header end (offset aligned to the ELEMENT's align,
+                # which joins the struct's align — measured FD off 8 al 8,
+                # FS off 1 sz 1). Nothing follows a FAM (§1 row 13), so
+                # the bit cursor stays; the slot carries the "fam" marker
+                # so a SUPPLIED initializer LOUDs (data/codegen §5 wall).
+                mal = self._malign(m, packed, at or ty)
+                align = max(align, mal)
+                off = (bit + 7) // 8
+                off = (off + mal - 1) // mal * mal
+                if m.name is None:          # defensive: FAM is never anon
+                    self._err(at or ty, "flexible array member needs a "
+                              "name (§1 row 13)", "flexible array")
+                offs[m.name] = off
+                slots.append((m.name, m.type, off, 0, ("fam",)))
                 continue
             msz = self._size(m.type, at or ty)
             mal = self._malign(m, packed, at or ty)

@@ -598,8 +598,15 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter):
                 has = (i < len(init.items)
                        and not isinstance(init.items[i], ast.ZeroFill))
                 if has and bfx is not None:
-                    self._err(at, "a bitfield member initializer is not "
-                              "in the subset (§5 — §1 row 12)", "{")
+                    if bfx == ("fam",):
+                        # §1 row 13 (M46): gcc EMITS the beyond-size bytes
+                        # (measured .data) — DEFERRED here (§5).
+                        self._err(at, "a flexible array member initializer "
+                                  "is not in the subset (§5 — §1 row 13)",
+                                  "{")
+                    else:
+                        self._err(at, "a bitfield member initializer is not "
+                                  "in the subset (§5 — §1 row 12)", "{")
                 if has:
                     self._init_item(off + mo, sty, init.items[i], at)
                 else:
