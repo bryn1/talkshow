@@ -554,6 +554,12 @@ class TypeMap:
                 base = (bit // ub) * ub
                 if bit + w > base + ub:
                     bit = base + ub
+                    # FIX-G1 (gate C1 TRIGGER 1): the moved field RIDES the
+                    # next unit — the descriptor must re-base with the
+                    # cursor, else extract/RMW aim at the old unit and the
+                    # spill store vanishes (gcc law measured: `movb $-56,
+                    # 4+ga(%rip)` for {uint a:28; uint b:8}`).
+                    base = bit
                 d = (base // 8, bit - base, w, m.type.name)
                 if m.name is not None:
                     mal = max(u, self._mem_raise(m, at or ty) or 0)

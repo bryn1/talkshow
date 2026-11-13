@@ -280,8 +280,15 @@ class DataEmitter:
         # .align precedes the label (.data AND .bss): a label written before
         # its padding binds to the pre-padding address, not to the bytes.
         if all(k == "z" or (k == "b" and v == 0) for k, v in items):
+            # FIX-G1 (gate C1 TRIGGER 2, F-gate-1): a DEFINED zero-sized
+            # object still advances the layout by ONE byte — gcc emits
+            # `.size N, 0` together with `.zero 1` (measured zsz.c:
+            # y@0 after@1, a@4 after2@5, e0@8 after4@9) — so the NEXT
+            # global lands at a distinct address. `.zero 0` made them
+            # COLLIDE silently. sizeof stays 0; only the allocation foot
+            # prints one byte.
             return "bss", ["    .align 8", "{}:".format(vd.name),
-                           "    .zero {}".format(total)]
+                           "    .zero {}".format(total if total else 1)]
         lines = ["    .align 8", "{}:".format(vd.name)]
         acc: List[int] = []
 
