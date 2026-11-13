@@ -181,8 +181,11 @@ def _reject(tag, body, msg_re):
     assert not os.path.exists(out), "nothing may be emitted for rejected input"
 
 
-@pytest.mark.parametrize("esc", [r"\377", r"\8"], ids=["octal377", "backslash8"])
+@pytest.mark.parametrize("esc", [r"\8"], ids=["backslash8"])
 def test_out_of_set_escape_rejected_loud(esc):
+    # M2 RESYNC (§1 row 3 / §2.3): bare octal \377 is now SUPPORT (byte
+    # 0xFF — tests/test_core_m2_esc.py pins it); \8 is NOT an octal digit
+    # and is no C escape ⇒ still LOUD.
     _reject("esc", "int main(void) { pbytes(\"" + esc + "\", 1); return 0; }\n",
             r"unknown escape")
 

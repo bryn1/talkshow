@@ -34,7 +34,12 @@ ID_CHARS = ID_START | DIGITS
 
 # Pinned escape set (§3): \n \t \\ \" \0ddd \xHH. \' is accepted inside char
 # literals only. Anything else — including \u — is an unknown escape.
-_SIMPLE_ESCAPES = {"n": "\n", "t": "\t", "\\": "\\", '"': '"'}
+# §2.3 escape byte map, gcc 11.4 objdump-verified (M2 §1 row 3):
+# \a \b \f \n \r \t \v \\ \' \" \? + GNU \e; quotes valid in BOTH literal
+# kinds (C rule; `\'` in strings was CONTRADICTED-as-accepted at HEAD).
+_SIMPLE_ESCAPES = {"a": "\a", "b": "\b", "f": "\f", "n": "\n", "r": "\r",
+                   "t": "\t", "v": "\v", "\\": "\\", '"': '"', "'": "'",
+                   "?": "?", "e": "\x1b"}
 
 
 def _esc_byte(v: int) -> str:
@@ -154,18 +159,6 @@ class Lexer:
                     continue
                 if c in "\"'":
                     i = self._literal(src, text, i, toks)
-                    # L1 (M1 R9, phase-6 parity): a macro-produced literal
-                    # can abut the next one with NOTHING between (`"a""b"`
-                    # — zero gap); merge THOSE. Any inter-literal space
-                    # stops this loop — spaced juxtaposition is M2 row 6g.
-                    while i < n and text[i] == '"' and toks \
-                            and toks[-1].kind == "str":
-                        i = self._literal(src, text, i, toks)
-                        nxt = toks.pop()
-                        prev = toks.pop()
-                        toks.append(Token("str", prev.text + nxt.text,
-                                          prev.file, prev.line, prev.col,
-                                          prev.value + nxt.value))
                     continue
                 matched = None
                 for p in _PUNCT:
@@ -180,8 +173,27 @@ class Lexer:
         if in_block:
             raise DiagError("lex", block_open[0], block_open[1], block_open[2],
                             "unterminated block comment", "/*")
+        toks = self._merge_juxtaposed(toks)
         toks.append(Token("eof", "<eof>", last.file, last.line, 1))
         return toks
+
+    @staticmethod
+    def _merge_juxtaposed(toks: List[Token]) -> List[Token]:
+        """§1 row 6g (M2): C concatenates ALL adjacent string literals —
+        same-line gap, zero gap (the retired L1 in-loop case) and cross-line
+        (`puts("WARNING: ... "\n "may be limited!\n")`). Whitespace and
+        comments emit no token, so consecutive 'str' tokens ARE juxtaposed
+        literals; gcc -Os proves ONE merged .string (b8_juxt_sem.s). ONE
+        mechanism replaces the zero-gap-only loop (M50)."""
+        out: List[Token] = []
+        for t in toks:
+            if t.kind == "str" and out and out[-1].kind == "str":
+                p = out.pop()
+                out.append(Token("str", p.text + t.text, p.file, p.line,
+                                 p.col, p.value + t.value))
+            else:
+                out.append(t)
+        return out
 
     def _number(self, src: SourceLine, text: str, i: int):
         """Integer/float literal per §2.1 (gcc 11.4 -std=gnu89 measured).
@@ -349,17 +361,13 @@ class Lexer:
                     buf.append(_esc_byte(int(text[j:k], 16)))
                     i = k
                     continue
-                if e == "0":                   # \0ddd: leading \0 + up to 3
-                    j = i + 2                  # octal digits (C rule, §3)
-                    k = j
+                if e in OCT_DIGITS:               # §2.3: octal WITHOUT the
+                    j = i + 1                     # leading zero is legal;
+                    k = j                         # max 3 octal digits total
                     while k < n and text[k] in OCT_DIGITS and k - j < 3:
                         k += 1
-                    buf.append(_esc_byte(int("0" + text[j:k], 8) & 0xFF))
-                    i = k
-                    continue
-                if quote == "'" and e == "'":
-                    buf.append("'")
-                    i += 2
+                    buf.append(_esc_byte(int(text[j:k], 8) & 0xFF))
+                    i = k                         # \400 wraps to byte 0
                     continue
                 if e in _SIMPLE_ESCAPES:
                     buf.append(_SIMPLE_ESCAPES[e])
