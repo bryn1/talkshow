@@ -43,3 +43,4 @@ T+10  M42 layout attrs ACT: packed/aligned (tag/member/typedef-tail), packed-uni
 T+10b fold closure: shifts/bitwise/~/full-expr enums+cases/global-init folder (FINDING c2-F3 oracle-law, probes re-signed), Qualified in mirrors, star-qualifiers, ptr-table decay; foldext 4/4; plain 699+49s kernel 748.
 T+11 M49-misc intrinsics: bswap/ctz/clz/unreachable/prefetch/extract_return_addr-id/object-size-fold/return+frame-address(0), levels>=1 LOUD; extern-unsized-array fix (7 corpus files); RED 7f -> 7/7; plain 706+49s kernel 755.
 T+12 M47 keyword row: register parses-and-drops (addr-of-register laxness documented, gcc-rc1 measured); RED 1f -> GREEN 5/5; plain 707+49s kernel 756.
+T+13 M54 volatile row pinned (accept-and-ignore, §1 row 8): 2 run-pair legs + mut-volatile RED-ability proven in teeth copy; plain 709+49s kernel 758.
