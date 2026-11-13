@@ -350,8 +350,6 @@ class Parser:
             if t.text in ("float", "double"):
                 self.s.next()          # §1 row 14: storage parses; arith LOUD
                 return ast.BuiltinType(t.file, t.line, t.col, t.text)
-            if t.text == "union":
-                self._sema(t, "'union' is not in the subset (§5)")
             if t.text in ("typeof", "__typeof__", "__typeof"):
                 # §1 row 6c / §2.6 (M2-C5 leg 3): __typeof__(expr|type) —
                 # a TYPE that stands for its operand's type. Operand is
@@ -381,7 +379,7 @@ class Parser:
                 elif signed and name == "char":
                     name = "signed char"
                 return ast.BuiltinType(t.file, t.line, t.col, name)
-            if t.text == "struct":
+            if t.text == "struct" or t.text == "union":
                 return self.parse_struct_type()
             if t.text == "enum":
                 return self.parse_enum_type()
@@ -411,7 +409,11 @@ class Parser:
             self.s.next()
 
     def parse_struct_type(self) -> ast.Node:
-        tok = self.s.next()  # 'struct'
+        # §2.8: struct AND union share the grammar; the tag namespace is
+        # shared too (C keeps them in one space). is_union rides the KEY-
+        # WORD, so a brace-less re-reference (`union U u;`) keeps it.
+        tok = self.s.next()  # 'struct' or 'union'
+        is_union = tok.text == "union"
         if self.s.at_punct("{"):
             tag = "<anon@{}:{}>".format(tok.file, tok.line)
         else:
@@ -419,14 +421,17 @@ class Parser:
         if self.s.accept_punct("{"):
             members = self.parse_struct_members()
             if tag in self.struct_tags:
-                self._sema(tok, "struct '{}' is already defined".format(tag))
+                self._sema(tok, "struct/union '{}' is already defined"
+                           .format(tag))
             self.struct_tags[tag] = members
-            self._pending.append(ast.StructDecl(tok.file, tok.line, tok.col, tag, members))
+            self._pending.append(ast.StructDecl(tok.file, tok.line, tok.col,
+                                                tag, members, is_union))
             self._bare_type_ok = True
         elif self.s.at_punct(";"):
-            self._pending.append(ast.StructDecl(tok.file, tok.line, tok.col, tag, None))
+            self._pending.append(ast.StructDecl(tok.file, tok.line, tok.col,
+                                                tag, None, is_union))
             self._bare_type_ok = True
-        return ast.StructType(tok.file, tok.line, tok.col, tag)
+        return ast.StructType(tok.file, tok.line, tok.col, tag, is_union)
 
     def parse_struct_members(self) -> Tuple[ast.Member, ...]:
         members: List[ast.Member] = []
@@ -573,8 +578,20 @@ class Parser:
                 self._sema(static_tok, "'static' inside a function is not in the subset (§4)")
             is_static = True
         extern_tok = self._accept("extern")
-        if extern_tok is not None:
-            self._sema(extern_tok, "'extern' linkage is not in the subset (§4: file-scope static only)")
+        is_extern = extern_tok is not None
+        # §2.8 gnu89 inline specifiers: consume (in any remaining order);
+        # only LINKAGE acts — blcc never inlines and has NO DCE.
+        inline_tok = None
+        while True:
+            tok = (self._accept("inline") or self._accept("__inline__")
+                   or self._accept("__inline"))
+            if tok is None:
+                break
+            inline_tok = inline_tok or tok
+        inline_kind = ""
+        if inline_tok is not None:
+            inline_kind = ("extern-inline" if is_extern
+                           else "static-inline" if is_static else "inline")
         if self._accept("typedef"):
             return self._parse_typedef()
         base = self.parse_base_type()
@@ -594,15 +611,26 @@ class Parser:
                     self.s.expect_punct(";")
                 out.append(ast.FuncDecl(
                     pos.file, pos.line, pos.col, name, ty, params,
-                    body, is_static, variadic=self._params_variadic))
+                    body, is_static, variadic=self._params_variadic,
+                    inline_kind=inline_kind))
                 self._params_variadic = False
                 break
             init = self.parse_initializer() if self.s.accept_punct("=") else None
+            if is_extern and init is None and not at_file:
+                # an extern LOCAL re-declares a file-scope object; the
+                # name already resolves through the enclosing scope —
+                # nothing to register or emit (§2.8).
+                if self.s.accept_punct(","):
+                    continue
+                self.s.expect_punct(";")
+                break
             if (isinstance(ty, ast.ArrayType) and ty.size is None
                     and not isinstance(init, (ast.InitList, ast.StrLit))):
                 self._sema(pos, "'array' declaration without size needs an initializer list (§4)")
             self.define(name, ("var", ty), pos)
-            out.append(ast.VarDecl(pos.file, pos.line, pos.col, name, ty, init, is_static))
+            out.append(ast.VarDecl(pos.file, pos.line, pos.col, name, ty,
+                                   init, is_static,
+                                   is_extern=(is_extern and init is None)))
             if self.s.accept_punct(","):
                 continue
             self.s.expect_punct(";")

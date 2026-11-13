@@ -45,6 +45,7 @@ class ArrayType(Node):
 @dataclass(frozen=True)
 class StructType(Node):
     tag: str               # codegen derives layout from the StructDecl by tag
+    is_union: bool = False  # §2.8: union members all live at offset 0
 
 
 # --------------------------------------------------------------------------
@@ -76,6 +77,7 @@ class TranslationUnit(Node):
 class StructDecl(Node):
     tag: str
     members: Optional[Tuple[Member, ...]]   # None = forward declaration only
+    is_union: bool = False
 
 
 @dataclass(frozen=True)
@@ -97,6 +99,9 @@ class FuncDecl(Node):
     body: Optional[Node]     # Compound; None = prototype only
     is_static: bool = False
     variadic: bool = False   # §1 row 17 / §2.7: a trailing `...`
+    inline_kind: str = ""    # §2.8 gnu89: "", "inline", "static-inline",
+                             # "extern-inline" (LINKAGE only — blcc never
+                             # inlines; it has no DCE either)
 
 
 @dataclass(frozen=True)
@@ -105,6 +110,7 @@ class VarDecl(Node):
     type: Node
     init: Optional[Node]     # None = no initializer
     is_static: bool = False  # only ever True at file scope (§5 elsewhere)
+    is_extern: bool = False  # §2.8: `extern T x;` re-decl — never emits
 
 
 @dataclass(frozen=True)

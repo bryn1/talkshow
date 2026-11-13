@@ -375,6 +375,17 @@ class TypeMap:
                       "structs are in the subset (§4)".format(ty.tag), ty.tag)
         # Natural C layout (P2-2): each member aligns to its own alignment;
         # the struct's align is the widest member's; size rounds to that.
+        if ty.is_union:
+            # §2.8: EVERY member sits at offset 0; size/align = max member
+            # (within the §2.13 layout table).
+            total = 0
+            align = 1
+            offs: Dict[str, int] = {}
+            for m in members:
+                offs[m.name] = 0
+                total = max(total, self._size(m.type, at or ty))
+                align = max(align, self._align(m.type, at or ty))
+            return offs, (total + align - 1) // align * align
         off = 0
         align = 1
         offsets: Dict[str, int] = {}

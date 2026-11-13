@@ -101,6 +101,18 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter):
                     self.funcs[d.name] = d
             elif isinstance(d, ast.VarDecl):
                 if d.name in self.globals:
+                    prev = self.globals[d.name]
+                    # §2.8: `extern T x;` beside a defining/tentative
+                    # decl of the same name is a RE-DECLARATION of one
+                    # object, never a second definition.
+                    if d.is_extern and d.init is None:
+                        continue
+                    if prev.is_extern and prev.init is None:
+                        d = dataclasses.replace(
+                            d, type=self._sized_array_decl(d.type, d.init, d)
+                            or d.type)
+                        self.globals[d.name] = d
+                        continue
                     self._err(d, "redefinition of global '{}'".format(d.name),
                               d.name)
                 sized = self._sized_array_decl(d.type, d.init, d)
@@ -274,7 +286,15 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter):
     def compile(self) -> str:
         out: List[str] = ["    .text"]
         for name in self.funcs:
-            out.extend(self._emit_func(self.funcs[name]))
+            fd = self.funcs[name]
+            lines = self._emit_func(fd)
+            if fd.inline_kind == "extern-inline":
+                # §2.8 gnu89: `extern inline` is an INLINE-ONLY
+                # definition — the body is still COMPILED (every codegen
+                # check fires on it) but NO symbol is emitted, and no
+                # static companion exists.
+                continue
+            out.extend(lines)
         out.append("    .section .rodata")
         for lab, raw in self._str_order:
             out.append("{}:".format(lab))
@@ -283,7 +303,13 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter):
         data: List[str] = []
         bss: List[str] = []
         for name in self.globals:
-            section, lines = self._emit_global(self.globals[name])
+            vd = self.globals[name]
+            if vd.is_extern and vd.init is None:
+                continue          # §2.8: a re-decl is not an emission
+            section, lines = self._emit_global(vd)
+            if not vd.is_static:
+                # §2.8 nm parity: an external object binds GLOBAL (D/B).
+                lines = ["    .globl {}".format(name)] + lines
             (data if section == "data" else bss).extend(lines)
         out.append("    .data")
         out.extend(data)
@@ -351,6 +377,10 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter):
         head = ["{}:".format(fd.name),
                 "    pushq %rbp",
                 "    movq %rsp, %rbp"]
+        if not fd.is_static:
+            # §2.8 nm: external definitions bind GLOBAL text (T); static
+            # (and static-inline) stay local (t).
+            head.insert(0, "    .globl {}".format(fd.name))
         if frame:
             head.append("    subq ${}, %rsp".format(frame))
         if fn.var_save is not None:

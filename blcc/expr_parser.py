@@ -26,7 +26,8 @@ COMPOUND_ASSIGN_OPS = frozenset(
     {"+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>="})
 _UNARY_PUNCT = frozenset({"-", "+", "!", "~", "&", "*"})
 _CAST_KW = frozenset(
-    {"char", "short", "int", "long", "void", "const", "struct", "enum",
+    {"char", "short", "int", "long", "void", "const", "struct", "union",
+     "enum",
      "float", "double", "unsigned", "signed", "__signed__", "__signed",
      "volatile", "__volatile__", "restrict", "__restrict", "__restrict__",
      # §1 row 6c: __typeof__ is legal in cast/sizeof type position
