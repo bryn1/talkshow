@@ -125,6 +125,11 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter):
                         self._err(d, "redefinition of struct '{}'".format(d.tag),
                                   d.tag)
                     self.structs[d.tag] = d.members
+                    if d.attrs:
+                        reg = getattr(self, "struct_tag_attrs", None)
+                        if reg is None:
+                            reg = self.struct_tag_attrs = {}
+                        reg[d.tag] = d.attrs        # M42 layout attrs ACT
                 elif d.tag not in self.structs:
                     self.structs[d.tag] = None
             elif isinstance(d, ast.EnumDecl):

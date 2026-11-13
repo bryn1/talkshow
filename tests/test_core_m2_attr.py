@@ -135,16 +135,19 @@ int main(void) { s.a = 1; return s.a - 1; }
 
 # ---- layout-class: LOUD wall until the M42 layout rule ships (T+10) --------
 
-def test_packed_struct_loud_wall():
-    loud("struct P { char c; long l; } __attribute__((packed));\n"
-         "int main(void){ return (int)sizeof(struct P); }\n",
-         "attr-packed", "packed")
+# T+8a shipped packed/aligned as interim §5 walls; M42 (T+10) RETIRED
+# them in favor of acting layout — pinned here (same file, same names
+# retired) and by the full run-pair suite in test_core_m2_layout.py.
+def test_packed_struct_layout_acts():
+    both_run("struct P { char c; long l; } __attribute__((packed));\n"
+             "int main(void){ return sizeof(struct P) != 9; }\n",
+             "attr-packed")
 
 
-def test_aligned_struct_loud_wall():
-    loud("struct A { int a; } __attribute__((aligned(16)));\n"
-         "int main(void){ return (int)sizeof(struct A); }\n",
-         "attr-aligned", "aligned")
+def test_aligned_struct_layout_acts():
+    both_run("struct A { int a; } __attribute__((aligned(16)));\n"
+             "int main(void){ return sizeof(struct A) != 16; }\n",
+             "attr-aligned")
 
 
 def test_extension_marker_typedef_run_pair():

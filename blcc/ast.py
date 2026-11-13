@@ -56,6 +56,7 @@ class StructType(Node):
 class Member:
     name: str
     type: Node
+    attrs: Tuple[tuple, ...] = ()   # §1 row 9 layout attrs: (name, arg)
 
 
 @dataclass(frozen=True)
@@ -78,7 +79,7 @@ class StructDecl(Node):
     tag: str
     members: Optional[Tuple[Member, ...]]   # None = forward declaration only
     is_union: bool = False
-
+    attrs: Tuple[tuple, ...] = ()  # tag-tail layout attrs (§1 row 9)
 
 @dataclass(frozen=True)
 class EnumDecl(Node):

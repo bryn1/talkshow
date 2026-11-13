@@ -368,6 +368,42 @@ class TypeMap:
 
     # -- alignments (P2-2: natural C layout, never a flat 8) ----------------------
 
+    def _tag_attr_list(self, ty):
+        return getattr(self, "struct_tag_attrs", {}).get(ty.tag, ())
+
+    def _attr_packed(self, ty) -> bool:
+        return any(nm == "packed" for nm, _a in self._tag_attr_list(ty))
+
+    def _tag_aligned(self, ty, at):
+        best = None
+        for nm, arg in self._tag_attr_list(ty):
+            if nm == "aligned":
+                v = self._fold_const(arg, at or ty)
+                if v <= 0:
+                    self._err(at or ty, "'aligned' attribute needs a "
+                              "positive constant (§1 row 9)", "aligned")
+                best = v if best is None else max(best or 0, v)
+        return best
+
+    def _mem_raise(self, m, at):
+        best = None
+        for nm, arg in getattr(m, "attrs", ()):
+            if nm == "aligned":
+                v = self._fold_const(arg, at)
+                if v <= 0:
+                    self._err(at, "'aligned' attribute needs a positive "
+                              "constant (§1 row 9)", "aligned")
+                best = v if best is None else max(best or 0, v)
+        return best
+
+    def _malign(self, m, packed, at):
+        """§1 row 9 layout law (M42): packed lowers the member to align
+        1; `aligned(N)` RAISES it and, through it, the struct's align.
+        The parse-time mirror is blcc.parser.Parser._malign_f."""
+        a = 1 if packed else self._align(m.type, at)
+        v = self._mem_raise(m, at)
+        return max(a, v) if v is not None else a
+
     def _align(self, ty: ast.Node, at=None) -> int:
         """alignof: scalars/pointers by size, arrays by element, structs by
         their widest member (recursive)."""
@@ -382,7 +418,10 @@ class TypeMap:
             if not members:
                 self._err(at or ty, "undefined struct '{}' — only fully defined "
                           "structs are in the subset (§4)".format(ty.tag), ty.tag)
-            return max([self._align(m.type, at) for m in members] + [1])
+            packed = self._attr_packed(ty)
+            a = max([self._malign(m, packed, at) for m in members] + [1])
+            ov = self._tag_aligned(ty, at)
+            return max(a, ov or 0)
         return 8
 
     def _decay(self, ty: ast.Node) -> ast.Node:
@@ -413,9 +452,10 @@ class TypeMap:
             # (within the §2.13 layout table).
             total = 0
             align = 1
+            packed = self._attr_packed(ty)
             for m in members:
                 msz = self._size(m.type, at or ty)
-                mal = self._align(m.type, at or ty)
+                mal = self._malign(m, packed, at or ty)
                 if m.name is None:
                     inner = self._struct_layout(m.type, at or ty)[0]
                     for n2, o2 in inner.items():
@@ -425,12 +465,15 @@ class TypeMap:
                 slots.append((m.name, m.type, 0, msz))
                 total = max(total, msz)
                 align = max(align, mal)
+            ov = self._tag_aligned(ty, at or ty)
+            align = max(align, ov or 0)
             return offs, (total + align - 1) // align * align, slots
         off = 0
         align = 1
+        packed = self._attr_packed(ty)
         for m in members:
             msz = self._size(m.type, at or ty)
-            mal = self._align(m.type, at or ty)
+            mal = self._malign(m, packed, at or ty)
             align = max(align, mal)
             off = (off + mal - 1) // mal * mal
             if m.name is None:
@@ -441,6 +484,8 @@ class TypeMap:
                 offs[m.name] = off
             slots.append((m.name, m.type, off, msz))
             off += msz
+        ov = self._tag_aligned(ty, at or ty)
+        align = max(align, ov or 0)
         return offs, (off + align - 1) // align * align, slots
 
 

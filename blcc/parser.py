@@ -114,7 +114,7 @@ class Parser:
             if sym is not None and sym[0] == "enum":
                 return sym[1]
             return None
-        if isinstance(node, ast.Unary) and node.op in ("-", "+", "!"):
+        if isinstance(node, ast.Unary) and node.op in ("-", "+", "!", "~"):
             v = self.fold_truthy(node.operand)
             if v is None:
                 return None
@@ -194,13 +194,15 @@ class Parser:
             members = self.struct_tags.get(ty.tag)
             if members is None:
                 return None
+            packed = self._attr_packed(ty)
             a = 1
             for m in members:
                 ma = self._calign(m.type)
                 if ma is None:
                     return None
-                a = max(a, ma)
-            return a
+                a = max(a, self._malign_f(m, packed, ma, ty))
+            ov = self._tag_aligned(ty, ty)
+            return max(a, ov or 0)
         return None
 
     def _offsetof_flat(self, ty):
@@ -228,11 +230,13 @@ class Parser:
                     out.append((m.name, 0, m.type))
             return out
         o = 0
+        packed = self._attr_packed(ty)
         for m in members:
             msz = self._csize(m.type)
             mal = self._calign(m.type)
             if msz is None or mal is None:
                 return None
+            mal = self._malign_f(m, packed, mal, ty)
             o = (o + mal - 1) // mal * mal
             if m.name is None:
                 inner = self._offsetof_flat(m.type)
@@ -316,6 +320,7 @@ class Parser:
             members = self.struct_tags.get(ty.tag)
             if members is None:
                 return None
+            packed = self._attr_packed(ty)
             if ty.is_union:
                 # §2.8 union: SIZE = max member (not the struct sum) —
                 # FINDING c2-F1: the T+6 fold summed union members, which
@@ -323,7 +328,12 @@ class Parser:
                 mss = [self._csize(m.type) for m in members]
                 if any(ms is None for ms in mss):
                     return None
-                align = max([min(ms, 8) for ms in mss] + [1])
+                align = 1
+                for m, ms in zip(members, mss):
+                    align = max(align, self._malign_f(m, packed,
+                                                      min(ms, 8), ty))
+                ov = self._tag_aligned(ty, ty)
+                align = max(align, ov or 0)
                 total = max(mss + [0])
                 return (total + align - 1) // align * align
             off = 0
@@ -332,9 +342,12 @@ class Parser:
                 ms = self._csize(m.type)
                 if ms is None:
                     return None
-                align = max(align, min(ms, 8))
-                off = (off + ms - 1) // ms * ms if ms > 1 else off
+                mal = self._malign_f(m, packed, min(ms, 8), ty)
+                align = max(align, mal)
+                off = (off + mal - 1) // mal * mal if mal > 1 else off
                 off += ms
+            ov = self._tag_aligned(ty, ty)
+            align = max(align, ov or 0)
             return (off + align - 1) // align * align
         return None
 
@@ -432,6 +445,42 @@ class Parser:
     _ATTR_WORDS = ("__attribute__", "__attribute")
     _LAYOUT_ATTRS = ("packed", "aligned", "aligned_with")
 
+    def _tag_attr_list(self, ty):
+        return getattr(self, "struct_tag_attrs", {}).get(ty.tag, ())
+
+    def _attr_packed(self, ty) -> bool:
+        return any(nm == "packed" for nm, _a in self._tag_attr_list(ty))
+
+    def _tag_aligned(self, ty, at):
+        best = None
+        for nm, arg in self._tag_attr_list(ty):
+            if nm == "aligned":
+                v = self.fold_truthy(arg)
+                if v is None or v <= 0:
+                    self._sema(at, "'aligned' attribute needs a positive "
+                               "constant (§1 row 9)")
+                best = v if best is None else max(best or 0, v)
+        return best
+
+    def _mem_raise(self, m, at):
+        best = None
+        for nm, arg in getattr(m, "attrs", ()):
+            if nm == "aligned":
+                v = self.fold_truthy(arg)
+                if v is None or v <= 0:
+                    self._sema(at, "'aligned' attribute needs a positive "
+                               "constant (§1 row 9)")
+                best = v if best is None else max(best or 0, v)
+        return best
+
+    def _malign_f(self, m, packed, base, at):
+        """§1 row 9 layout law: packed lowers the member to align 1;
+        a member `aligned(N)` RAISES it (and the struct's align) — both
+        gcc 11.4 run-pair pinned (l-packed/l-memb legs)."""
+        a = 1 if packed else base
+        v = self._mem_raise(m, at)
+        return max(a, v) if v is not None else a
+
     def _at_extension(self) -> bool:
         tok = self.s.peek()
         return tok.kind == "kw" and tok.text == "__extension__"
@@ -442,7 +491,7 @@ class Parser:
         # the single-underscore spelling an identifier — accept both kinds.
         return t.text in self._ATTR_WORDS and t.kind in ("id", "kw")
 
-    def _skip_gnu_attrs(self) -> None:
+    def _skip_gnu_attrs(self, sink=None) -> None:
         """PARSE + STRIP `__attribute__((...))` lists at a declaration
         head/specifier or a declarator/tag tail (§1 row 9, §2.9). The
         ignore-class (§1 row 9 list + gnu_inline/unused/section/error/…)
@@ -464,11 +513,30 @@ class Parser:
                     self._parse_err(name_tok, "malformed '__attribute__' "
                                               "list (§1 row 9)")
                 nm = name_tok.text.strip("_")
-                if nm in self._LAYOUT_ATTRS:
+                if nm in self._LAYOUT_ATTRS and sink is None:
                     self._sema(tok, "'__attribute__(({}))' is a layout-"
                                "class attribute and is not in the subset "
                                "(§1 row 9)".format(name_tok.text),
                                name_tok.text)
+                if nm == "aligned_with":
+                    # 0 sites in the whole 5.10 tree (grep-measured): the
+                    # honest LOUD class survives the M42 layout rule.
+                    self._sema(tok, "'__attribute__((aligned_with))' is a "
+                               "layout-class attribute and is not in the "
+                               "subset (§1 row 9)", name_tok.text)
+                if nm in self._LAYOUT_ATTRS and sink is not None:
+                    self.s.next()
+                    if nm == "aligned":
+                        self.s.expect_punct("(")
+                        sink.append(("aligned", self.expr.parse_expression()))
+                        self.s.expect_punct(")")
+                    else:
+                        if self.s.accept_punct("("):
+                            self.s.expect_punct(")")
+                        sink.append((nm, None))
+                    if not self.s.accept_punct(","):
+                        break
+                    continue
                 self.s.next()
                 if self.s.accept_punct("("):
                     depth = 1
@@ -620,13 +688,20 @@ class Parser:
             tag = self.s.expect_id("parse").text
         if self.s.accept_punct("{"):
             members = self.parse_struct_members()
-            self._skip_gnu_attrs()      # tag-definition tail (§1 row 9)
+            tsink: List[tuple] = []
+            self._skip_gnu_attrs(tsink)  # tag-definition tail (§1 row 9)
             if tag in self.struct_tags:
                 self._sema(tok, "struct/union '{}' is already defined"
                            .format(tag))
             self.struct_tags[tag] = members
+            if tsink:
+                reg = getattr(self, "struct_tag_attrs", None)
+                if reg is None:
+                    reg = self.struct_tag_attrs = {}
+                reg[tag] = tuple(tsink)   # M42: layout attrs ACT (§1 row 9)
             self._pending.append(ast.StructDecl(tok.file, tok.line, tok.col,
-                                                tag, members, is_union))
+                                                tag, members, is_union,
+                                                tuple(tsink)))
             self._bare_type_ok = True
         elif self.s.at_punct(";"):
             self._pending.append(ast.StructDecl(tok.file, tok.line, tok.col,
@@ -664,7 +739,9 @@ class Parser:
                     pass
                 continue
             pos = self.s.peek()
-            name, ty, is_fn, _ = self.parse_declarator(base, ctx="member")
+            msink: List[tuple] = []
+            name, ty, is_fn, _ = self.parse_declarator(base, ctx="member",
+                                                       attr_sink=msink)
             if name is None:
                 self._parse_err(pos, "struct member needs a name")
             if is_fn:
@@ -677,7 +754,7 @@ class Parser:
                 # ERROR "duplicate member 'a'" the promoted names join.
                 self._sema(pos, "duplicate member '{}'".format(name))
             seen.add(name)
-            members.append(ast.Member(name, ty))
+            members.append(ast.Member(name, ty, tuple(msink)))
         self.s.expect_punct("}")
         return tuple(members)
 
@@ -726,7 +803,8 @@ class Parser:
 
     # -- declarators ---------------------------------------------------------------
 
-    def parse_declarator(self, base: ast.Node, ctx: str = "var"):
+    def parse_declarator(self, base: ast.Node, ctx: str = "var",
+                         attr_sink=None):
         """ctx: 'var' | 'param' | 'member'. Returns (name, type, is_fn, params)."""
         pos = self.s.peek()
         stars = 0
@@ -763,7 +841,7 @@ class Parser:
                 self._parse_err(pos, "'function' declarator is not allowed here")
             params = self.parse_params()
             is_fn = True
-        self._skip_gnu_attrs()          # declarator tail (§1 row 9)
+        self._skip_gnu_attrs(attr_sink)  # declarator tail (§1 row 9)
         return name, ty, is_fn, params
 
     def parse_params(self) -> Tuple[ast.Param, ...]:
@@ -836,7 +914,16 @@ class Parser:
         self._bare_type_ok = False
         while True:
             pos = self.s.peek()
-            name, ty, is_fn, params = self.parse_declarator(base, ctx="var")
+            vsink: List[tuple] = []
+            name, ty, is_fn, params = self.parse_declarator(base, ctx="var",
+                                                            attr_sink=vsink)
+            for _nm, _a in vsink:            # M42 typedef/decl-tail layout
+                if _nm and isinstance(self._unqual(ty), ast.StructType):
+                    reg = getattr(self, "struct_tag_attrs", None)
+                    if reg is None:
+                        reg = self.struct_tag_attrs = {}
+                    reg[self._unqual(ty).tag] = tuple(
+                        list(reg.get(self._unqual(ty).tag, ())) + [(_nm, _a)])
             if is_fn:
                 if self.s.at_punct("{") and len(self.scopes) > 1:
                     self._parse_err(pos, "function definition inside a function is not in the subset")
@@ -887,9 +974,18 @@ class Parser:
         out.extend(self._drain_pending())
         while True:
             pos = self.s.peek()
-            name, ty, is_fn, _ = self.parse_declarator(base, ctx="var")
+            tsink: List[tuple] = []
+            name, ty, is_fn, _ = self.parse_declarator(base, ctx="var",
+                                                       attr_sink=tsink)
             if is_fn:
                 self._parse_err(pos, "typedef of a function type is a function pointer (§5)")
+            for _nm, _a in tsink:            # M42: typedef-tail layout attrs
+                if isinstance(self._unqual(ty), ast.StructType):
+                    reg = getattr(self, "struct_tag_attrs", None)
+                    if reg is None:
+                        reg = self.struct_tag_attrs = {}
+                    reg[self._unqual(ty).tag] = tuple(
+                        list(reg.get(self._unqual(ty).tag, ())) + [(_nm, _a)])
             self.define(name, ("typedef", ty), pos)
             out.append(ast.TypedefDecl(pos.file, pos.line, pos.col, name, ty))
             if self.s.accept_punct(","):
@@ -962,11 +1058,13 @@ class Parser:
             return None
         slots: List[tuple] = []
         off = 0
+        packed = self._attr_packed(ty)
         for m in members:
             msz = self._csize(m.type)
             mal = self._calign(m.type)
             if msz is None or mal is None:
                 return None
+            mal = self._malign_f(m, packed, mal, ty)
             if ty.is_union:
                 slots.append((m.name, m.type, 0, msz))
             else:
