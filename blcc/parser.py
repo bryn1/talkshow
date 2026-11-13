@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional, Tuple
 
-from blcc import ast
+from blcc import ast, predef
 from blcc.lexer import DiagError, Lexer, SourceLine, Token, TokenStream
 from blcc.expr_parser import ExprParser
 from blcc.runtime import BUILTINS as _RUNTIME_BUILTINS
@@ -45,7 +45,12 @@ class Parser:
     def __init__(self, toks: List[Token]):
         self.s = TokenStream(toks)
         self.scopes: List[Dict[str, tuple]] = [{}]
-        self.struct_tags: Dict[str, Tuple[ast.Member, ...]] = {}
+        # §2.7: `__builtin_va_list` is supplied by the COMPILER (the .i
+        # stream only carries `typedef __builtin_va_list va_list;`).
+        self.scopes[0]["__builtin_va_list"] = ("typedef",
+                                               predef.VA_LIST_TY)
+        self.struct_tags: Dict[str, Tuple[ast.Member, ...]] = {
+            predef.TAG: predef.VA_MEMBERS}
         self._pending: List[ast.Node] = []  # Struct/EnumDecls made by types
         self._bare_type_ok = False          # a tag/enum definition just read
         self.switch_depth = 0
@@ -235,6 +240,10 @@ class Parser:
 
     def callable_known(self, name: str) -> bool:
         if name in BUILTINS:
+            return True
+        if name in predef.VA_FOLDS:
+            # §2.7: the va intrinsics are FOLDS, not callables (row 19
+            # "folds, not callables" posture) — no symbol, no sigs entry.
             return True
         sym = self.lookup(name)
         return sym is not None and sym[0] == "fn"
@@ -524,6 +533,7 @@ class Parser:
     def parse_params(self) -> Tuple[ast.Param, ...]:
         self.s.expect_punct("(")
         params: List[ast.Param] = []
+        self._params_variadic = False
         if self.s.accept_punct(")"):
             return ()
         if self._at("void") and self.s.at_punct(")", 1):
@@ -533,7 +543,14 @@ class Parser:
         while True:
             t = self.s.peek()
             if t.kind == "punct" and t.text == "...":
-                self._sema(t, "'variadic' functions are not in the subset (§5)")
+                # §1 row 17 SUPPORT: a trailing `...` marks the function
+                # variadic (callee §2.7 + caller §2.14). `...` may only be
+                # LAST in the list — anything after it hits the ordinary
+                # "expected a type" path (loud, never silent).
+                self.s.next()
+                self.s.expect_punct(")")
+                self._params_variadic = True
+                return tuple(params)
             base = self.parse_base_type()
             name, ty, is_fn, _ = self.parse_declarator(base, ctx="param")
             if is_fn:
@@ -575,8 +592,10 @@ class Parser:
                 body = self.parse_function_body(params) if self.s.at_punct("{") else None
                 if body is None:
                     self.s.expect_punct(";")
-                out.append(ast.FuncDecl(pos.file, pos.line, pos.col, name, ty, params,
-                                        body, is_static))
+                out.append(ast.FuncDecl(
+                    pos.file, pos.line, pos.col, name, ty, params,
+                    body, is_static, variadic=self._params_variadic))
+                self._params_variadic = False
                 break
             init = self.parse_initializer() if self.s.accept_punct("=") else None
             if (isinstance(ty, ast.ArrayType) and ty.size is None

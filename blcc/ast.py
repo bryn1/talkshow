@@ -96,6 +96,7 @@ class FuncDecl(Node):
     params: Tuple[Param, ...]
     body: Optional[Node]     # Compound; None = prototype only
     is_static: bool = False
+    variadic: bool = False   # §1 row 17 / §2.7: a trailing `...`
 
 
 @dataclass(frozen=True)

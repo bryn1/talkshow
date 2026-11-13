@@ -567,6 +567,11 @@ class TypeMap:
                                        "long" if kind == "void" else kind)
             if name == "__builtin_types_compatible_p":
                 return ast.BuiltinType(n.file, n.line, n.col, "int")
+            if name == "__builtin_va_arg":
+                return self._untype(n.args[1])     # §2.7: TYPE argument
+            if name in ("__builtin_va_start", "__builtin_va_end",
+                        "__builtin_va_copy"):
+                return ast.BuiltinType(n.file, n.line, n.col, "void")
             return self.sigs[name][1]
         if isinstance(n, ast.Generic):
             # §2.6d: the type of the SELECTED association's expression.

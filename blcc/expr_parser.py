@@ -149,6 +149,24 @@ class ExprParser:
                 return node
             if t.text == "(":
                 if isinstance(node, ast.Ident) and node.name == (
+                        "__builtin_va_arg"):
+                    # §2.7: `va_arg(ap, TYPE)` — second argument is a
+                    # TYPE NAME (like §2.12's), first a normal expression.
+                    self.s.expect_punct("(")
+                    a0 = self.parse_expression()
+                    self.s.expect_punct(",")
+                    d = self.s.peek()
+                    if not ((d.kind == "kw") or
+                            (d.kind == "id" and self.is_typename(d.text))):
+                        raise DiagError(
+                            "sema", t.file, t.line, t.col,
+                            "'__builtin_va_arg' takes (expression, TYPE) "
+                            "(§2.7)", d.text)
+                    a1 = self.parse_type()
+                    self.s.expect_punct(")")
+                    node = ast.Call(t.file, t.line, t.col, node, [a0, a1])
+                    continue
+                if isinstance(node, ast.Ident) and node.name == (
                         "__builtin_types_compatible_p"):
                     # §2.12: the call's arguments are TYPE NAMES — not
                     # parseable as expressions; intercepted like the GNU

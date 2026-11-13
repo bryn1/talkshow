@@ -13,7 +13,7 @@ temporaries are self._t() slots (rsp-relative, LIFO). `_emit_addr` leaves the
 ADDRESS of an l-value in %rax (§4 lvalues: idents, *p, [], . and ->)."""
 from __future__ import annotations
 
-from blcc import ast
+from blcc import ast, predef
 from blcc.runtime import BUILTINS
 from blcc.types import is_unsigned
 
@@ -145,8 +145,94 @@ class ExprEmitter:
         self._imm(self._size(n.typ, n) if n.typ is not None
                   else self._size(self._ty(n.arg), n))
 
+    def _va_intrinsic(self, n, name) -> None:
+        if name == "__builtin_va_start":
+            # §2.7: gp_offset = 8×(named args), fp_offset = 48, the area
+            # pointers from the prologue spill (GP-only: the fp area is
+            # pinned 48, never read by va_arg in this model).
+            if len(n.args) != 2:
+                self._err(n, "'__builtin_va_start' takes 2 arguments "
+                             "(§2.7)", name)
+            fd = self.funcs.get(self.fn.name)
+            named = len(fd.params) if fd is not None else 0
+            self._emit_expr(n.args[0])          # %rax = &ap[0] (decay)
+            self._e("movl ${}, %ecx".format(8 * named))
+            self._e("movl %ecx, {}(%rax)".format(predef.VA_GP_OFF))
+            self._e("movl $48, {}(%rax)".format(predef.VA_FP_OFF))
+            # overflow_arg_area (§2.14 measured geometry): caller `subq
+            # $16` then reverse-pushes extras — the 7th arg sits at
+            # [rsp+8] at the call ⇒ rbp+16 after the callee pushed rbp.
+            self._e("leaq 16(%rbp), %rcx")
+            self._e("movq %rcx, {}(%rax)".format(predef.VA_OVF_OFF))
+            self._e("leaq {}(%rbp), %rcx".format(self.fn.var_save))
+            self._e("movq %rcx, {}(%rax)".format(predef.VA_RSA_OFF))
+            return
+        if name == "__builtin_va_end":
+            if len(n.args) != 1:
+                self._err(n, "'__builtin_va_end' takes 1 argument (§2.7)",
+                          name)
+            return                             # blcc model: no-op
+        if name == "__builtin_va_copy":
+            if len(n.args) != 2:
+                self._err(n, "'__builtin_va_copy' takes 2 arguments "
+                             "(§2.7)", name)
+            self._emit_expr(n.args[1])         # src → %rax
+            t = self._t()
+            self._e("movq %rax, {}".format(t))
+            self._emit_expr(n.args[0])         # dst → %rax
+            self._e("movq {}, %rcx".format(t))
+            self._unt(1)
+            self._e("movq (%rcx), %rdx")       # gp+fp as one 8-byte unit
+            self._e("movq %rdx, (%rax)")
+            self._e("movq 8(%rcx), %rdx")
+            self._e("movq %rdx, 8(%rax)")
+            self._e("movq 16(%rcx), %rdx")
+            self._e("movq %rdx, 16(%rax)")
+            return
+        # __builtin_va_arg(ap, TYPE): §2.7 pinned reads — gp_offset 0..48
+        # rides the save area, then the overflow area; stride 8 per read.
+        # The TYPE ARG was parsed as a type (parse interception).
+        # float/double and struct (§2.7 all-GP) are LOUD, never silent.
+        if len(n.args) != 2:
+            self._err(n, "'__builtin_va_arg' takes 2 arguments (§2.7)",
+                      "__builtin_va_arg")
+        ty = self._decay(self._untype(n.args[1]))
+        if isinstance(ty, ast.BuiltinType) and ty.name in ("float",
+                                                           "double"):
+            self._err(n, "va_arg of 'float'/'double' is not in the subset "
+                         "— the tree has ZERO FP va args (§2.7)", "float")
+        if isinstance(ty, ast.StructType):
+            self._err(n, "va_arg of a 'struct' type breaks the 8-byte-slot "
+                         "model (§2.7 all-GP)", "struct")
+        sz = self._size(ty, n)
+        if sz > 8:
+            self._err(n, "va_arg type wider than 8 bytes is beyond the "
+                         "GP-slot model (§2.7)", "__builtin_va_arg")
+        self._emit_expr(n.args[0])             # %rax = &ap[0]
+        self._e("movq %rax, %rsi")
+        self._e("movl {}(%rax), %ecx".format(predef.VA_GP_OFF))
+        lab_ovf = self._label("va")
+        lab_end = self._label("va")
+        self._e("cmpl $48, %ecx")
+        self._e("jge {}".format(lab_ovf))
+        self._e("movq {}(%rsi), %rdx".format(predef.VA_RSA_OFF))
+        self._e("addq %rcx, %rdx")
+        self._load(ty, "(%rdx)", n)
+        self._e("addq $8, {}(%rsi)".format(predef.VA_GP_OFF))
+        self._e("jmp {}".format(lab_end))
+        self.fn.lines.append("{}:".format(lab_ovf))
+        self._e("movq {}(%rsi), %rdx".format(predef.VA_OVF_OFF))
+        self._load(ty, "(%rdx)", n)
+        self._e("addq $8, {}(%rsi)".format(predef.VA_OVF_OFF))
+        self.fn.lines.append("{}:".format(lab_end))
+
     def _ex_call(self, n) -> None:
         name = n.callee.name
+        if name in predef.VA_FOLDS:
+            # §2.7: the four va intrinsics — never a symbol, never a
+            # sigs entry; emitted here from the pinned field layout.
+            self._va_intrinsic(n, name)
+            return
         if name == "__builtin_types_compatible_p":
             # §2.12 IDENTITY FOLD: resolve the two type arguments (they are
             # TYPE nodes, carried in place of expressions — parse-time
@@ -158,34 +244,91 @@ class ExprEmitter:
             self._imm(1 if self._types_compatible(n.args[0], n.args[1])
                       else 0)
             return
+        variadic = False
         if name in BUILTINS:
             want = BUILTINS[name][0]
         else:
-            params, ret = self.sigs[name]
+            params, ret, variadic = self.sigs[name]
             want = len(params)
             if isinstance(self._decay(ret), ast.StructType):
                 self._err(n, "call to a 'struct'-returning function is 'struct "
                           "assignment' (§5)", name, "asm")
-        if len(n.args) != want:
-            self._err(n, "call to '{}' has {} argument(s), the declaration "
-                      "takes {} (§4)".format(name, len(n.args), want), name)
-        if want > 6:
-            self._err(n, "more than 6 arguments is beyond the §6 call ABI",
-                      name, "asm")
+        if variadic:
+            # §1 row 17 caller side + §2.14: fewer than the NAMED
+            # parameters is LOUD; the extras must be scalar (§2.14 NEG
+            # legs measured at −Os AND −mno-sse: a float/double extra has
+            # no GP-only representation — §1 row 14, float STORAGE only;
+            # a struct/union extra SPLITS across classes and breaks the
+            # one-8-byte-slot model).
+            if len(n.args) < want:
+                self._err(n, "call to variadic '{}' passes {} argument(s); "
+                          "the declaration names {} (§2.14)".format(
+                              name, len(n.args), want), name)
+            for a in n.args[want:]:
+                ety = self._decay(self._ty(a))
+                if isinstance(ety, ast.BuiltinType) and ety.name in (
+                        "float", "double"):
+                    self._err(n, "float/double variadic extra argument at "
+                              "'{}' is not in the subset (§2.14)".format(
+                                  name), "float")
+                if isinstance(ety, ast.StructType):
+                    self._err(n, "struct/union variadic extra argument at "
+                              "'{}' breaks the 8-byte-slot model "
+                              "(§2.14)".format(name), "struct")
+        else:
+            if len(n.args) != want:
+                self._err(n, "call to '{}' has {} argument(s), the "
+                          "declaration takes {} (§4)".format(
+                              name, len(n.args), want), name)
+            if want > 6:
+                # §2.14: FIXED-arity `want > 6` KEEPS this LOUD (M48
+                # residual: not measured in the tiny universe).
+                self._err(n, "more than 6 arguments is beyond the §6 call "
+                          "ABI", name, "asm")
         slots = []
+        # temp slots of THIS call start at fn.temp_top + 1 — a nested call
+        # evaluated after another temp (e.g. `a*100 + f(...)`) is NOT based
+        # at T1; the stack-push addressing below must honour the base.
+        slot_base = self.fn.temp_top
         decl_params = None if name in BUILTINS else self.sigs[name][0]
         for idx, a in enumerate(n.args):
-            if decl_params is not None:
+            if decl_params is not None and idx < want:
                 self._fp_guard(self._ty(a), decl_params[idx].type, a)
             self._emit_expr(a)
-            if decl_params is not None:
-                self._convert(decl_params[idx].type, a)  # §2.2 arg conversion
+            if decl_params is not None and idx < want:
+                self._convert(decl_params[idx].type, a)  # §2.2 conversion
             t = self._t()
             self._e("movq %rax, {}".format(t))
             slots.append(t)
+        if variadic and len(slots) > 6:
+            # §2.14 VERBATIM caller sequence: args 1..named+4 ride
+            # rdi..r9; the rest go into 8-byte stack slots — `subq
+            # $16,%rsp` for the 16-byte alignment BEFORE the pushes, the
+            # extras pushed in REVERSE order (last arg lowest-addressed:
+            # the callee's overflow_arg_area then reads forward from
+            # rbp+16, matching the §2.7 va_arg switch), `%al = 0` (the
+            # kernel is GP-only — v4: true under BOTH flag sets), and the
+            # frame restored with one addq after the call.
+            for i in range(6):
+                self._e("movq {}, {}".format(slots[i], REG_ARGS[i]))
+            self._e("subq $16, %rsp")
+            for m, idx in enumerate(reversed(range(6, len(slots)))):
+                off = 8 * (slot_base + idx + 1) + 16 + 8 * m
+                # push-from-memory: a scratch register would clobber a
+                # live arg slot (rdi..r9 still hold args 1..6 here).
+                self._e("pushq {}(%rsp)".format(off))
+            self._e("xorl %eax, %eax")
+            self._e("call {}".format(name))
+            self._e("addq ${}, %rsp".format(16 + 8 * (len(slots) - 6)))
+            self._unt(len(slots))
+            return
         for i, t in enumerate(slots):
             self._e("movq {}, {}".format(t, REG_ARGS[i]))
         self._unt(len(slots))
+        if variadic:
+            # §2.14: the vector-register count — GP-only universe ⇒ 0,
+            # pinned on EVERY variadic call site (call3 leg).
+            self._e("xorl %eax, %eax")
         self._e("call {}".format(name))
 
     def _ex_cast(self, n) -> None:

@@ -22,6 +22,7 @@ from blcc import ast
 from blcc.data import DataEmitter
 from blcc.expr_codegen import REG_ARGS, ExprEmitter, _fp
 from blcc.types import TypeMap, _roundup8, is_unsigned, stmt_children
+from blcc import predef
 
 _STORE_OP = {1: "movb", 2: "movw", 4: "movl", 8: "movq"}
 _REG = {1: {"a": "%al", "c": "%cl", "d": "%dl"},
@@ -41,6 +42,7 @@ class _FnState:
         self.temp_top = 0
         self.temp_high = 0
         self.epilogue = ".Lep"
+        self.var_save = None      # §2.7: rbp offset of the 48-byte area
 
 
 def _stmtexprs_in_expr(s):
@@ -71,7 +73,10 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter):
         self.funcs: Dict[str, ast.FuncDecl] = {}
         self.sigs: Dict[str, Tuple[Tuple[ast.Param, ...], ast.Node]] = {}
         self.globals: Dict[str, ast.VarDecl] = {}
-        self.structs: Dict[str, Optional[Tuple[ast.Member, ...]]] = {}
+        # §2.7: the va tag is PREDEFINED (the kernel .i streams only carry
+        # `typedef __builtin_va_list va_list;` — the struct text does not).
+        self.structs: Dict[str, Optional[Tuple[ast.Member, ...]]] = {
+            predef.TAG: predef.VA_MEMBERS}
         self.enums: Dict[str, int] = {}
         self.strings: Dict[bytes, str] = {}
         self._str_order: List[Tuple[str, bytes]] = []
@@ -90,7 +95,8 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter):
                         and d.name in self.funcs:
                     self._err(d, "redefinition of function '{}'".format(d.name),
                               d.name)
-                self.sigs[d.name] = (d.params, d.ret_type)
+                self.sigs[d.name] = (d.params, d.ret_type,
+                                  d.variadic)
                 if d.body is not None:
                     self.funcs[d.name] = d
             elif isinstance(d, ast.VarDecl):
@@ -310,6 +316,16 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter):
                       "(§5) — return a pointer", fd.name, "asm")
         fn.epilogue = self._label("ep_" + fd.name)
         self._fn_ret = self._untype(fd.ret_type)
+        self._fn_variadic = fd.variadic
+        fn.var_save = None
+        if fd.variadic:
+            # §2.7: the register-save area — six 8-byte slots at the TOP
+            # of the frame (first bump ⇒ rbp-48..rbp-8), spilled in the
+            # prologue before any statement touches the arg registers.
+            fn.frame += 48
+            fn.var_save = -fn.frame
+        else:
+            fn.var_save = None
         for i, p in enumerate(fd.params):
             pty = self._decay(p.type)
             if _fp(pty):
@@ -337,6 +353,12 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter):
                 "    movq %rsp, %rbp"]
         if frame:
             head.append("    subq ${}, %rsp".format(frame))
+        if fn.var_save is not None:
+            # §2.7 callee side: spill the six GP arg registers.
+            for i, reg in enumerate(("rdi", "rsi", "rdx", "rcx", "r8",
+                                     "r9")):
+                head.append("    movq %{}, {}(%rbp)".format(
+                    reg, fn.var_save + 8 * i))
         return head + fn.lines
 
     # -- statements --------------------------------------------------------------------------

@@ -144,8 +144,13 @@ def test_function_name_used_as_value():
 
 
 def test_variadic_declaration():
-    assert_loud("int f(...) { return 0; }\nint main(void){ return 0; }\n",
-                "variadic", "variadic")
+    # M2 resync (§1 row 17): the M1 pin ("variadic decl LOUD") is RETIRED
+    # — `int f(...) { return 0; }` now parses and compiles (covered by
+    # tests/test_core_m2_va.py run-pairs). This leg keeps the §8 sweep in
+    # place with a construct that STAYS out of the subset (M3: calls into
+    # nothing — an undeclared callee must still reject LOUD and silent).
+    assert_loud("int f(...) { return 0; }\nint main(void){ return g(1); }\n",
+                "variadic", "g")
 
 
 def test_variadic_call_site():

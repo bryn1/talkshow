@@ -287,9 +287,12 @@ def test_function_pointer_declaration_is_diagnostic():
     assert (d.line, d.col) == (1, 5)
 
 
-def test_variadic_is_diagnostic():
-    d = diag("int sum(int n, ...);")
-    assert "'variadic'" in d.message
+def test_variadic_decl_parses():
+    # M2 resync (§1 row 17, §2.14): `...` in a PARAMS list is SUPPORTED —
+    # the M1 pin ("'variadic' LOUD") is retired by the M2 contract.
+    tu = parse_text("int sum(int n, ...);")
+    fd = find(tu, ast.FuncDecl)
+    assert fd is not None and getattr(fd, "variadic", False) is True
 
 
 def test_static_inside_function_is_diagnostic():
