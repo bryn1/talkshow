@@ -1,7 +1,8 @@
 # LINES reason: the inline-asm FRONT half (grammar L0 + constraint model +
 # the §3.2-N normalization and §3.2 implicit-use tables) is ONE concern —
 # what a construct MEANS before any register is chosen; codegen lives in
-# blcc/asmgen.py (§3 concern boundary; keeps each file under the 400 law).
+# blcc/asmgen.py (§3 concern boundary). The pair sits in the 400-600 band
+# ONE concern each (header re-synced to the measured truth, MC 12499).
 """M3 GNU inline asm — grammar, constraints, clobber tables (contract v3.1).
 
 AsmParseMixin (blcc.parser.Parser base) parses the L0 grammar:
