@@ -215,3 +215,25 @@ def test_cc_readwrite_and_match_are_loud():
          "invalid punctuation|=@cc|flag output", "asm")
 
 
+# --------------------------------------------- F-a-pair / rm-imm ------
+def test_a_pair_div64_shape_idivq_run_pair():
+    # The F-a-pair truth leg: bare fixed a-pair ("=a"+"a", NO matching
+    # constraint) is SUPPORTED both sides — div64.h:85's own shape,
+    # idivq twin with a variable "rm" divisor. Runs q=14 r=2 both sides.
+    _cc_run("f1ap", """
+unsigned long n = 7, q, rem;
+asm("idivq %4" : "=a" (q), "=d" (rem) : "a" (100L), "d" (0L), "rm" (n));
+""", "q == 14 && rem == 2")
+
+
+def test_immediate_in_rm_is_loud_with_census_pinned():
+    # The orchestrator's repro, LOUD-PINNED (census: 0 live sites over
+    # 369/369 .i streams — inputs with an 'm'-capable constraint AND a
+    # constant operand; see the parse in evidence m3-fix-f1.log). gcc
+    # rc0 (materializes $3 into a reg/memory); blcc stays LOUD per the
+    # work order's zero-reach branch — this leg pins the WALL and the
+    # message, never a silent wrong answer.
+    loud('int main(void){unsigned long q, rem;'
+         'asm("idivq %4" : "=a" (q), "=d" (rem) : "a" (100L), "d" (0L),'
+         ' "rm" (3L));return 0;}',
+         "f1rim", "not an addressable l-value", "sema")
