@@ -763,6 +763,14 @@ class ExprEmitter(MemFoldMixin):
         if isinstance(ty, ast.StructType):
             self._err(n, "'struct assignment' is not in the subset (§5)", n.op)
         op = n.op[:-1]
+        vt = self._decay(self._ty(n.value))
+        if isinstance(ty, ast.PtrType) or isinstance(vt, ast.PtrType):
+            # M2 fix-g2 (MC 12460): the C2-2 SILENT — p += n used to ride
+            # the raw addq below (bytes, not elements). Pointer sides ride
+            # the SHIPPED scaled law through _ptr_scale, one mechanism.
+            self._ptr_assignop(n, op, ty, vt, isinstance(ty, ast.PtrType),
+                               isinstance(vt, ast.PtrType))
+            return
         nty = self._promote(self._ty(n))       # arithmetic AT the target type
         self._emit_expr(n.value)
         self._convert(nty, n)                  # E2 converted to promoted T
@@ -1008,9 +1016,81 @@ class ExprEmitter(MemFoldMixin):
             self._e("{} %rcx, %rax".format(_ARITH[op]))
         self._convert(ct, n)                    # wrap the result to common type
 
+    def _ptr_scale(self, esz: int, reg: str) -> None:
+        """§4 scaling law, ONE mechanism (M2 fix-g2, MC 12460): an element
+        COUNT in `reg` becomes bytes — x sizeof(elem). The binary path
+        (_ptr_add) and the compound path (_ptr_assignop) share it; a
+        missing scale here is the C2-2 SILENT (p += n moving n BYTES)."""
+        if esz > 1:
+            self._e("imulq ${}, {}".format(esz, reg))
+
+    def _ptr_assignop(self, n, op, ty, vt, lp, rp) -> None:
+        """§4 + M2 fix-g2 (MC 12460): `E1 op= E2` with a pointer side rides
+        the SAME scaled law as the binary path (_ptr_scale), E1 evaluated
+        EXACTLY once (address stashed, load + RMW through it). Measured
+        gcc posture: p += p / p -= p / p &= k / i &= p are all rc1 ERRORS
+        (probes sib*.c) — LOUD, never the raw addq/andq the old path
+        emitted; i += p is the gnu89 warning-shape (rc0) and computes
+        (int)(p + i*esz) — the binary law's pointer wins, scaled."""
+        raw = self._ty(n.target)
+        if isinstance(raw, ast.ArrayType):
+            self._err(n, "assignment to expression with array type is not "
+                      "in the subset (§4 — a gcc error)", n.op)
+        if op not in ("+", "-") and (lp or rp):
+            self._err(n, "'{}' with a pointer operand is not in the subset "
+                      "(§4)".format(op), op)      # _binary_ty's law
+        if lp and rp:
+            if op == "+":
+                self._err(n, "pointer + pointer is not in the subset (§4)",
+                          "+")
+            self._err(n, "'{}=' on two pointers is not in the subset (§4) "
+                      "— the DIFFERENCE p - q is a value, never a pointer "
+                      "update".format(op), n.op)
+        if rp and op == "-":
+            self._err(n, "'long - pointer' is not in the subset (§4)", "-")
+        if lp:
+            # p += n / p -= n: old pointer OP n*sizeof(*p)
+            self._emit_expr(n.value)              # element count
+            t0 = self._t()
+            self._e("movq %rax, {}".format(t0))
+            self._emit_addr(n.target)
+            t1 = self._t()
+            self._e("movq %rax, {}".format(t1))
+            self._load(ty, "(%rax)", at=n)        # old pointer value
+            self._e("movq {}, %rcx".format(t0))
+            self._ptr_scale(self._size(ty.inner, n), "%rcx")
+            self._e("addq %rcx, %rax" if op == "+" else "subq %rcx, %rax")
+            self._e("movq {}, %rdx".format(t1))
+            self._store(ty, "(%rdx)", at=n)       # value = new pointer (§4)
+            self._unt(2)
+            return
+        # i += p: i*esz + p, stored through the scalar target (wrap = the
+        # gnu89 truncation the assignment carries; run-pair cannot print
+        # the ASLR value — test_core_m2_fixg2b pins compile+exit).
+        self._emit_expr(n.value)                  # pointer value
+        t0 = self._t()
+        self._e("movq %rax, {}".format(t0))
+        self._emit_addr(n.target)
+        t1 = self._t()
+        self._e("movq %rax, {}".format(t1))
+        self._load(ty, "(%rax)", at=n)            # old scalar
+        self._ptr_scale(self._size(vt.inner, n), "%rax")
+        self._e("movq {}, %rcx".format(t0))
+        self._e("addq %rcx, %rax")
+        self._convert(self._ty(n), n)             # store-law wrap (§4)
+        self._e("movq {}, %rdx".format(t1))
+        self._store(ty, "(%rdx)", at=n)
+        self._reintern_stored(ty)
+        self._unt(2)
+
     def _ptr_add(self, n, op, elem_ty) -> None:
         lt = self._decay(self._ty(n.left))
         lp = isinstance(lt, ast.PtrType)
+        if op == "+" and lp and isinstance(self._decay(self._ty(n.right)),
+                                           ast.PtrType):
+            # M2 fix-g2 (MC 12460): binary p + p is a gcc ERROR — mirrored
+            # LOUD here (the _ty law already walls it; codegen mirrors).
+            self._err(n, "pointer + pointer is not in the subset (§4)", "+")
         if op == "-" and lp and isinstance(self._decay(self._ty(n.right)),
                                            ast.PtrType):
             self._emit_expr(n.left)
@@ -1033,9 +1113,7 @@ class ExprEmitter(MemFoldMixin):
         t = self._t()
         self._e("movq %rax, {}".format(t))
         self._emit_expr(n.right if lp else n.left)     # integer count
-        esz = self._size(elem_ty, n)
-        if esz > 1:
-            self._e("imulq ${}, %rax".format(esz))
+        self._ptr_scale(self._size(elem_ty, n), "%rax")
         self._e("movq %rax, %rcx")
         self._e("movq {}, %rax".format(t))
         self._unt()

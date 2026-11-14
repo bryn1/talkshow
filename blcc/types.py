@@ -953,6 +953,11 @@ class TypeMap:
         if n.op in ("+", "-") and (lp or rp):
             if n.op == "-" and lp and rp:
                 return self._bt(n, "long")
+            if n.op == "+" and lp and rp:
+                # M2 fix-g2 (MC 12460): binary p + p was SILENT (scaled add
+                # of the two address values). gcc: invalid operands — LOUD.
+                self._err(n, "pointer + pointer is not in the subset (§4)",
+                          n.op)
             return lt if lp else rt
         if n.op not in ("+", "-") and (lp or rp):
             self._err(n, "'{}' with a pointer operand is not in the subset (§4)"
