@@ -666,22 +666,32 @@ class ExprEmitter(MemFoldMixin):
                     " ${}, %rax".format(right))
         return
 
-    def _bf_store(self, n, d: Tuple) -> None:
+    def _bf_store(self, n, d: Tuple, value_ready: bool = False,
+                  base_slot=None) -> None:
         """Assign to a bitfield: read-modify-write of the containing unit
         (measured bf3 leg: clearing b leaves a intact). The expression
         value is the CONVERTED stored value (§4 law), sign/zero-extended
-        from the field width."""
+        from the field width. M2 fix-g2 (MC 12460) params: value_ready —
+        the new value is already in %rax (the compound path computed it
+        through the promoted-type arithmetic); base_slot — the unit's
+        BASE ADDRESS is stashed in that slot (E1 evaluated exactly once,
+        shared by the read and the RMW); both default to the plain-assign
+        behaviour, untouched."""
         boff, bit, w, un = d
         left = 64 - w
         unit_bt = ast.BuiltinType(n.file, n.line, n.col, un)
         uns_bt = ast.BuiltinType(n.file, n.line, n.col, self._BF_UNS[un])
         signed = un in self._BF_UNS and self._BF_UNS[un] != un
-        self._fp_guard(self._ty(n.value), unit_bt, n)
-        self._emit_expr(n.value)
+        if not value_ready:
+            self._fp_guard(self._ty(n.value), unit_bt, n)
+            self._emit_expr(n.value)
         t = self._t()
         self._e("movq %rax, {}".format(t))
-        self._bf_addr(n.target)
-        self._e("movq %rax, %rdx")
+        if base_slot is None:
+            self._bf_addr(n.target)
+            self._e("movq %rax, %rdx")
+        else:
+            self._e("movq {}, %rdx".format(base_slot))
         self._e("movq {}, %rcx".format(t))
         if left:
             self._e("shlq ${}, %rcx".format(left))
@@ -704,6 +714,67 @@ class ExprEmitter(MemFoldMixin):
             self._e("shlq ${}, %rax".format(left))
             self._e(("sarq" if signed else "shrq") + " ${}, %rax".format(left))
         self._unt()
+
+    def _bf_assignop(self, n, d: Tuple) -> None:
+        """M2 fix-g2 (MC 12460): bitfield compound assign — the §5
+        &bitfield wall is replaced by the MEASURED gcc law (bfc.O0.out,
+        -O0 == -Os): read the field at its own sign, arithmetic at the
+        PROMOTED type (the scalar _ex_assignop law), then the SAME masked
+        unit-RMW of _bf_store (neighbour bits survive — byte-window leg);
+        the expression value is the converted STORED value (gcc: 3 += 1
+        in int:3 reads back -4). Base evaluated EXACTLY once: t1 holds
+        the unit base for both the read and the merge."""
+        boff, bit, w, un = d
+        op = n.op[:-1]
+        vt = self._decay(self._ty(n.value))
+        if isinstance(vt, ast.PtrType):
+            # gcc rc1 "invalid operands" (measured) — the _binary_ty law,
+            # LOUD like every other pointer-with-bitwise shape.
+            self._err(n, "'{}' with a pointer operand is not in the subset "
+                      "(§4)".format(op), op)
+        nty = self._promote(self._ty(n))
+        self._fp_guard(vt, nty, n)               # row 14 posture, as _bf_store
+        self._emit_expr(n.value)
+        self._convert(nty, n)                    # E2 at the promoted type
+        t0 = self._t()
+        self._e("movq %rax, {}".format(t0))
+        t1 = self._t()
+        self._bf_addr(n.target)                  # the ONE base evaluation
+        self._e("movq %rax, {}".format(t1))
+        # read the OLD field through t1 — the _ex_bitfield shift law:
+        if boff:
+            self._e("addq ${}, %rax".format(boff))
+        self._load(ast.BuiltinType(n.file, n.line, n.col,
+                                   self._BF_UNS[un]), "(%rax)", at=n)
+        left = 64 - bit - w
+        if left:
+            self._e("shlq ${}, %rax".format(left))
+        right = 64 - w
+        if right:
+            self._e(("sarq" if self._BF_UNS[un] != un else "shrq") +
+                    " ${}, %rax".format(right))
+        self._e("movq {}, %rcx".format(t0))      # E2
+        if op in ("/", "%"):
+            if is_unsigned(nty):
+                self._e("xorl %edx, %edx")
+                self._e("divq %rcx")
+            else:
+                self._e("cqto")
+                self._e("idivq %rcx")
+            if op == "%":
+                self._e("movq %rdx, %rax")
+        elif op in ("<<", ">>"):
+            self._e("{} %cl, %rax".format(
+                "shlq" if op == "<<" else
+                ("shrq" if is_unsigned(nty) else "sarq")))
+        elif op == "*":
+            self._e("imulq %rcx, %rax")
+        else:
+            self._e("{} %rcx, %rax".format(_ARITH[op]))
+        # merge through the shipped RMW: value_ready (result in %rax),
+        # base_slot (unit base in t1) — the stored-value law rides back.
+        self._bf_store(n, d, value_ready=True, base_slot=t1)
+        self._unt(2)
 
     def _ex_select(self, n) -> None:
         d = self._bitfield(n)                # §1 row 12 (M45)
@@ -759,6 +830,11 @@ class ExprEmitter(MemFoldMixin):
         self._unt()
 
     def _ex_assignop(self, n) -> None:
+        if isinstance(n.target, ast.Select):
+            d = self._bitfield(n.target)         # §1 row 12 (M45)
+            if d is not None:                    # M2 fix-g2 (MC 12460):
+                self._bf_assignop(n, d)          # measured RMW law SHIPPED
+                return                           # (was the §5 &bitfield wall)
         ty = self._decay(self._ty(n.target))
         if isinstance(ty, ast.StructType):
             self._err(n, "'struct assignment' is not in the subset (§5)", n.op)
