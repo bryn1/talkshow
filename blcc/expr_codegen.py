@@ -174,8 +174,8 @@ class ExprEmitter(MemFoldMixin):
         stored = low bits reinterpreted as the result. WIDTH legs (both
         operands at the result width AND same sign) ride ONE hardware op
         at that width with seto (signed) / setc (unsigned); everything
-        else is the gcc f1..f6 mirror: 64-bit op + (jno when add/sub on
-        all-signed arithmetic) + a truncation-equality fit check. Values
+        else rides the wide path's true-arithmetic law (hi/lo range fit,
+        M2 fix-g2 — the old jno mirror was dead code, see there). Values
         are INTERNED 64-bit, so the slot values ARE the true operands;
         char/short MUL rides the wide path (no imulb/imulw exist)."""
         pty = self._decay(self._ty(n.ptr))
@@ -232,35 +232,110 @@ class ExprEmitter(MemFoldMixin):
             self._store(rt, "(%rdx)")            # wrapped value, §1 row 16
             self._e("movq %rbx, %rax")
             return
-        # ---- wide path (gcc f1..f6 mirror) ------------------------------
-        opw = {"add": "addq", "sub": "subq", "mul": "imulq"}[n.op]
-        self._e("{} %rcx, %rax".format(opw))
-        self._e("xorl %esi, %esi")
-        if n.op in ("add", "sub") and not (sa or sb or ru):
-            # OF-leg of the 64-bit SIGNED math — gcc emits it ONLY when
-            # operands and result are all signed (f1/f2 asm have none).
-            lbl = self._label("oflo")
-            self._e("jno {}".format(lbl))
+        # ---- wide path (M2 fix-g2, MC 12460): ONE true-arithmetic law ---
+        # The f1..f6 mirror was DEAD at its own core: `xorl %esi,%esi`
+        # CLEARED OF before `jno` read it (measured .tmp/fixg2/dbg_add.c),
+        # and MUL had no predicate at all — every mixed-shape w=8 leg
+        # silently flagged 0 where gcc flags 1. The law (oflaw.c, -O0 ==
+        # -Os): flag = the TRUE result of the operands' TRUE values lies
+        # outside the result type; stored = low bits. Carry the true
+        # result as a signed hi + 64-bit lo and fit THAT:
+        #   mul: mulq gives the 128-bit product of the slot bits; for
+        #        every SIGNED operand whose slot is negative, the slot
+        #        carries true + 2^64, so true_hi -= the other slot.
+        #   add: true_hi = CF - [sa & a<0] - [sb & b<0].
+        #   sub: true_hi = -CF + [sb & b<0] - [sa & a<0].
+        # fits(u)  <-> hi == 0 (& w<8: low zero-extends equal);
+        # fits(s)  <-> (hi==0 && lo>=0 || hi==-1 && lo<0)
+        #              (& w<8: low sign-extends equal).
+        # %r8 parks the result pointer (mulq clobbers %rdx), %r9 keeps
+        # the a-slot, %r10 the hi, %r11b catches CF — r8..r11 are call-
+        # arg regs only, dead between this op and the store (no nested
+        # emit runs here), and the w<8 f-shape check still frees %rdx.
+        self._e("movq %rdx, %r8")
+        self._e("movq %rax, %r9")
+        if n.op == "mul":
+            self._e("mulq %rcx")                # rdx:rax = slots' 128-bit
+            if not sa:
+                lbl = self._label("ofhi")
+                self._e("testq %r9, %r9")
+                self._e("jns {}".format(lbl))
+                self._e("subq %rcx, %rdx")
+                self._e(lbl + ":")
+            if not sb:
+                lbl = self._label("ofhi")
+                self._e("testq %rcx, %rcx")
+                self._e("jns {}".format(lbl))
+                self._e("subq %r9, %rdx")
+                self._e(lbl + ":")
+            self._e("movq %rdx, %r10")
+        else:
+            self._e("addq %rcx, %rax" if n.op == "add" else "subq %rcx, %rax")
+            self._e("setc %r11b")
+            self._e("movzbl %r11b, %r11d")
+            self._e("movq %r11, %r10")
+            if n.op == "sub":
+                self._e("negq %r10")
+            if not sa:
+                lbl = self._label("ofhi")
+                self._e("testq %r9, %r9")
+                self._e("jns {}".format(lbl))
+                self._e("subq $1, %r10")
+                self._e(lbl + ":")
+            if not sb:
+                lbl = self._label("ofhi")
+                self._e("testq %rcx, %rcx")
+                self._e("jns {}".format(lbl))
+                self._e(("subq $1, %r10" if n.op == "add"
+                         else "addq $1, %r10"))
+                self._e(lbl + ":")
+        self._e("movq %r8, %rdx")
+        self._store(rt, "(%rdx)")               # low bits, §1 row 16
+        # w-extend-equality templates (f-shape); no "movzlq" exists —
+        # 32-bit zero-extension is the plain 32-bit MOV.
+        movx = ((("movsbq %al, %rdx", "movswq %ax, %rdx",
+                  "movslq %eax, %rdx") if not ru else
+                 ("movzbq %al, %rdx", "movzwq %ax, %rdx",
+                  "movl %eax, %edx"))[0 if w == 1 else w // 2]
+                if w < 8 else None)
+        l_done = self._label("oflo")
+        self._e("xorl %esi, %esi")              # flag=0; no live flags now
+        if ru:
+            l_fit = self._label("oflo")
+            self._e("testq %r10, %r10")
+            self._e("jz {}".format(l_fit))
+            self._e("movl $1, %esi")            # hi != 0: true out of range
+            self._e("jmp {}".format(l_done))
+            self._e(l_fit + ":")
+            if w < 8:
+                self._e(movx)
+                self._e("cmpq %rdx, %rax")
+                self._e("je {}".format(l_done))
+                self._e("movl $1, %esi")
+        else:
+            l_bad = self._label("oflo")
+            l_w = self._label("oflo")
+            l_m1 = self._label("oflo")
+            self._e("cmpq $0, %r10")
+            self._e("jne {}".format(l_m1))
+            self._e("testq %rax, %rax")         # hi==0: lo>=0 or > SMAX
+            self._e("js {}".format(l_bad))
+            self._e("jmp {}".format(l_w))
+            self._e(l_m1 + ":")
+            self._e("cmpq $-1, %r10")
+            self._e("jne {}".format(l_bad))     # |hi| > 1: out of range
+            self._e("testq %rax, %rax")         # hi==-1: lo<0 or < SMIN
+            self._e("jns {}".format(l_bad))
+            self._e(l_w + ":")
+            if w < 8:
+                self._e(movx)
+                self._e("cmpq %rdx, %rax")
+                self._e("je {}".format(l_done))
+            else:
+                self._e("jmp {}".format(l_done))
+            self._e(l_bad + ":")
             self._e("movl $1, %esi")
-            self._e(lbl + ":")
-        self._store(rt, "(%rdx)")                # stored BEFORE the fit
-        #                                   check frees %rdx as scratch
-        if w < 8:
-            # truncation-equality check, gcc f1..f6 shape. NOTE there is
-            # no "movzlq": 32-bit zero-extension is the plain 32-bit MOV.
-            mov = ((("movsbq %al, %rdx", "movswq %ax, %rdx",
-                     "movslq %eax, %rdx") if not ru else
-                    ("movzbq %al, %rdx", "movzwq %ax, %rdx",
-                     "movl %eax, %edx"))[0 if w == 1 else w // 2])
-            lbl = self._label("oflo")
-            self._e(mov)
-            self._e("cmpq %rdx, %rax")
-            self._e("je {}".format(lbl))
-            self._e("movl $1, %esi")
-            self._e(lbl + ":")
-        # w == 8: the truncation-equality check is the identity — gcc
-        # f4 emits exactly that (ULONG_MAX+1 into a uint* is caught by
-        # the w<8 arm; into a ulong* NOTHING flags, gcc included).
+        self._e(l_done + ":")
         self._e("movq %rsi, %rax")
 
     def _va_intrinsic(self, n, name) -> None:
