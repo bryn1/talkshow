@@ -14,6 +14,7 @@ from typing import Dict, List, Optional, Tuple
 from blcc import ast, predef
 from blcc.lexer import DiagError, Lexer, SourceLine, Token, TokenStream
 from blcc.expr_parser import ExprParser
+from blcc.asmstmt import AsmParseMixin
 from blcc.runtime import BUILTINS as _RUNTIME_BUILTINS
 
 # §6 implicit builtins: always callable, never re-declarable. The NAME set is
@@ -35,12 +36,16 @@ _DECL_START_KW = _TYPE_KW + ("const", "struct", "enum", "static", "typedef",
                              "__typeof", "__extension__")
 
 
-class Parser:
+class Parser(AsmParseMixin):
     _STMT_HANDLERS = {"if": "parse_if", "while": "parse_while",
                       "do": "parse_do_while", "for": "parse_for",
                       "switch": "parse_switch", "case": "parse_nested_label",
                       "default": "parse_nested_label",
-                      "__label__": "parse_label_decl"}
+                      "__label__": "parse_label_decl",
+                      # M3 §3 L0: the asm statement family (the lexer
+                      # already spells asm/__asm__ as keywords).
+                      "asm": "parse_asm_statement",
+                      "__asm__": "parse_asm_statement"}
 
     def __init__(self, toks: List[Token]):
         self.s = TokenStream(toks)
@@ -1183,7 +1188,11 @@ class Parser:
         # DROPS (the stack machine has no allocation choice to make).
         # gnu89's address-of-register ERROR side is NOT implemented
         # (documented laxness; the run-pair leg takes no address).
+        # M3 §3.10 (L10): the register SPECIFIER is now load-bearing for
+        # the `register T name asm("reg")` bind shape (tracked below).
+        is_register = False
         while self._accept("register") is not None:
+            is_register = True
             self._skip_gnu_attrs()
         base = self.parse_base_type()
         out.extend(self._drain_pending())
@@ -1202,6 +1211,20 @@ class Parser:
                         reg = self.struct_tag_attrs = {}
                     reg[self._unqual(ty).tag] = tuple(
                         list(reg.get(self._unqual(ty).tag, ())) + [(_nm, _a)])
+            bind = None
+            if self._at("asm", "__asm__"):
+                # M3 §3.10 (L10): the `register T name asm("reg")` bind
+                # suffix. Any OTHER use — a function declarator, or a
+                # non-register object (the `__asm__("alias")` symbol form)
+                # — is L4 LOUD (0 active x86_64 sites, §3 L4).
+                st = self.s.peek()
+                if is_fn or not is_register:
+                    self._parse_err(
+                        st, "declaration-suffix __asm__(\"…\") symbol "
+                        "aliasing is L4 LOUD (0 active x86_64 sites; §3 "
+                        "L4) — only a `register` OBJECT declarator may "
+                        "bind a register (S17)")
+                bind = self.asm_bind_suffix(st)
             if is_fn:
                 if self.s.at_punct("{") and len(self.scopes) > 1:
                     self._parse_err(pos, "function definition inside a function is not in the subset")
@@ -1251,7 +1274,8 @@ class Parser:
             self.define(name, ("var", ty), pos)
             out.append(ast.VarDecl(pos.file, pos.line, pos.col, name, ty,
                                    init, is_static,
-                                   is_extern=(is_extern and init is None)))
+                                   is_extern=(is_extern and init is None),
+                                   asm_bind=bind))
             if self.s.accept_punct(","):
                 continue
             self.s.expect_punct(";")

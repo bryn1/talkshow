@@ -128,6 +128,9 @@ class VarDecl(Node):
     is_static: bool = False  # file scope AND (since §1c, MC 12486)
                              # function-scope `static` locals
     is_extern: bool = False  # §2.8: `extern T x;` re-decl — never emits
+    asm_bind: Optional[str] = None   # M3 §3.10 (L10): register-asm var —
+                             # the raw asm("binding") string of a
+                             # `register` declarator; None = plain object
 
 
 @dataclass(frozen=True)
@@ -295,6 +298,37 @@ class CaseRange(Node):
 @dataclass(frozen=True)
 class Default(Node):
     stmt: Optional[Node]
+
+
+@dataclass(frozen=True)
+class AsmOperand(Node):
+    # M3 inline asm (plan-m3-asm v3.1 §3 L0): one operand of an asm
+    # statement. name = the [nm] spelling or None; constraint = the raw
+    # constraint STRING (parsed by asmstmt, never here); expr = the
+    # parenthesized C expression; folded = parse-time constant fold
+    # (fold_truthy) or None.
+    name: Optional[str]
+    constraint: str
+    expr: Node
+    folded: Optional[int] = None
+
+
+@dataclass(frozen=True)
+class AsmStmt(Node):
+    # M3 inline asm statement. volatile = volatile/__volatile__ seen (and
+    # anything asm_volatile_goto expanded into); goto_ = the `goto`
+    # keyword (asm goto); tmpl = the ONE merged template literal;
+    # outs/ins = AsmOperand tuples (numbered outputs-then-inputs, GCC's
+    # %N order, §3 L1); clobbers = raw clobber-section STRINGS (§3.2-N
+    # normalization happens at codegen, never silently dropped); labels =
+    # the labels-section C identifiers (asm goto).
+    volatile: bool
+    goto_: bool
+    tmpl: str
+    outs: Tuple[Node, ...]
+    ins: Tuple[Node, ...]
+    clobbers: Tuple[str, ...]
+    labels: Tuple[str, ...]
 
 
 # --------------------------------------------------------------------------

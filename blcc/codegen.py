@@ -22,6 +22,7 @@ from blcc import ast
 from blcc.data import DataEmitter
 from blcc.expr_codegen import REG_ARGS, ExprEmitter, _fp
 from blcc.types import TypeMap, _roundup8, is_unsigned, stmt_children
+from blcc.asmgen import AsmGenMixin
 from blcc import predef
 
 _STORE_OP = {1: "movb", 2: "movw", 4: "movl", 8: "movq"}
@@ -47,6 +48,12 @@ class _FnState:
         self.temp_high = 0
         self.epilogue = ".Lep"
         self.var_save = None      # §2.7: rbp offset of the 48-byte area
+        # M3 §3.10 (L10): name → (shadow-slot rbp off, reg, STABLE?, type)
+        # for `register … asm("reg")` bind vars declared in THIS function
+        # (shadow slots are hidden locals — never .bss); reg → hidden
+        # callee-saved save slot for the §3.6-T bracket of this function.
+        self.regasms: Dict[str, tuple] = {}
+        self.asm_t: Dict[str, int] = {}
 
 
 def _stmtexprs_in_expr(s):
@@ -71,7 +78,7 @@ def _stmtexprs_in_expr(s):
     return out
 
 
-class Codegen(TypeMap, ExprEmitter, DataEmitter):
+class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin):
     def __init__(self, tu: ast.TranslationUnit):
         self.tu = tu
         self.funcs: Dict[str, ast.FuncDecl] = {}
@@ -91,6 +98,10 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter):
         self._static_n = 0
         self.static_objs: List[ast.VarDecl] = []
         self.fn = _FnState("<none>")
+        # M3 §3.10 file-scope binds (asm.h:189 current_stack_pointer): name
+        # → (reg, type). NEVER .bss/.data storage (v2 posture) — the name
+        # rides the register itself.
+        self.regasm_global: Dict[str, tuple] = {}
         self.loops: List[Tuple[str, Optional[str]]] = []
         self._case_lbl: Dict[int, str] = {}
         self._collect()
@@ -109,6 +120,12 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter):
                 if d.body is not None:
                     self.funcs[d.name] = d
             elif isinstance(d, ast.VarDecl):
+                if d.asm_bind is not None:
+                    # M3 §3.10: a file-scope register-asm bind is a REG
+                    # fact, not an object — no .bss/.data, ever (v2 law
+                    # upheld; SCRATCH-class binds LOUD in _asm_file_bind).
+                    self._asm_file_bind(d)
+                    continue
                 if d.name in self.globals:
                     prev = self.globals[d.name]
                     # §2.8: `extern T x;` beside a defining/tentative
@@ -502,6 +519,8 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter):
             pass                     # §1 row 4d: names only, no emission
         elif isinstance(n, ast.VarDecl):
             self._stmt_vardecl(n)
+        elif isinstance(n, ast.AsmStmt):
+            self._stmt_asm(n)           # M3 §3: the whole inline-asm law
         elif isinstance(n, ast.EnumDecl):
             # §8: the message names the CONSTRUCT literally — never a node
             # class name like 'EnumDecl' (DA-c2 P3-1 / OBS-A).
@@ -537,6 +556,9 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter):
         self.fn.locals = saved
 
     def _stmt_vardecl(self, vd: ast.VarDecl) -> None:
+        if vd.asm_bind is not None:
+            self._asm_local_bind(vd)    # M3 §3.10: shadow-slot bind model
+            return
         if vd.is_static:
             # §1c AMENDMENT v4.2 (MC 12486): a function-scope `static`
             # local gets NO frame slot and NO runtime initialization —

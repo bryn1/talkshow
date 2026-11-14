@@ -988,6 +988,15 @@ class TypeMap:
             self._err(n, "'{}' is a function name used as a value — 'function "
                       "pointer' is not in the subset (§5)".format(n.name),
                       n.name)
+        # M3 §3.10: a register-asm bind TYPES as its declared T (the value
+        # is C-visible; only its HOME differs — the register or a hidden
+        # shadow slot). Resolution lands HERE so _ty and _ex_ident agree.
+        ra = getattr(self.fn, "regasms", None)
+        if ra is not None and n.name in ra:
+            return ra[n.name][3]
+        rg = getattr(self, "regasm_global", None)
+        if rg is not None and n.name in rg:
+            return rg[n.name][1]
         self._err(n, "'{}' undeclared — not a local, parameter, global or "
                      "enum constant".format(n.name), n.name)
 

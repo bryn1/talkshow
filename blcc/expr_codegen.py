@@ -90,6 +90,13 @@ class ExprEmitter(MemFoldMixin):
         self._e("leaq {}(%rip), %rax".format(self._label_ref(n, n.name)))
 
     def _ex_ident(self, n) -> None:
+        ra = self._asm_regasm(n.name)
+        if ra is not None:
+            # M3 §3.10(b) C-READ: STABLE bind rides the register itself
+            # (value persistently there); SCRATCH loads the shadow slot at
+            # the C width (never silently the stale slot for STABLE).
+            self._asm_c_read(n, ra)
+            return
         if n.name in self.fn.statics:
             # §1c (MC 12486): a function-scope `static` local lives in
             # TU storage and SHADOWS the same-name global — checked
@@ -798,6 +805,13 @@ class ExprEmitter(MemFoldMixin):
             if d is not None:
                 self._bf_store(n, d)
                 return
+        if isinstance(n.target, ast.Ident):
+            ra = self._asm_regasm(n.target.name)
+            if ra is not None:
+                # M3 §3.10(c) C-WRITE: %rax → shadow; STABLE additionally
+                # movq into the register; %rsp/%rbp binds LOUD (N2).
+                self._asm_c_write(n, ra)
+                return
         ty = self._decay(self._ty(n.target))
         self._fp_guard(self._ty(n.value), ty, n)
         if isinstance(ty, ast.StructType):
@@ -830,6 +844,7 @@ class ExprEmitter(MemFoldMixin):
         self._unt()
 
     def _ex_assignop(self, n) -> None:
+        self._asm_c_rmw_blocked(n, "'op=' compound assignment")
         if isinstance(n.target, ast.Select):
             d = self._bitfield(n.target)         # §1 row 12 (M45)
             if d is not None:                    # M2 fix-g2 (MC 12460):
@@ -1227,6 +1242,16 @@ class ExprEmitter(MemFoldMixin):
 
     def _emit_addr(self, n: ast.Node) -> None:
         """Address of an lvalue into %rax (§4 lvalues: idents, *p, [], members)."""
+        if isinstance(n, ast.Ident):
+            ra = self._asm_regasm(n.name)
+            if ra is not None:
+                # M3 §3.10/S17: a bind has NO storage object — &bind and
+                # compound RMW (which ride address materialization) hit
+                # this wall; 0 sites, never silently wrong.
+                self._err(n, "address of a §3.10 register-asm variable: "
+                          "the value has no storage object — '&bind' and "
+                          "compound read-modify-write on a bind are "
+                          "0-site constructs (§3.10/S17)", "&", "asm")
         if isinstance(n, ast.CompoundLit):
             # §1 row 11: &literal — scalar literals need the storage too
             # (`int *q = &(int){42};` is legal gnu89 and writable).
