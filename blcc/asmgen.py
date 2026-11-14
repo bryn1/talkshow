@@ -300,6 +300,20 @@ class AsmGenMixin(AsmSubMixin):
 
     def _asm_link_match(self, o, ops, nin) -> None:
         ci = o.ci
+        if o.sec == "out":
+            # gcc-11.4 law (measured MC 12506, -O0 AND -Os): OUTPUT
+            # constraints are LETTER constraints — a digit or [name] tie
+            # in the output section is oracle-INVALID ('matching
+            # constraint not valid in output operand' / 'output operand
+            # constraint lacks ='). blcc not only accepted it, its
+            # write-back SKIPPED the tied output SILENTLY (gate LEG 3 F2
+            # value probe: exit 12, truth 10). S9 ties are INPUT-section
+            # back-references — LOUD, naming the spelling.
+            self._err(o.node, "matching constraint '{}' not valid in an "
+                      "OUTPUT operand — gcc-11.4 law (MC 12506): outputs "
+                      "are letter constraints; digit/[name] ties are "
+                      "input-side back-references (S9)".format(ci.raw),
+                      ci.raw, "asm")
         tgt = None
         if ci.match is not None:
             if ci.match >= nin:

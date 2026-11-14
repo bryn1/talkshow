@@ -1,11 +1,13 @@
-# LINES reason: MC 12499 M3 fact-fix regressions are ONE card's evidence
-# trail (three mispinned build findings, re-measured against gcc-11.4);
-# the legs share the harness imported from test_asm_m1.py.
-"""M3 FACT-FIX regressions (MC 12499, post-gate 12498.2.30).
+# LINES reason: the M3 constraint-law regressions are ONE trail — MC 12499
+# fact-fix legs + MC 12506 fix-f2 legs (gate-r2 back-edge), all re-measured
+# against gcc-11.4; the legs share the harness imported from test_asm_m1.py.
+"""M3 FACT-FIX + FIX-F2 regressions (MC 12499 gate 12498.2.30; MC 12506
+gate-r2 back-edge 12502).
 
 Every law row below was MEASURED against gcc-11.4 gnu89 (-O0 and -Os)
 before the engine moved; the transcripts are
-/home/claudecode/Blaha/.tmp/evidence/m3-fix-f1.log.
+/home/claudecode/Blaha/.tmp/evidence/m3-fix-f1.log (fact-fix) and
+/home/claudecode/Blaha/.tmp/evidence/m3-fix-f2.log (fix-f2).
 
 F-pct-equal  (MISPIN fixed): the build doc claimed "gcc -O0 passes `%=`
   through UNEXPANDED (measured)". Re-measured: gcc EXPANDS %= at -O0 AND
@@ -24,7 +26,9 @@ F-rmwcc      (MISPIN fixed): rmwcc.h EXISTS (arch/x86/include/asm/
   predefines table mirrors gcc -dM and DOES define it (measured: -E
   picks the #ifdef branch). Support implemented per the gcc-11.4 law
   measured this card: 28 accepted aliases (setcc table; pe/po REJECTED
-  by the oracle), setcc+movzbl lowering straight after the template,
+  by the oracle) — fix-f2 (MC 12506) NOTE: the frozenset that SHIPPED
+  against this claim held 27 (no 'le'); it is 28 now, set-equality-tested
+  below. setcc+movzbl lowering straight after the template,
   template reference to a cc operand = LOUD (gcc: "invalid use of asm
   flag output"), '+'/match onto @cc = LOUD (gcc rc1).
 
@@ -36,6 +40,27 @@ F-a-pair     (MISPIN fixed): bare fixed a-pair is SUPPORTED both sides
   Census: 0 such sites in 369/369 .i streams (input constraint with 'm'
   + constant operand) — so the posture is LOUD-pinned, with the census
   named, per the work order.
+
+FIX-F2 (MC 12506, gate m3-test-verdict-c2 back-edge, all re-measured
+  gcc-11.4 gnu89 -O0 AND -Os this card):
+  (1) @cc EXACT-SET LAW — the oracle accepts EXACTLY 28 aliases; the
+      fix-f1 frozenset shipped 27 (missing 'le'). The 28-set is re-
+      measured row-by-row in .tmp/evidence/m3-fix-f2.log; the shipped
+      table now equals it by SET-EQUALITY (two-direction teeth: a
+      dropped or a planted alias both go RED at the table itself).
+      'le' lowers to setle (run-pair + asm-text pin).
+  (2) DIGIT-TIED OUTPUTS — "0"(x) / "+0"(x) outputs: oracle-INVALID
+      ("output operand constraint lacks '='" / "matching constraint not
+      valid in output operand", both -O0 AND -Os) and blcc not only
+      accepted them, it SILENTLY mis-computed the tied output's
+      write-back (gate LEG3 F2 probe: exit 12 where 10 was true).
+      Outputs are LETTER constraints; digit AND [name] ties are
+      INPUT-section back-references (S9) — LOUD naming the spelling.
+  (3) TRAILING FOURTH COLON — `asm(t : : : : )`: gcc REJECTS the empty
+      labels section in BOTH spellings (non-goto: "expected ')' before
+      ':' token" — without goto there is NO labels section; goto:
+      "expected identifier before ')' token"); blcc accepted rc=0.
+      LOUD naming the position. Census 0 sites (gate LEG 4).
 """
 import os
 import re
@@ -178,13 +203,49 @@ asm volatile("addl %[x], %[var]" : [var] "+m" (v), "=@ccs" (r)
 
 
 CC_ALIASES = "o no b nae ae nb nc c e z ne nz be na a nbe s ns p np l " \
-    "nge ge nl ng nle g".split()
+    "nge le ge nl ng nle g".split()          # 28 — oracle-measured (f2)
+
+
+def test_cc_table_law_shipped_table_equals_measured_28_both_ways():
+    # TWO-DIRECTION teeth (MC 12506, gate r2 LEG 2 exact-set law): the
+    # SHIPPED frozenset must EQUAL the oracle-measured 28-alias set. A
+    # MISSING alias (fix-f1 shipped 27 without 'le') and a PLANTED extra
+    # one (e.g. 'pe', which the oracle rejects) both go RED HERE, at the
+    # table itself — set-equality in both directions, not a behaviour
+    # probe that could mask one side. The -O0/-Os accept/reject matrix
+    # behind CC_ALIASES: .tmp/evidence/m3-fix-f2.log (M1 block).
+    from blcc.asmstmt import CC_OUTPUTS
+    assert set(CC_OUTPUTS) == set(CC_ALIASES), \
+        "shipped CC_OUTPUTS vs oracle-measured: missing={} extra={}".format(
+            sorted(set(CC_ALIASES) - set(CC_OUTPUTS)),
+            sorted(set(CC_OUTPUTS) - set(CC_ALIASES)))
+    assert len(CC_OUTPUTS) == len(CC_ALIASES) == 28
+
+
+def test_cc_le_alias_lowers_setle_and_runs():
+    # 'le' is oracle-accepted (M1 matrix, -O0 AND -Os) — the fix-f1
+    # frozenset alone rejected it. Lowering leg: setle into the operand
+    # colour + run-pair BOTH outcomes (3<=5 -> 1, 5<=3 -> 0).
+    asm = blcc_ok_asm('int main(void){long a=3,b=5;unsigned char r;'
+                      'asm volatile("cmpq %[b], %[a]":"=@ccle"(r)'
+                      ':[a]"r"(a),[b]"r"(b));return r;}', "f2le")
+    assert "setle" in asm, asm
+    _cc_run("f2le1", """
+long a = 3, b = 5; unsigned char r;
+asm volatile("cmpq %[b], %[a]" : "=@ccle" (r) : [a] "r" (a), [b] "r" (b));
+""", "r == 1 && a == 3 && b == 5")
+    _cc_run("f2le2", """
+long a = 5, b = 3; unsigned char r;
+asm volatile("cmpq %[b], %[a]" : "=@ccle" (r) : [a] "r" (a), [b] "r" (b));
+""", "r == 0 && a == 5 && b == 3")
 
 
 def test_cc_table_law_all_aliases_compile_unknown_is_loud():
     # gcc-11.4 gnu89 measured table: these 28 compile (rc0); pe/po and
     # any other spelling = "unknown ‘asm’ flag output" (rc1). blcc must
     # match BOTH sides — accepted set compiles, unknown LOUDs naming it.
+    # (fix-f2: CC_ALIASES gained 'le' — the list is 28 now, matching its
+    # long-standing claim; the shipped frozenset gained it too.)
     for mn in CC_ALIASES:
         rc, _a, err = blcc_asm('int main(void){unsigned char r;'
                                'asm("nop":"=@cc%s"(r));return r;}' % mn,
@@ -237,3 +298,68 @@ def test_immediate_in_rm_is_loud_with_census_pinned():
          'asm("idivq %4" : "=a" (q), "=d" (rem) : "a" (100L), "d" (0L),'
          ' "rm" (3L));return 0;}',
          "f1rim", "not an addressable l-value", "sema")
+
+
+# ------------------------------------------ FIX-F2: digit-tied OUTPUTS --
+def test_digit_tied_output_is_loud_naming_the_spelling():
+    # Gate LEG 3 shapes (m3-verify-c2/out/leg3.txt F2/F2p) VERBATIM: the
+    # oracle REJECTS every digit-tied OUTPUT spelling at -O0 AND -Os
+    # ("matching constraint not valid in output operand" for '+0'/'=0',
+    # "output operand constraint lacks '='" for bare '0' — measured
+    # M2 block, m3-fix-f2.log). blcc accepted rc=0 AND silently
+    # mis-computed the tied write-back (gate probe: exit 12, truth 10).
+    # Outputs are LETTER constraints — LOUD naming the spelling.
+    loud('int main(void){long x=100,q=0;'
+         'asm volatile("addq $5,%0" : "=a"(q), "+0"(x)); return 0;}',
+         "f2d1", "'\\+0' not valid in an OUTPUT operand", "asm")
+    loud('int main(void){long x=100,q=0;'
+         'asm volatile("movq $7,%0" : "=a"(q), "0"(x)); return 0;}',
+         "f2d2", "'0' not valid in an OUTPUT operand", "asm")
+    loud('int main(void){long x=100,q=0;'
+         'asm volatile("movq $7,%0" : "=a"(q), "=0"(x)); return 0;}',
+         "f2d3", "'=0' not valid in an OUTPUT operand", "asm")
+    # The symbolic spelling is the SAME law (M2 out-symmatch: gcc rc1
+    # both opts): a [name] tie is an INPUT-section back-reference too.
+    loud('int main(void){long x=100,q=0;'
+         'asm volatile("movq $7,%0": [q]"=a"(q), [t]"[q]"(x));'
+         ' return 0;}',
+         "f2d4", "'\\[q\\]' not valid in an OUTPUT operand", "asm")
+
+
+def test_digit_tied_input_still_runs_run_pair():
+    # The wall is OUTPUT-only: the gate's F2i digit-INPUT tie stays
+    # SUPPORTED both sides (r == 11, run-pair -O0 twin).
+    out, rc = pair_run("""
+static char msg[] = "K\\n";
+int main(void) {
+    long v = 10, r = 0;
+    asm volatile("addq $1,%0" : "=r"(r) : "0"(v));
+    if (r != 11) _sys_exit(14);
+    _sys_write(1, msg, 2);
+    _sys_exit(0);
+    return 0;
+}
+""", "f2di")
+    assert (out, rc) == ("K\n", 0)
+
+
+# ------------------------------------- FIX-F2: trailing fourth colon --
+def test_trailing_four_colon_is_loud_naming_position():
+    # Gate LEG 4 rows VERBATIM (m3-verify-c2/out/leg4.txt four-colon /
+    # goto-labels-emp: blcc rc=0, gcc rc=1). gcc-11.4 REJECTS `asm(t : :
+    # : : )` in BOTH spellings, -O0 AND -Os (non-goto: "expected ')'
+    # before ':' token" — there is NO labels section without goto;
+    # goto: "expected identifier before ')' token"). LOUD names the
+    # position; census 0 sites (gate LEG 4g).
+    loud('int main(void){asm volatile("nop" : : : : );return 0;}',
+         "f2f1", "fourth ':'", "asm")
+    loud('int main(void){asm goto("nop" : : : : );return 0;}',
+         "f2f2", "fourth ':'", "asm")
+
+
+def test_goto_labels_section_with_label_still_parses():
+    # Control (M3 goto-label-ok, gcc rc0 both opts): the wall bites the
+    # EMPTY section only — a named label list still parses.
+    rc, _a, err = blcc_asm('int main(void){goto f;f: ;'
+                           'asm goto("nop" : : : : f);return 0;}', "f2f3")
+    assert rc in (0, 3), err

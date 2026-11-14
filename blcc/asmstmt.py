@@ -183,13 +183,16 @@ def _loud(at, message: str, found: str) -> None:
 # "=@cc<cond>" flag outputs — the CC_OUT family (rmwcc.h __GEN_RMWcc,
 # cmpxchg.h try_cmpxchg/cmpxchg_double, bitops): 8788 sites / 7340 call-
 # reachable / 312 of 369 .i streams (census MC 12499). Accepted-spelling
-# table MEASURED on gcc-11.4 gnu89 this card (pe/po REJECTED there);
-# lowering = setcc into the operand's own colour immediately after the
-# template (mov never touches flags), movzbl for C widths > 1 (gcc's own
-# emit), then the shipped write-back path — see asmgen stage (6cc).
+# table = EXACTLY these 28, gcc-11.4 gnu89 order, RE-MEASURED per-candidate
+# at -O0 AND -Os (MC 12506: fix-f1 shipped 27 while its claim text said
+# 28 — 'le' was missing; pe/po REJECTED by the oracle too). Lowering =
+# setcc into the operand's own colour immediately after the template (mov
+# never touches flags), movzbl for C widths > 1 (gcc's own emit), then the
+# shipped write-back path — see asmgen stage (6cc). Set-equality to the
+# oracle set is TABLE-LAW tested (test_regress_m3fix, two directions).
 CC_OUTPUTS = frozenset(
-    "o no b nae ae nb nc c e z ne nz be na a nbe s ns p np l nge ge nl ng "
-    "nle g".split())
+    "o no b nae ae nb nc c e z ne nz be na a nbe s ns p np l nge le ge nl "
+    "ng nle g".split())
 _CC_RE = re.compile(r"=@cc([A-Za-z]+)$")
 
 
@@ -362,8 +365,23 @@ class AsmParseMixin:
                     if not self.s.at_punct(":"):
                         clo = self._asm_clobber_list(t)
                     if self.s.accept_punct(":"):
-                        if not self.s.at_punct(")"):
-                            labels = self._asm_label_list()
+                        if self.s.at_punct(")"):
+                            # gcc-11.4 REJECTS the fourth colon with
+                            # NOTHING after it, goto or not (measured
+                            # MC 12506 both -O0/-Os: non-goto "expected
+                            # ')' before ':' token" — without goto there
+                            # IS no labels section; goto "expected
+                            # identifier before ')' token"). blcc
+                            # accepted rc=0 — LOUD here, naming the
+                            # position (census 0 sites, LEG 4g).
+                            self._asm_parse_err(
+                                self.s.peek(),
+                                "empty 'asm' labels section — the fourth "
+                                "':' of 'asm(t : : : : )' must name at "
+                                "least one label (gcc-11.4 rejects both "
+                                "the non-goto fourth colon and an empty "
+                                "goto list)")
+                        labels = self._asm_label_list()
         self.s.expect_punct(")")
         self.s.expect_punct(";")
         return ast.AsmStmt(t.file, t.line, t.col, vol, goto, tmpl,
