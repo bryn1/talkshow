@@ -211,6 +211,15 @@ def parse_constraint(cstr: str, at) -> CInfo:
     if not lset:
         _loud(at, "constraint '{}' names no operand class (§3 L0)".format(
             cstr), cstr)
+    if lset in ({"N", "d"}, {"n", "d"}):
+        # io.h BUILDIO (1098 LIVE io.c.i sites): "Nd"/"dN" port = dx-fixed
+        # preferred — the gcc-11.4 -Os oracle picks %dx for `outb %0,%w1`
+        # (measured this session); the $imm alternative is the contract's
+        # L4 class, reserved for a future rdx-busy site (0 today).
+        ci.cls = "fixed"
+        ci.fixed = "rdx"
+        ci.alt = "i"
+        return ci
     fixed = lset & set(FIXED)
     if fixed:
         if len(fixed) > 1 or lset - fixed:
