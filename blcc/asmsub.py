@@ -196,6 +196,7 @@ class AsmSubMixin:
         nops = len(ops)
         t = tmpl
         by_name = {o.node.name: o for o in ops if o.node.name}
+        pct_id = None                    # %=: ONE id per asm STATEMENT
         while i < len(t):
             c = t[i]
             if c != "%":
@@ -207,9 +208,15 @@ class AsmSubMixin:
                 out.append("%")
                 i += 2
                 continue
-            if nx == "=":                # %= unique id via existing counter
-                self._label_n += 1
-                out.append(".LL{}".format(self._label_n))
+            if nx == "=":                # §3.5 %= — gcc-11.4 law, measured
+                # MC 12499 (3 occurrences in ONE statement print the SAME
+                # id; ids differ per statement, byte-stable across
+                # recompiles). A label DEFINED by one %= and BACK-REFERENCED
+                # by another in the same template must agree — mint once.
+                if pct_id is None:
+                    self._label_n += 1
+                    pct_id = ".LL{}".format(self._label_n)
+                out.append(pct_id)
                 i += 2
                 continue
             j = i + 1
