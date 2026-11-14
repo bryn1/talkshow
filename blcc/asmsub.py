@@ -284,6 +284,11 @@ class AsmSubMixin:
     def _asm_print(self, o, mod, n) -> str:
         while o.form == "match":
             o = o.match
+        if o.ci.cls == "cc":             # §cc: gcc law (measured MC 12499):
+            self._err(n, "invalid use of asm flag output — a '=@cc…' "
+                      "operand never appears in the template (oracle rc1: "
+                      "invalid 'asm': invalid use of asm flag output)",
+                      "@cc", "asm")
         if o.form == "mem":
             if mod is not None:
                 self._err(n, "size/const modifier '%{}' on a MEMORY operand "

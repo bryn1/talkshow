@@ -174,9 +174,27 @@ class AsmGenMixin(AsmSubMixin):
         # (6) output write-back (reg + bind; mem outputs landed directly)
         outs = [o for o in ops if o.sec == "out" and o.form in ("reg",
                                                                  "bind")]
-        live = {o.reg for o in outs if o.reg}
+        # (6cc) flag outputs FIRST — the setcc reads the flags the
+        # template just wrote; every other stage-(6) instruction is
+        # mov-family (flags-neutral, law-measured), so nothing between
+        # the template and the setcc can silently clobber them. C width
+        # > 1 gets gcc's own `movzbl` zero-intern (sets %al; movzbl
+        # %al,%eax — measured gcc-11.4 emit, MC 12499).
         for o in outs:
-            live.discard(o.reg)
+            if o.ci.cls == "cc":
+                self._e("set{} {}".format(o.ci.cc, reg_name(o.reg, 1)))
+                if o.w > 1:
+                    self._e("movzbl {}, {}".format(reg_name(o.reg, 1),
+                                                   reg_name(o.reg, 4)))
+        live = {o.reg for o in outs if o.reg}
+        # PASS A — EVERY output colour is saved to its slot FIRST (all
+        # mov, flags- and colour-neutral, MC 12499): a later fixed
+        # output's register (e.g. "+a" in the try_cmpxchg shape) must
+        # not die to an earlier output's _load scratch before its value
+        # is copied out. PASS B then re-interns/stores from the slots
+        # (scratch there can no longer reach a pending output colour).
+        pend = []
+        for o in outs:
             if o.form == "bind":
                 if o.stable or o.shadow is None:
                     continue             # STABLE + %rsp/%rbp skip writeback
@@ -188,6 +206,9 @@ class AsmGenMixin(AsmSubMixin):
             t = self._t()
             self._e("{} %{}, {}".format(_MOVOP[o.w],
                                         reg_name(o.reg, o.w)[1:], t))
+            pend.append((o, t))
+        for o, t in pend:
+            live.discard(o.reg)
             self._load(o.ty, t, at=o.node)         # width+sign re-intern
             if o.mem is not None:
                 self._store(o.ty, o.mem, at=o.node)
@@ -298,6 +319,10 @@ class AsmGenMixin(AsmSubMixin):
         if tgt.sec != "out":
             self._err(o.node, "matching constraint references a non-output "
                       "operand '{}' (§3 S9)".format(ci.raw), ci.raw, "asm")
+        if tgt.ci.cls == "cc":           # gcc rc1 onto '=@cc…' (measured)
+            self._err(o.node, "matching constraint onto a flag output "
+                      "operand '{}' (gcc-11.4 rc1, measured MC 12499)"
+                      .format(tgt.ci.raw), ci.raw, "asm")
         o.match = tgt
 
     # ------------------------------------------------------ allocation --

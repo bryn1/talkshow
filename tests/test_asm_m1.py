@@ -695,8 +695,17 @@ def test_flags_and_legacy_clobbers_normalize():
 
 
 def test_flag_output_constraint_is_loud_n1():
-    loud('int main(void){int r;asm volatile("testl $1,$2":"=@ccz"(r));'
-         '(void)r;return 0;}', "n1", "flag-output|GCC_ASM_FLAG", "asm")
+    # N1 RETIRED at MC 12499 fact-fix (was: whole '=@cc…' family LOUD on a
+    # "blcc never predefines __GCC_ASM_FLAG_OUTPUTS__" premise the shipped
+    # M1-c3 generated table contradicts; census 7340 call-reachable sites /
+    # 312 streams). New law = the gcc-11.4 accepted table (run-pairs in
+    # tests/test_regress_m3fix.py); the residual LOUD stays, naming it:
+    rc, _a, err = blcc_asm('int main(void){unsigned char r;'
+                           'asm("nop":"=@ccz"(r));return r;}', "n1a")
+    assert rc in (0, 3), "known alias rejected:\n" + err
+    loud('int main(void){unsigned char r;'
+         'asm("nop":"=@cczz"(r));return r;}', "n1",
+         "unknown 'asm' flag output", "asm")
 
 
 def test_regasm_file_scope_scratch_is_loud_and_never_bss():

@@ -150,16 +150,17 @@ _IMMO = {"i": (-2 ** 31, 2 ** 31 - 1),          # imm32
 
 
 class CInfo:
-    __slots__ = ("mods", "cls", "alt", "fixed", "match", "sym", "raw")
+    __slots__ = ("mods", "cls", "alt", "fixed", "match", "sym", "raw", "cc")
 
     def __init__(self):
         self.mods = ""          # subset of "+&" ("=" implicit unless +)
-        self.cls = ""           # fixed r q m p g i I N n match
+        self.cls = ""           # fixed r q m p g i I N n match cc
         self.alt = ""           # composite fallback class (rm/iq/Ir/qm)
         self.fixed = ""         # physical reg when cls == fixed
         self.match = None       # numeric matching index (S9)
         self.sym = None         # symbolic matching output name (S9)
         self.raw = ""
+        self.cc = ""            # setcc mnemonic when cls == "cc"
 
     @property
     def is_out(self) -> bool:
@@ -178,6 +179,19 @@ def _loud(at, message: str, found: str) -> None:
     raise DiagError("asm", at.file, at.line, at.col, message, found)
 
 
+# "=@cc<cond>" flag outputs — the CC_OUT family (rmwcc.h __GEN_RMWcc,
+# cmpxchg.h try_cmpxchg/cmpxchg_double, bitops): 8788 sites / 7340 call-
+# reachable / 312 of 369 .i streams (census MC 12499). Accepted-spelling
+# table MEASURED on gcc-11.4 gnu89 this card (pe/po REJECTED there);
+# lowering = setcc into the operand's own colour immediately after the
+# template (mov never touches flags), movzbl for C widths > 1 (gcc's own
+# emit), then the shipped write-back path — see asmgen stage (6cc).
+CC_OUTPUTS = frozenset(
+    "o no b nae ae nb nc c e z ne nz be na a nbe s ns p np l nge ge nl ng "
+    "nle g".split())
+_CC_RE = re.compile(r"=@cc([A-Za-z]+)$")
+
+
 def parse_constraint(cstr: str, at) -> CInfo:
     """Parse ONE constraint string. Every unsupported letter/modifier/spelling
     LOUDs naming it (L1/L3/N1 — never silent, never a downgraded class)."""
@@ -188,10 +202,20 @@ def parse_constraint(cstr: str, at) -> CInfo:
         ci.cls = "match"
         ci.sym = m.group(1)                      # symbolic matching (S9)
         return ci
-    if cstr.startswith("=@") or "=@cc" in cstr:
-        _loud(at, "flag-output constraint '\"=@cc…\"' (N1) is LOUD: blcc "
-                  "never predefines __GCC_ASM_FLAG_OUTPUTS__ (§3.7-L7)",
-              "@cc")
+    if cstr.startswith("=@cc"):
+        mn = cstr[4:]
+        if not _CC_RE.fullmatch(cstr) or mn not in CC_OUTPUTS:
+            _loud(at, "unknown 'asm' flag output '{}' — the gcc-11.4 "
+                      "accepted '=@cc…' table is measured (MC 12499): "
+                      "'{}' is not in it (pe/po REJECTED by the oracle "
+                      "too)".format(cstr, mn or "<empty>"), "@cc")
+        ci.cls = "cc"
+        ci.cc = mn
+        return ci
+    if "@" in cstr:
+        _loud(at, "invalid punctuation '@' in constraint '{}' (gcc-11.4 "
+                  "law, measured: '+'/match onto '=@cc…' is likewise "
+                  "rc1)".format(cstr), "@")
     letters = ""
     for ch in cstr:
         if ch in "=+&":

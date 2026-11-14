@@ -91,3 +91,127 @@ def test_pct_equal_distinct_across_statements_and_stable():
     ids = re.findall(r"A(\.LL\d+):", a1)
     assert len(ids) == 2 and ids[0] != ids[1], ids
     assert a1 == a2, "recompile not byte-stable"
+
+# ------------------------------------------------ F-rmwcc: @cc law ------
+def _cc_run(name, asm_line, check):
+    src = """
+static char msg[] = "K\\n";
+int main(void) {
+    %s
+    _sys_write(1, msg, 2);
+    _sys_exit(%s ? 0 : 1);
+    return 0;
+}
+""" % (asm_line, check)
+    out, rc = pair_run(src, name)
+    assert (out, rc) == ("K\n", 0)
+
+
+def test_cc_try_cmpxchg_z_runs():
+    # cmpxchg.h __raw_try_cmpxchg shape (LIVE 2464 sites): "=@ccz" output
+    # + "+m" + "+a" fixed old + "r" new — success AND failure legs.
+    ok = """
+unsigned int ptr = 5, old = 5, nw = 9; unsigned char success;
+asm volatile("cmpxchgl %[new], %[ptr]"
+             : [success] "=@ccz" (success), [ptr] "+m" (ptr),
+               [old] "+a" (old)
+             : [new] "r" (nw));
+"""
+    _cc_run("f1c1a", ok, "success == 1 && ptr == 9 && old == 5")
+    bad = """
+unsigned int ptr = 5, old = 6, nw = 9; unsigned char success;
+asm volatile("cmpxchgl %[new], %[ptr]"
+             : [success] "=@ccz" (success), [ptr] "+m" (ptr),
+               [old] "+a" (old)
+             : [new] "r" (nw));
+"""
+    _cc_run("f1c1b", bad, "success == 0 && ptr == 5 && old == 5")
+
+
+def test_cc_dec_and_test_e_runs():
+    # rmwcc.h GEN_UNARY_RMWcc shape (arch_atomic_dec_and_test): decl+cc.
+    _cc_run("f1c2", """
+int v = 1; unsigned char r;
+asm volatile("decl %[var]" : [var] "+m" (v), "=@cce" (r));
+""", "r == 1 && v == 0")
+
+
+def test_cc_add_negative_s_runs():
+    # arch_atomic_add_negative: GEN_BINARY_RMWcc with "s".
+    _cc_run("f1c3", """
+int v = 5; unsigned char r;
+asm volatile("addl %[val], %[var]" : [var] "+m" (v), "=@ccs" (r)
+             : [val] "r" (-10));
+""", "r == 1 && v == -5")
+
+
+def test_cc_btsq_oldbit_c_runs():
+    # arch_test_and_set_bit (bitops.h via rmwcc GEN_BINARY): "c" = old bit.
+    # Both sides of the law: bit ALREADY SET (old=1, var unchanged) and
+    # bit CLEAR (old=0, var gets the bit).
+    _cc_run("f1c4a", """
+unsigned long v = 2; unsigned char old;
+asm volatile("btsq %[val], %[var]" : [var] "+m" (v), "=@ccc" (old)
+             : [val] "r" (1L));
+""", "old == 1 && v == 2")
+    _cc_run("f1c4b", """
+unsigned long v = 0; unsigned char old;
+asm volatile("btsq %[val], %[var]" : [var] "+m" (v), "=@ccc" (old)
+             : [val] "r" (1L));
+""", "old == 0 && v == 2")
+
+
+def test_cc_wide_int_output_runs():
+    # gcc materializes the flag at the OPERAND C width: int output gets
+    # movzbl after setcc (measured: sets %al; movzbl %al,%eax). Sign/
+    # width both exercised.
+    _cc_run("f1c5a", """
+int v = 5, x = 10, r;
+asm volatile("addl %[x], %[var]" : [var] "+m" (v), "=@ccs" (r)
+             : [x] "r" (x));
+""", "r == 0 && v == 15")
+    _cc_run("f1c5b", """
+int v = 5, x = -20, r;
+asm volatile("addl %[x], %[var]" : [var] "+m" (v), "=@ccs" (r)
+             : [x] "r" (x));
+""", "r == 1 && v == -15")
+
+
+CC_ALIASES = "o no b nae ae nb nc c e z ne nz be na a nbe s ns p np l " \
+    "nge ge nl ng nle g".split()
+
+
+def test_cc_table_law_all_aliases_compile_unknown_is_loud():
+    # gcc-11.4 gnu89 measured table: these 28 compile (rc0); pe/po and
+    # any other spelling = "unknown ‘asm’ flag output" (rc1). blcc must
+    # match BOTH sides — accepted set compiles, unknown LOUDs naming it.
+    for mn in CC_ALIASES:
+        rc, _a, err = blcc_asm('int main(void){unsigned char r;'
+                               'asm("nop":"=@cc%s"(r));return r;}' % mn,
+                               "f1tab" + mn)
+        assert rc in (0, 3), "alias {} rejected:\n{}".format(mn, err)
+    for mn in ("pe", "po", "foo", "cc"):
+        loud('int main(void){unsigned char r;asm("nop":"=@cc%s"(r));'
+             'return r;}' % mn, "f1tabx" + mn,
+             "unknown 'asm' flag output", "asm")
+
+
+def test_cc_template_reference_is_loud():
+    # gcc law (measured): "invalid 'asm': invalid use of asm flag output"
+    # — a cc operand is never printable in the template, any modifier.
+    loud('int main(void){unsigned char r;asm("movb $1,%0":"=@ccz"(r));'
+         'return r;}', "f1cref", "invalid use of asm flag output", "asm")
+    loud('int main(void){unsigned char r;asm("nop %k0":"=@ccz"(r));'
+         'return r;}', "f1cref2", "invalid use of asm flag output", "asm")
+
+
+def test_cc_readwrite_and_match_are_loud():
+    # gcc rc1 both (measured): '+@ccz' -> "invalid punctuation '@'";
+    # a "0"-match onto a cc output likewise rejected.
+    loud('int main(void){unsigned char r=1;asm("nop":"+@ccz"(r));'
+         'return r;}', "f1crw", "invalid punctuation|@cc", "asm")
+    loud('int main(void){unsigned char r;int v=2;'
+         'asm("nop":"=@ccz"(r):"0"(v));return r;}', "f1cmat",
+         "invalid punctuation|=@cc|flag output", "asm")
+
+
