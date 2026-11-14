@@ -335,13 +335,6 @@ class AsmGenMixin(AsmSubMixin):
             o.reg = free[0]
             taken.add(o.reg)
 
-        for o in ops:                    # matching rides its target's color
-            if o.form == "match":
-                if o.match.form not in ("reg", "bind"):
-                    self._err(o.node, "matching constraint onto a "
-                              "non-register operand '{}' (S9)".format(
-                                  o.ci.raw), o.ci.raw, "asm")
-                o.reg = o.match.reg
         for o in ops:                    # greedy: outputs then inputs
             if o.sec == "out" and (o.form == "reg" and o.reg is None
                                    or o.form == "mem" and o.mem is None):
@@ -350,6 +343,13 @@ class AsmGenMixin(AsmSubMixin):
             if o.sec == "in" and (o.form == "reg" and o.reg is None
                                   or o.form == "mem" and o.mem is None):
                 take(o)
+        for o in ops:                    # matching rides its target's color
+            if o.form == "match":
+                if o.match.form not in ("reg", "bind"):
+                    self._err(o.node, "matching constraint onto a "
+                              "non-register operand '{}' (S9)".format(
+                                  o.ci.raw), o.ci.raw, "asm")
+                o.reg = o.match.reg
         # -- post-coloring invariant checks (a)-(e), all LOUD (S8) ----------
         seen = {}
         for o in ops:

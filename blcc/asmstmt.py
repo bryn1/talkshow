@@ -346,12 +346,18 @@ class AsmParseMixin:
                            tuple(labels))
 
     # -- helpers --------------------------------------------------------
+    def _asm_parse_err(self, tok, message):
+        # grammar walls INSIDE an asm statement carry the `asm:` phase —
+        # the §8 sweep law: an asm-class wall must be countable as such.
+        raise DiagError("asm", tok.file, tok.line, tok.col, message,
+                        tok.text)
+
     def _asm_lit_run(self, at, what: str) -> str:
         """ONE merged literal: juxtaposed StrLit tokens concat (M1 zero-gap
         + M2 §6g same-line-gap/cross-line law). Anything else = L5 LOUD."""
         tok = self.s.peek()
         if tok.kind != "str":
-            self._parse_err(
+            self._asm_parse_err(
                 tok, "asm {} must be a single string literal — a COMPUTED "
                 "template is L5 LOUD (S13 grammar note)".format(what))
         parts = []
@@ -392,17 +398,17 @@ class AsmParseMixin:
             if tok.kind == "str":
                 out.append(self._asm_lit_run(tok, "clobber name"))
                 if self.s.at_punct("("):         # clobber section carries
-                    self._parse_err(               # an OPERAND (paravirt
+                    self._asm_parse_err(               # an OPERAND (paravirt
                         self.s.peek(),              # _PARAVIRT_TYPE shape):
                         "clobber-section entry is an OPERAND (the paravirt "
                         "ASM_CALL_CONSTRAINT-in-clobbers shape) — §8 loud, "
                         "the SUPPORT posture never models it (§1.3)")
             elif tok.kind == "id" or tok.kind == "punct" and tok.text == "[":
-                self._parse_err(
+                self._asm_parse_err(
                     tok, "clobber-section entry must be a quoted string; a "
                     "bare [op]/operand spelling is §8 loud (§3 L0)")
             else:
-                self._parse_err(tok, "malformed clobber section (§3 L0)")
+                self._asm_parse_err(tok, "malformed clobber section (§3 L0)")
             if not self.s.accept_punct(","):
                 return out
 
