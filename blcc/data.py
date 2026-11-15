@@ -206,6 +206,11 @@ class DataEmitter:
                 self._err(init, "brace initializer for a scalar (§4)", "{")
             v = self._const(init, ctx)
             if isinstance(v, int):
+                # M4 W2 COMMIT-0 (MC 12545): the DATA-time mirror of the
+                # measured 0/1 rule — `static _Bool gb = 7;` emits the byte
+                # 1 (gcc-measured), same law as _store/_CONV.
+                if isinstance(ty, ast.BuiltinType) and ty.name == "_Bool":
+                    v = 1 if v else 0
                 return [("b", (v >> 8 * i) & 255) for i in range(sz)]
             if sz != 8:
                 self._err(init, "address initializer needs an 8-byte pointer "

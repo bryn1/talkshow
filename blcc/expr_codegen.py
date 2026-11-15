@@ -36,6 +36,10 @@ _CONV = {
     "char": ("movsbq {b}, {r}",), "signed char": ("movsbq {b}, {r}",),
     "unsigned char": ("movzbq {b}, {r}",),
     "short": ("movswq {w}, {r}",), "unsigned short": ("movzwq {w}, {r}",),
+    # M4 W2 COMMIT-0 (MC 12545): the _Bool conversion IS the 0/1
+    # normalization — same measured law as _store (test*; setne), and the
+    # canonical internment of a _Bool VALUE is the byte 0/1 zero-filled.
+    "_Bool": ("testq {r}, {r}", "setne {b}", "movzbl {b}, {e}"),
     "long": (), "unsigned long": (), "long long": (),
     "unsigned long long": (), "void": (),        # (void)expr: value dropped
 }
@@ -638,7 +642,19 @@ class ExprEmitter(MemFoldMixin):
                "int": "unsigned int", "unsigned int": "unsigned int",
                "long": "unsigned long", "unsigned long": "unsigned long",
                "long long": "unsigned long long",
-               "unsigned long long": "unsigned long long"}
+               "unsigned long long": "unsigned long long",
+               # M4 W2 COMMIT-0 (MC 12545): _Bool is a 1-BYTE unit, read
+               # unsigned (measured: `bool x:1` values are 0/1).
+               "_Bool": "unsigned char"}
+
+    def _bf_signed(self, un: str) -> bool:
+        """The unit's signedness for the extraction shifts (measured E2).
+        The `_BF_UNS` answer is 'different name' for every signed unit and
+        'same name' for every unsigned one — EXCEPT `_Bool` (it loads as
+        unsigned char yet NAMES differently): a _Bool unit must never
+        sign-extend, its values are 0/1 (measured). ONE helper, all three
+        shift sites ride it."""
+        return un != "_Bool" and self._BF_UNS[un] != un
 
     def _bf_addr(self, n: ast.Select) -> None:
         """Struct base ADDRESS in %rax for a member select."""
@@ -668,7 +684,7 @@ class ExprEmitter(MemFoldMixin):
             self._e("shlq ${}, %rax".format(left))
         right = 64 - w
         if right:
-            signed = self._BF_UNS[un] != un
+            signed = self._bf_signed(un)
             self._e(("sarq" if signed else "shrq") +
                     " ${}, %rax".format(right))
         return
@@ -688,10 +704,15 @@ class ExprEmitter(MemFoldMixin):
         left = 64 - w
         unit_bt = ast.BuiltinType(n.file, n.line, n.col, un)
         uns_bt = ast.BuiltinType(n.file, n.line, n.col, self._BF_UNS[un])
-        signed = un in self._BF_UNS and self._BF_UNS[un] != un
+        signed = self._bf_signed(un)
         if not value_ready:
             self._fp_guard(self._ty(n.value), unit_bt, n)
             self._emit_expr(n.value)
+        # M4 W2 COMMIT-0 (MC 12545): a _Bool bitfield NORMALIZES before the
+        # mask — measured gcc `bf.x = 2` on `bool x:1` reads back 1, NOT the
+        # mask product 0. The SAME _CONV arm the plain _Bool store rides.
+        if un == "_Bool":
+            self._convert(unit_bt, n)
         t = self._t()
         self._e("movq %rax, {}".format(t))
         if base_slot is None:
@@ -758,7 +779,7 @@ class ExprEmitter(MemFoldMixin):
             self._e("shlq ${}, %rax".format(left))
         right = 64 - w
         if right:
-            self._e(("sarq" if self._BF_UNS[un] != un else "shrq") +
+            self._e(("sarq" if self._bf_signed(un) else "shrq") +
                     " ${}, %rax".format(right))
         self._e("movq {}, %rcx".format(t0))      # E2
         if op in ("/", "%"):

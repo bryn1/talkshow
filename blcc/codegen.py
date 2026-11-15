@@ -301,6 +301,16 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin):
         if sz not in _STORE_OP:
             self._err(at or self.tu, "'struct assignment' is not in the subset "
                       "(§5) — assign member by member", "store")
+        # M4 W2 COMMIT-0 (MC 12545): _Bool assignment NORMALIZES to 0/1 —
+        # the oracle emits `test{b,w,l,q}; setne <byte>` at -Os (measured,
+        # ab2.s): every store to a _Bool object, whatever the source width,
+        # lands as the byte 0 or 1. ONE mechanism: the single _store every
+        # assignment, decl-init and member-store already rides.
+        un = self._untype(ty)
+        if isinstance(un, ast.BuiltinType) and un.name == "_Bool":
+            r64, r8 = _REG[8][src], _REG[1][src]
+            self._e("testq {}, {}".format(r64, r64))
+            self._e("setne {}".format(r8))
         self._e("{} {}, {}".format(_STORE_OP[sz], _REG[sz][src], mem))
 
     def _str_label(self, s: str) -> str:

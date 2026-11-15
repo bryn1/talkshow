@@ -28,6 +28,9 @@ _QUAL_WORDS = {"const": "const", "volatile": "volatile",
 
 _DECL_START_KW = _TYPE_KW + ("const", "struct", "enum", "static", "typedef",
                              "extern", "float", "double", "union", "unsigned",
+                             # M4 W2 COMMIT-0 (MC 12545): `_Bool` opens a
+                             # declaration like any other type keyword.
+                             "_Bool",
                              # M2: the extended specifier vocabulary (§4.1a)
                              "signed", "__signed__", "__signed", "register",
                              "inline", "__inline__", "__inline", "volatile",
@@ -801,22 +804,26 @@ class Parser(AsmParseMixin):
             qt = self.s.next()
             out.append((_QUAL_WORDS[qt.text], qt))
 
+    # M4 W2 COMMIT-0 (AMENDMENT-2 arms a+c, MC 12545): the scalar
+    # specifier words fully COMMUTE (all combinations re-measured against
+    # gcc 11.4 gnu89 this card) — `long unsigned int` is the stddef.h:207
+    # `__SIZE_TYPE__` family (arm c), `int long` rc 0, `long unsigned
+    # long` rc 0 — and C99 `_Bool` (arm a: `typedef _Bool bool;`,
+    # include/linux/types.h:30, the uniform first-blocker of all 689
+    # kernel streams) rides the SAME word loop. Measured ERROR twins, LOUD
+    # here and rc 1 in the oracle: two DISTINCT length words (`char long`,
+    # `char int`, `short long`), three `long`, `signed` + `unsigned`,
+    # either sign with `_Bool`, a repeated word. `__Bool` is NOT a keyword
+    # in gcc 11.4 (measured rc 1 "unknown type name") — it stays an id.
+    _SPEC_WORDS = ("_Bool", "void", "unsigned", "signed", "__signed__",
+                   "__signed", "char", "short", "int", "long")
+
     def _base_type_core(self, quals: List) -> ast.Node:
         # M2 §1 rows 2/14: the full scalar specifier family. signedness
         # combines per C: `unsigned`, bare `signed`, `unsigned long long`,
         # `long long`, order-free spec words.
         self._take_qualifiers(quals)
-        unsigned = signed = False
         t = self.s.peek()
-        while t.kind == "kw" and t.text in ("unsigned", "signed",
-                                            "__signed__"):
-            if t.text == "unsigned":
-                unsigned = True
-            else:
-                signed = True
-            self.s.next()
-            self._take_qualifiers(quals)
-            t = self.s.peek()
         if t.kind == "kw":
             if t.text in ("float", "double"):
                 self.s.next()          # §1 row 14: storage parses; arith LOUD
@@ -835,32 +842,106 @@ class Parser(AsmParseMixin):
                 operand = self.expr.parse_expression()
                 self.s.expect_punct(")")
                 return ast.TypeOf(t.file, t.line, t.col, operand, None)
-            if t.text in _TYPE_KW:
-                self.s.next()
-                name = t.text
-                if name == "long":       # `long long` (gnu89: C99 in gnu, rc0)
-                    if self._at("long"):
-                        self.s.next()
-                        name = "long long"
-                elif name == "short":
-                    if self._at("int"):
-                        self.s.next()
-                if unsigned:
-                    name = "unsigned " + name
-                elif signed and name == "char":
-                    name = "signed char"
-                return ast.BuiltinType(t.file, t.line, t.col, name)
             if t.text == "struct" or t.text == "union":
                 return self.parse_struct_type()
             if t.text == "enum":
                 return self.parse_enum_type()
-        if not unsigned and not signed:
-            if t.kind == "id" and self.is_typename(t.text):
-                self.s.next()
-                return self.lookup(t.text)[1]
-        elif t.kind == "id" and self.is_typename(t.text):
-            # `unsigned U` over an integer typedef: the typedef carries the
-            # base; blcc composes the unsigned view of its underlying type.
+        unsigned = signed = is_bool = is_void = False
+        longs = 0
+        lengths: List[str] = []          # any of char / short / int
+        while True:
+            t = self.s.peek()
+            if t.kind != "kw" or t.text not in self._SPEC_WORDS:
+                break
+            self.s.next()
+            if t.text == "void":
+                # `void` rides the SAME commutative word loop (its TYPE
+                # answers like the old _TYPE_KW arm did — storage laws
+                # downstream UNCHANGED); mixing it with any other data
+                # word is the measured gcc ERROR, judged ONCE at COMPOSE
+                # below ("both 'unsigned' and 'void'…" / "two or more
+                # data types") — a loop-side check would miss the order
+                # `void unsigned`.
+                is_void = True
+            elif t.text == "_Bool":
+                if is_bool:
+                    self._sema(t, "two or more data types in declaration "
+                                  "specifiers ('_Bool' repeated) is a gcc "
+                                  "ERROR (§1 row 2)")
+                if unsigned or signed:
+                    self._sema(t, "mixing a sign specifier with '_Bool' is "
+                                  "a gcc ERROR (§1 row 2: both 'unsigned' "
+                                  "and '_Bool' in declaration specifiers)")
+                is_bool = True
+            elif t.text == "unsigned":
+                if is_bool or unsigned or signed:
+                    self._sema(t, "'unsigned' combined with {} is a gcc "
+                                  "ERROR (§1 row 2)".format(
+                                      "'_Bool'" if is_bool else
+                                      "another sign specifier"))
+                unsigned = True
+            elif t.text in ("signed", "__signed__", "__signed"):
+                if is_bool or unsigned or signed:
+                    self._sema(t, "'signed' combined with {} is a gcc "
+                                  "ERROR (§1 row 2)".format(
+                                      "'_Bool'" if is_bool else
+                                      "another sign specifier"))
+                signed = True
+            elif t.text == "long":
+                longs += 1
+                if longs > 2:
+                    self._sema(t, "'long long long' is too long (§1 row 2, "
+                                  "gcc ERROR)")
+            else:                        # char | short | int
+                if t.text in lengths:
+                    self._sema(t, "two or more data types in declaration "
+                                  "specifiers ('{}' repeated) is a gcc "
+                                  "ERROR (§1 row 2)".format(t.text))
+                lengths.append(t.text)
+            self._take_qualifiers(quals)
+        if is_void:
+            # ONE judge for both orders (`void unsigned` and `unsigned
+            # void`): the measured gcc ERROR "both 'unsigned' and 'void'
+            # in declaration specifiers" / "two or more data types". A
+            # bare `void` answers as the BuiltinType it always has been —
+            # storage laws (size of void) ride downstream UNCHANGED.
+            if is_bool or lengths or longs or unsigned or signed:
+                self._sema(t, "'void' combined with another data "
+                              "specifier is a gcc ERROR (§1 row 2)")
+            return ast.BuiltinType(t.file, t.line, t.col, "void")
+        if is_bool:
+            return ast.BuiltinType(t.file, t.line, t.col, "_Bool")
+        if lengths or longs:
+            # Two DISTINCT length words are the measured gcc ERROR ("both
+            # 'long' and 'char'…" / "two or more data types") with ONE
+            # exception: `int` is the filler noun of a length pair, so
+            # `short int`, `long int` and `int long` (rc 0 measured) fold
+            # into the OTHER word.
+            lenset = set(lengths) - {"int"}
+            if len(lenset) > 1:
+                self._sema(t, "two or more data types in declaration "
+                              "specifiers ({}) is a gcc ERROR (§1 row 2)"
+                              .format(" and ".join(lengths)))
+            if longs and "char" in lenset:
+                self._sema(t, "both 'long' and 'char' in declaration "
+                              "specifiers is a gcc ERROR (§1 row 2)")
+            if longs and "short" in lenset:
+                self._sema(t, "both 'short' and 'long' in declaration "
+                              "specifiers is a gcc ERROR (§1 row 2)")
+            name = ("long long" if longs > 1 else
+                    "long" if longs else
+                    "short" if "short" in lenset else
+                    "char" if "char" in lenset else "int")
+            if unsigned:
+                name = "unsigned " + name
+            elif signed and name == "char":
+                name = "signed char"
+            return ast.BuiltinType(t.file, t.line, t.col, name)
+        if t.kind == "id" and self.is_typename(t.text):
+            # TYPEDEF noun, with or without sign words: the plain `U x;`,
+            # and `unsigned U` over an integer typedef — the typedef
+            # carries the base; blcc composes the unsigned view of its
+            # underlying type (old law, UNCHANGED).
             base = self.lookup(t.text)[1]
             self.s.next()
             if unsigned and isinstance(base, ast.BuiltinType) \
@@ -869,8 +950,8 @@ class Parser(AsmParseMixin):
                 return ast.BuiltinType(t.file, t.line, t.col,
                                        "unsigned " + base.name)
             return base
-        elif unsigned or signed:
-            name = "unsigned int" if unsigned else "int"  # bare `unsigned`
+        if unsigned or signed:
+            name = "unsigned int" if unsigned else "int"  # bare sign word
             return ast.BuiltinType(t.file, t.line, t.col, name)
         self._parse_err(t, "expected a type")
 
@@ -947,36 +1028,55 @@ class Parser(AsmParseMixin):
                     pass
                 continue
             pos = self.s.peek()
-            msink: List[tuple] = []
-            width = None
-            if self.s.at_punct(":"):
-                # §1 row 12 (M45): ANONYMOUS bitfield `: w ;` — no
-                # declarator at all (gcc gnu89 measured: it consumes bits,
-                # contributes NO alignment; w==0 pads to the next unit).
-                self.s.next()
-                name, ty, is_fn = None, base, False
-                width = self._bitfield_width(None, base, pos)
-            else:
-                name, ty, is_fn, _ = self.parse_declarator(
-                    base, ctx="member", attr_sink=msink)
-                if name is None:
-                    self._parse_err(pos, "struct member needs a name")
-                if is_fn:
-                    # M4 W1: the declarator now BUILDS the FuncType — a
-                    # member stays LOUD because a member is an OBJECT;
-                    # gcc rc1 "invalid use of void type" / "function
-                    # declared void" — the twin agrees, nothing regressed.
-                    self._parse_err(pos, "struct member with 'function' "
-                                    "type is a gcc ERROR (§4)")
-                if self.s.accept_punct(":"):
-                    width = self._bitfield_width(name, ty, pos)
-            self.s.expect_punct(";")
-            if name in seen:
-                # measured gcc 11.4: plain `int a; int a;` is the SAME
-                # ERROR "duplicate member 'a'" the promoted names join.
-                self._sema(pos, "duplicate member '{}'".format(name))
-            seen.add(name)
-            members.append(ast.Member(name, ty, tuple(msink), width))
+            # M4 W2 COMMIT-0 arm b (AMENDMENT-2, MC 12545): ONE declarator,
+            # ',', declarator, ';' — the comma list REUSES the very
+            # parse_declarator the single form rides (one mechanism). The
+            # bitfield width applies to EACH member of the list; the
+            # anonymous `: w` form may open the list and continue in it
+            # (measured gcc: `int :2, x:3;` rc 0). The list_head witness
+            # `struct list_head { struct list_head *next, *prev; };` is the
+            # uniform shape behind all 689 kernel streams.
+            while True:
+                msink: List[tuple] = []
+                width = None
+                if self.s.at_punct(":"):
+                    # §1 row 12 (M45): ANONYMOUS bitfield `: w` — no
+                    # declarator at all (gcc gnu89 measured: it consumes
+                    # bits, contributes NO alignment; w==0 pads to the
+                    # next unit).
+                    self.s.next()
+                    name, ty, is_fn = None, base, False
+                    width = self._bitfield_width(None, base, pos)
+                else:
+                    name, ty, is_fn, _ = self.parse_declarator(
+                        base, ctx="member", attr_sink=msink)
+                    if name is None:
+                        self._parse_err(pos, "struct member needs a name")
+                    if is_fn:
+                        # M4 W1: the declarator now BUILDS the FuncType — a
+                        # member stays LOUD because a member is an OBJECT;
+                        # gcc rc1 "invalid use of void type" / "function
+                        # declared void" — the twin agrees, nothing
+                        # regressed.
+                        self._parse_err(pos, "struct member with 'function' "
+                                        "type is a gcc ERROR (§4)")
+                    if self.s.accept_punct(":"):
+                        width = self._bitfield_width(name, ty, pos)
+                if name is not None:
+                    # measured gcc 11.4: plain `int a; int a;` is the SAME
+                    # ERROR "duplicate member 'a'" the promoted names
+                    # join. ANONYMOUS members carry NO name — None must
+                    # never enter the namespace (tip FALSE-LOUD finding,
+                    # this commit: `int :2; int :3;` is gcc rc 0, measured
+                    # — the old single-slot code collided on None).
+                    if name in seen:
+                        self._sema(pos, "duplicate member '{}'".format(name))
+                    seen.add(name)
+                members.append(ast.Member(name, ty, tuple(msink), width))
+                if self.s.accept_punct(","):
+                    continue                  # next declarator, same base
+                self.s.expect_punct(";")
+                break
         # §1 row 13 (M46) FAM PLACEMENT law — every arm measured as a
         # gcc gnu89 ERROR: a flexible array in a union; a FAM with ANY
         # member after it ("flexible array member is not at the end");
@@ -1328,12 +1428,21 @@ class Parser(AsmParseMixin):
                 ret = fty.ret
                 self.define(name, ("fn", ret), pos)
                 body = self.parse_function_body(params) if self.s.at_punct("{") else None
-                if body is None:
+                # M4 W2 COMMIT-0 (MC 12545): comma continuation for
+                # PROTOTYPE lists — `int f(int x), h(int y);` (the S20/S22
+                # probe wall; the same declarator-list grammar the object
+                # row already rode). A DEFINITION cannot continue the list
+                # (measured gcc ERROR "expected identifier or '(' before
+                # ','" for `int f(void){…} , g;` — the twin stays LOUD).
+                comma = body is None and self.s.accept_punct(",")
+                if body is None and not comma:
                     self.s.expect_punct(";")
                 out.append(ast.FuncDecl(
                     pos.file, pos.line, pos.col, name, ret, fty.params,
                     body, is_static, variadic=fty.variadic,
                     inline_kind=inline_kind))
+                if comma:
+                    continue
                 break
             init = self.parse_initializer() if self.s.accept_punct("=") else None
             if init is not None:

@@ -17,12 +17,14 @@ TYPE_SIZE = {
     # M2 §1 row 2 (gcc 11.4 LP64 measured): the full scalar family. Names are
     # the PARSER-NORMALIZED spellings (`signed int` → `int`, bare `signed`
     # → `int`; `signed char` keeps its distinct identity).
+    # M4 W2 COMMIT-0 (MC 12545): C99 `_Bool` — measured sizeof == 1.
     "char": 1, "signed char": 1, "unsigned char": 1,
     "short": 2, "unsigned short": 2,
     "int": 4, "unsigned int": 4,
     "long": 8, "unsigned long": 8,
     "long long": 8, "unsigned long long": 8,
     "float": 4, "double": 8,          # STORAGE only (§1 row 14): arith LOUD
+    "_Bool": 1,                      # sizeof measured 1; promotes to int
     "void": 0,
 }
 UNSIGNED_NAMES = frozenset({"unsigned char", "unsigned short", "unsigned int",
@@ -674,10 +676,13 @@ class TypeMap:
 
     def _promote(self, ty: ast.Node) -> ast.Node:
         """Integer promotion (§2.2): the narrow types → int (unsigned short
-        fits in int on LP64)."""
+        fits in int on LP64). M4 W2 COMMIT-0 (MC 12545): `_Bool` too —
+        measured sizeof(b+1)==4; C11 6.3.1.1 gives it the LOWEST integer
+        conversion rank, so the promotion to int is the only context a
+        rank could show in, and the RUN-PAIRS pin the widths."""
         if isinstance(ty, ast.BuiltinType) and ty.name in (
                 "char", "signed char", "unsigned char", "short",
-                "unsigned short"):
+                "unsigned short", "_Bool"):
             return ast.BuiltinType(ty.file, ty.line, ty.col, "int")
         return ty
 

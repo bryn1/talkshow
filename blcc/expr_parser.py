@@ -34,7 +34,10 @@ _CAST_KW = frozenset(
      "float", "double", "unsigned", "signed", "__signed__", "__signed",
      "volatile", "__volatile__", "restrict", "__restrict", "__restrict__",
      # §1 row 6c: __typeof__ is legal in cast/sizeof type position
-     "typeof", "__typeof__", "__typeof"})
+     "typeof", "__typeof__", "__typeof",
+     # M4 W2 COMMIT-0 (MC 12545): C99 `_Bool` is a type keyword everywhere
+     # (measured: `sizeof(_Bool)`, `(unsigned char)(x)` twins both rc 0).
+     "_Bool"})
 _LVALUE_KINDS = (ast.Ident, ast.Index, ast.Select)
 
 
