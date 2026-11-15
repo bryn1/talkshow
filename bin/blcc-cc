@@ -1,0 +1,6 @@
+#!/bin/sh
+# Thin exec wrapper (plan-m4.md v4 §3, MC 12531): the kbuild `CC=` entry
+# point. Forwards every argument to python3 -m blcc.cc_wrapper, working
+# from any directory (kbuild runs recipes from the OBJTREE).
+here=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+PYTHONPATH="$here${PYTHONPATH:+:$PYTHONPATH}" exec python3 -m blcc.cc_wrapper "$@"
