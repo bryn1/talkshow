@@ -335,6 +335,10 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin):
 
     def compile(self) -> str:
         out: List[str] = ["    .text"]
+        # M4 W2.5 (MC 12557): section-placement first-mention bookkeeping
+        # (measured gcc form: flags at first mention of a name, plain
+        # mentions after; functions carry "ax",@progbits).
+        self._sec_seen: set = set()
         for name in self.funcs:
             fd = self.funcs[name]
             lines = self._emit_func(fd)
@@ -344,7 +348,17 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin):
                 # check fires on it) but NO symbol is emitted, and no
                 # static companion exists.
                 continue
+            fsec = next((v for k, v in getattr(fd, "attrs", ())
+                         if k == "section"), None)
+            if fsec:
+                if fsec in self._sec_seen:
+                    out.append("    .section {}".format(fsec))
+                else:
+                    out.append('    .section {},"ax",@progbits'.format(fsec))
+                    self._sec_seen.add(fsec)
             out.extend(lines)
+            if fsec:
+                out.append("    .text")   # the NEXT fn is not misplaced
         for name in self.aliases:
             # §6 nm-corner (M4 W2, MC 12545), MEASURED gcc form: the
             # alias symbol is a `.set` — never a second body. Linkage
@@ -370,6 +384,13 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin):
         data: List[str] = []
         rodata: List[str] = []
         bss: List[str] = []
+        # M4 W2.5 (MC 12557): objects carrying `section("name")` ride
+        # their OWN blocks in declaration order; the directive is emitted
+        # per object (measured gcc form: flags at FIRST mention, plain
+        # mentions after). Names/letters/flags follow §6; the intra-block
+        # ORDER law stays blcc's own (declaration order — the gcc reverse
+        # block is the NAMED shape-divergence row, test-pinned).
+        cust: List = []               # (sec, flags, lines) per object
         for name in self.globals:
             vd = self.globals[name]
             if vd.is_extern and vd.init is None:
@@ -378,6 +399,9 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin):
             if not vd.is_static:
                 # §2.8 nm parity: an external object binds GLOBAL (D/B).
                 lines = ["    .globl {}".format(name)] + lines
+            if isinstance(section, tuple) and section[0] == "sec":
+                cust.append((section[1], section[2], lines))
+                continue
             (bss if section == "bss" else
              data if section == "data" else rodata).extend(lines)
         for vd in self.static_objs:
@@ -387,6 +411,9 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin):
             # -> .data; init never re-runs) and LOCAL nm binding —
             # vd.is_static suppresses the .globl.
             section, lines = self._emit_global(vd, "static")
+            if isinstance(section, tuple) and section[0] == "sec":
+                cust.append((section[1], section[2], lines))
+                continue
             (bss if section == "bss" else
              data if section == "data" else rodata).extend(lines)
         out.extend(rodata)
@@ -396,6 +423,13 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin):
             # §1 row 11: file-scope compound literals are unnamed STATIC
             # objects; their address constants rode the ('lab', …) walks.
             out.extend(self._emit_anon(lab, lit))
+        for sname, flags, slines in cust:
+            if sname in self._sec_seen:
+                out.append("    .section {}".format(sname))
+            else:
+                out.append('    .section {},"{}"'.format(sname, flags))
+                self._sec_seen.add(sname)
+            out.extend(slines)
         out.append("    .bss")
         out.extend(bss)
         return "\n".join(out) + "\n"

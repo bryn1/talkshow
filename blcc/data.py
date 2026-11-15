@@ -319,6 +319,17 @@ class DataEmitter:
                 al = max(al, v)
         return al
 
+    def _section_of(self, vd):
+        # M4 W2.5 (MC 12557): `section("name")` PLACEMENT — the object
+        # lands in the NAMED section (measured gcc emission law: flags
+        # "aw" for writable, "a" for const; zero-fill stays PROGBITS .zero
+        # inside the named section — the name does NOT make it NOBITS).
+        # The standard names keep the shipped buckets untouched.
+        sec = next((v for k, v in getattr(vd, "attrs", ())
+                    if k == "section"), None)
+        return sec if sec and sec not in ("bss", "data", ".bss", ".data",
+                                          ".rodata", "rodata") else None
+
     def _emit_global(self, vd: ast.VarDecl, ctx: str = "global"):
         items = self._bytes_of(vd.type, vd.init, vd, ctx)
         total = self._bytelen(items)
@@ -326,6 +337,7 @@ class DataEmitter:
         align_line = "    .align {}".format(self._aligned_of(vd))
         # .align precedes the label (.data AND .bss): a label written before
         # its padding binds to the pre-padding address, not to the bytes.
+        sec = self._section_of(vd)
         if not is_const and \
                 all(k == "z" or (k == "b" and v == 0) for k, v in items):
             # FIX-G1 (gate C1 TRIGGER 2, F-gate-1): a DEFINED zero-sized
@@ -335,8 +347,11 @@ class DataEmitter:
             # global lands at a distinct address. `.zero 0` made them
             # COLLIDE silently. sizeof stays 0; only the allocation foot
             # prints one byte.
-            return "bss", [align_line, "{}:".format(vd.name),
-                           "    .zero {}".format(total if total else 1)]
+            return (("sec", sec, "aw"), [align_line, "{}:".format(vd.name),
+                     "    .zero {}".format(total if total else 1)]
+                    ) if sec else (
+                "bss", [align_line, "{}:".format(vd.name),
+                        "    .zero {}".format(total if total else 1)])
         lines = [align_line, "{}:".format(vd.name)]
         acc: List[int] = []
 
@@ -356,6 +371,8 @@ class DataEmitter:
                 flush()
                 lines.append("    .quad {}".format(val))
         flush()
+        if sec:
+            return ("sec", sec, "a" if is_const else "aw"), lines
         return ("rodata" if is_const else "data"), lines
 
 
