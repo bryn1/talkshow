@@ -661,7 +661,8 @@ class Parser(AsmParseMixin):
         best = None
         for nm, arg in self._tag_attr_list(ty):
             if nm == "aligned":
-                v = self.fold_truthy(arg)
+                # M4 W2.5: bare `aligned` (arg None) = 16, measured gcc.
+                v = 16 if arg is None else self.fold_truthy(arg)
                 if v is None or v <= 0:
                     self._sema(at, "'aligned' attribute needs a positive "
                                "constant (§1 row 9)")
@@ -672,7 +673,7 @@ class Parser(AsmParseMixin):
         best = None
         for nm, arg in getattr(m, "attrs", ()):
             if nm == "aligned":
-                v = self.fold_truthy(arg)
+                v = 16 if arg is None else self.fold_truthy(arg)
                 if v is None or v <= 0:
                     self._sema(at, "'aligned' attribute needs a positive "
                                "constant (§1 row 9)")
@@ -699,13 +700,15 @@ class Parser(AsmParseMixin):
 
     def _skip_gnu_attrs(self, sink=None) -> None:
         """PARSE + STRIP `__attribute__((...))` lists at a declaration
-        head/specifier or a declarator/tag tail (§1 row 9, §2.9). The
-        ignore-class (§1 row 9 list + gnu_inline/unused/section/error/…)
-        is parsed and DROPPED: it changes no code blcc emits. The
-        layout-class (`packed`/`aligned`) stays a §5 LOUD wall until the
-        M42 layout rule lands — silently ignoring it would LIE about
-        offsets the §2.13 legs pin. Names match after underscore-strip
-        (`__aligned__` = `aligned`)."""
+        head/specifier, a SPECIFIER/between-type position (M4 W2.5 — the
+        positions are threaded with a SINK from the declarant owner) or a
+        declarator/tag tail (§1 row 9, §2.9). The ignore-class (§1 row 9
+        list + gnu_inline/unused/error/…) is parsed and DROPPED: it changes
+        no code blcc emits. With a SINK the layout-class (`packed`/
+        `aligned`) and `section` are CAPTURED for the owner to ACT on;
+        without one the layout-class stays a LOUD wall — silently ignoring
+        it would LIE about offsets the §2.13 legs pin. Names match after
+        underscore-strip (`__aligned__` = `aligned`)."""
         while self._at_extension():
             self.s.next()             # GNU no-op marker (§1 row 9 family)
         while self._at_attr():
@@ -719,6 +722,16 @@ class Parser(AsmParseMixin):
                     self._parse_err(name_tok, "malformed '__attribute__' "
                                               "list (§1 row 9)")
                 nm = name_tok.text.strip("_")
+                if nm == "mode":
+                    # M4 W2.5 (MC 12557): gcc WIDENS the type — `typedef
+                    # int register_t __attribute__((__mode__(__word__)))`
+                    # is sizeof 8 (measured); a silent strip would LIE.
+                    # Volume: 14 sites / 14 files, ALL host-tier
+                    # (arch/x86/tools), 0 in kernel-tier streams.
+                    self._sema(tok, "'__attribute__((mode))' changes type "
+                               "width (measured mode(__word__) on int is "
+                               "sizeof 8) and is not in the subset "
+                               "(§1 row 9)", name_tok.text)
                 if nm in self._LAYOUT_ATTRS and sink is None:
                     self._sema(tok, "'__attribute__(({}))' is a layout-"
                                "class attribute and is not in the subset "
@@ -733,9 +746,15 @@ class Parser(AsmParseMixin):
                 if nm in self._LAYOUT_ATTRS and sink is not None:
                     self.s.next()
                     if nm == "aligned":
-                        self.s.expect_punct("(")
-                        sink.append(("aligned", self.expr.parse_expression()))
-                        self.s.expect_punct(")")
+                        # M4 W2.5: bare `aligned` (NO argument) is the
+                        # max-fundamental-alignment 16 (measured rc0);
+                        # the argument rides the fold engines.
+                        if self.s.accept_punct("("):
+                            arg = self.expr.parse_expression()
+                            self.s.expect_punct(")")
+                        else:
+                            arg = None
+                        sink.append(("aligned", arg))
                     else:
                         if self.s.accept_punct("("):
                             self.s.expect_punct(")")
@@ -756,6 +775,22 @@ class Parser(AsmParseMixin):
                                              "string target name (§6)")
                     self.s.expect_punct(")")
                     sink.append(("alias", tgt.text[1:-1]))
+                    if not self.s.accept_punct(","):
+                        break
+                    continue
+                if nm == "section" and sink is not None:
+                    # M4 W2.5 (MC 12557): CAPTURE the section NAME — the
+                    # 59249-site placement class now lands in the named
+                    # section (§6 emission law). gcc rc1 twin measured:
+                    # a non-string argument is an ERROR.
+                    self.s.expect_punct("(")
+                    sn = self.s.next()
+                    if sn.kind != "str":
+                        self._parse_err(sn, "'section' attribute argument "
+                                            "not a string constant "
+                                            "(§1 row 9)")
+                    self.s.expect_punct(")")
+                    sink.append(("section", sn.text[1:-1]))
                     if not self.s.accept_punct(","):
                         break
                     continue
@@ -806,16 +841,25 @@ class Parser(AsmParseMixin):
                 return self._fold_ops(ty, ops, False, "cast")
             return ty
 
-    def parse_base_type(self) -> ast.Node:
+    def parse_base_type(self, attr_sink=None) -> ast.Node:
         # §2.12/§2.6d: qualifiers LAYOUT-IGNORE stays true — everything
         # resolves through TypeMap._untype — but a TYPE-level qualifier is
         # MARKED (Qualified wrapper) because the oracle makes it
         # significant in exactly two places: the pointee of
         # __builtin_types_compatible_p and the association types of
         # _Generic. The wrapper is stripped by every other consumer.
+        #
+        # M4 W2.5 (MC 12557): `attr_sink` extends the §1 row 9 skip to the
+        # SPECIFIER positions the kernel streams actually use — between
+        # the base type and the declarator name (`__u64 __attribute__((
+        # aligned(8))) flags;`). With a SINK the layout/section class is
+        # CAPTURED for the consumer to ACT on; without one (cast/sizeof
+        # TYPE context, where no object exists to lay out) the layout
+        # class keeps its LOUD wall — never a silent strip.
         quals: List = []
-        self._skip_gnu_attrs()          # decl-head/specifier position (§1 row 9)
-        ty = self._base_type_core(quals)
+        self._skip_gnu_attrs(attr_sink)  # decl-head/specifier (§1 row 9)
+        ty = self._base_type_core(quals, attr_sink)
+        self._skip_gnu_attrs(attr_sink)  # between type and declarator
         for q, qt in sorted(set(quals)):
             ty = ast.Qualified(qt.file, qt.line, qt.col, q, ty)
         return ty
@@ -840,7 +884,7 @@ class Parser(AsmParseMixin):
     _SPEC_WORDS = ("_Bool", "void", "unsigned", "signed", "__signed__",
                    "__signed", "char", "short", "int", "long")
 
-    def _base_type_core(self, quals: List) -> ast.Node:
+    def _base_type_core(self, quals: List, attr_sink=None) -> ast.Node:
         # M2 §1 rows 2/14: the full scalar specifier family. signedness
         # combines per C: `unsigned`, bare `signed`, `unsigned long long`,
         # `long long`, order-free spec words.
@@ -872,7 +916,8 @@ class Parser(AsmParseMixin):
         longs = 0
         lengths: List[str] = []          # any of char / short / int
         while True:
-            t = self.s.peek()
+            self._skip_gnu_attrs(attr_sink)   # M4 W2.5: attr BETWEEN spec
+            t = self.s.peek()                 # words (§1 row 9 family)
             if t.kind != "kw" or t.text not in self._SPEC_WORDS:
                 break
             self.s.next()
@@ -989,6 +1034,12 @@ class Parser(AsmParseMixin):
         # WORD, so a brace-less re-reference (`union U u;`) keeps it.
         tok = self.s.next()  # 'struct' or 'union'
         is_union = tok.text == "union"
+        # M4 W2.5 (MC 12557): the tag-PREFIX position — `struct
+        # __attribute__((__packed__)) S {…}` (3 corpus sites) joins the
+        # tag-definition law: attrs captured here register IDENTICALLY
+        # to the tag tail.
+        pre_sink: List[tuple] = []
+        self._skip_gnu_attrs(pre_sink)
         if self.s.at_punct("{"):
             # Minted tags must be UNIQUE: post-pp kernel streams place
             # whole structs on one line, so file:line was not enough for
@@ -1001,6 +1052,8 @@ class Parser(AsmParseMixin):
             members = self.parse_struct_members(is_union)
             tsink: List[tuple] = []
             self._skip_gnu_attrs(tsink)  # tag-definition tail (§1 row 9)
+            tsink = pre_sink + tsink     # M4 W2.5: prefix registers like
+                                         # the tail (one law)
             if tag in self.struct_tags:
                 self._sema(tok, "struct/union '{}' is already defined"
                            .format(tag))
@@ -1030,7 +1083,8 @@ class Parser(AsmParseMixin):
         while not self.s.at_punct("}"):
             if self.s.accept_punct(";"):
                 continue
-            base = self.parse_base_type()
+            bsink: List[tuple] = []     # M4 W2.5: SPEC-position member attrs
+            base = self.parse_base_type(bsink)
             if isinstance(base, ast.StructType) and self.s.at_punct(";"):
                 pos = self.s.next()   # the terminating ';'
                 if base.tag.startswith("<anon@"):
@@ -1094,7 +1148,9 @@ class Parser(AsmParseMixin):
                     if name in seen:
                         self._sema(pos, "duplicate member '{}'".format(name))
                     seen.add(name)
-                members.append(ast.Member(name, ty, tuple(msink), width))
+                members.append(ast.Member(name, ty,
+                                         tuple(bsink) + tuple(msink),
+                                         width))
                 if self.s.accept_punct(","):
                     continue                  # next declarator, same base
                 self.s.expect_punct(";")
@@ -1382,7 +1438,14 @@ class Parser(AsmParseMixin):
         out: List[ast.Node] = []
         # §1 row 9: attributes may lead a declaration (`__attribute__((x))
         # static int f(...)`) — skip BEFORE the storage-class keywords.
-        self._skip_gnu_attrs()
+        # M4 W2.5 (MC 12557): every skip position in THIS declarant owner
+        # shares one SINK — the kernel shapes put the attr BETWEEN the base
+        # type and the declarator name (`__u64 __attribute__((aligned(8)))
+        # flags;` 88 files; `extern char __attribute__((__section__(
+        # ".init.data"))) boot_command_line[];` 67 files), and the
+        # captured layout/placement class ACTS on the object or function.
+        decl_sink: List[tuple] = []
+        self._skip_gnu_attrs(decl_sink)
         is_static = False
         static_tok = self._accept("static")
         if static_tok is not None:
@@ -1400,7 +1463,7 @@ class Parser(AsmParseMixin):
         # only LINKAGE acts — blcc never inlines and has NO DCE.
         inline_tok = None
         while True:
-            self._skip_gnu_attrs()      # attrs may interleave the keywords
+            self._skip_gnu_attrs(decl_sink)  # attrs may interleave keywords
             tok = (self._accept("inline") or self._accept("__inline__")
                    or self._accept("__inline"))
             if tok is None:
@@ -1421,8 +1484,8 @@ class Parser(AsmParseMixin):
         is_register = False
         while self._accept("register") is not None:
             is_register = True
-            self._skip_gnu_attrs()
-        base = self.parse_base_type()
+            self._skip_gnu_attrs(decl_sink)
+        base = self.parse_base_type(decl_sink)
         out.extend(self._drain_pending())
         if self._bare_type_ok and self.s.accept_punct(";"):
             return out  # bare 'struct S;' / 'enum E { ... };' definition
@@ -1432,15 +1495,32 @@ class Parser(AsmParseMixin):
             vsink: List[tuple] = []
             name, ty, is_fn, params = self.parse_declarator(base, ctx="var",
                                                             attr_sink=vsink)
-            for _nm, _a in vsink:            # M42 typedef/decl-tail layout
+            # M4 W2.5 (MC 12557): the SPEC-position attrs (decl_sink) apply
+            # to EVERY declarator of the list (measured: `char
+            # __attribute__((aligned(8))) gc, gd;` raises BOTH), merged
+            # with this declarator's own tail attrs (vsink).
+            sink = decl_sink + vsink
+            for _nm, _a in sink:             # M42 typedef/decl-tail layout
                 if _nm and isinstance(self._unqual(ty), ast.StructType):
                     reg = getattr(self, "struct_tag_attrs", None)
                     if reg is None:
                         reg = self.struct_tag_attrs = {}
                     reg[self._unqual(ty).tag] = tuple(
                         list(reg.get(self._unqual(ty).tag, ())) + [(_nm, _a)])
+            oattr = tuple(x for x in sink if x[0] in ("aligned", "section"))
+            for _nm, _a in oattr:      # M4 W2.5: the OBJECT-position
+                if _nm == "aligned":   # aligned argument law (measured gcc
+                    v = 16 if _a is None else self.fold_truthy(_a)
+                    if v is None or v <= 0 or (v & (v - 1)):
+                        # twins: aligned(3)/(−8)/non-constant all rc1;
+                        # aligned(0) is rc0+IGNORE with corpus volume 0 —
+                        # the wall stays (never silently mis-aligns).
+                        self._sema(pos, "'aligned' needs a positive power-"
+                                   "of-two constant (measured gcc twins "
+                                   "3/negative/non-constant are rc1)",
+                                   "aligned")
             bind = None
-            alias = next((v for k, v in vsink if k == "alias"), None)
+            alias = next((v for k, v in sink if k == "alias"), None)
             if alias is not None and not is_fn:
                 self._sema(pos, "'alias' attribute on an OBJECT declarator "
                            "is not in the subset (§5 — the §6 nm-corner is "
@@ -1488,7 +1568,8 @@ class Parser(AsmParseMixin):
                 out.append(ast.FuncDecl(
                     pos.file, pos.line, pos.col, name, ret, fty.params,
                     body, is_static, variadic=fty.variadic,
-                    inline_kind=inline_kind, alias_of=alias))
+                    inline_kind=inline_kind, alias_of=alias,
+                    attrs=oattr))            # M4 W2.5: section placement
                 if comma:
                     continue
                 break
@@ -1526,10 +1607,25 @@ class Parser(AsmParseMixin):
                            "declared in this scope (parameter or object)"
                            .format(name))
             self.define(name, ("var", ty), pos)
+            # M4 W2.5 (MC 12557): an AUTO local `aligned(N)` beyond 16 is
+            # LOUD-DIV (measured: gcc REALIGNS the frame — `andq $-64,
+            # %rsp`, rc0; blcc's frame base is the 16-ABI §6 law). Up to
+            # 16 the slot raise is HONEST; static storage is fine at any
+            # N (the .align data law, ARM 3).
+            if not at_file and not is_static and not is_extern:
+                for _nm, _a in oattr:
+                    if _nm == "aligned":
+                        v = 16 if _a is None else self.fold_truthy(_a)
+                        if v is not None and v > 16:
+                            self._sema(pos, "'aligned' beyond 16 on an "
+                                       "auto local is LOUD-DIV (measured: "
+                                       "gcc realigns the frame, blcc's "
+                                       "frame base is the 16-ABI; §6) — "
+                                       "never a silently-misaligned slot")
             out.append(ast.VarDecl(pos.file, pos.line, pos.col, name, ty,
                                    init, is_static,
                                    is_extern=(is_extern and init is None),
-                                   asm_bind=bind))
+                                   asm_bind=bind, attrs=oattr))
             if self.s.accept_punct(","):
                 continue
             self.s.expect_punct(";")
@@ -1538,7 +1634,8 @@ class Parser(AsmParseMixin):
 
     def _parse_typedef(self) -> List[ast.Node]:
         out: List[ast.Node] = []
-        base = self.parse_base_type()
+        spec_sink: List[tuple] = []     # M4 W2.5: spec-position attrs
+        base = self.parse_base_type(spec_sink)
         out.extend(self._drain_pending())
         while True:
             pos = self.s.peek()
@@ -1568,13 +1665,25 @@ class Parser(AsmParseMixin):
                     self._parse_err(pos, "'function pointer' typedef "
                                     "chain (row 1h) is not in the subset "
                                     "(§5 LOUD twin)")
-            for _nm, _a in tsink:            # M42: typedef-tail layout attrs
+            for _nm, _a in spec_sink + tsink:  # M42 typedef-tail layout
                 if isinstance(self._unqual(ty), ast.StructType):
                     reg = getattr(self, "struct_tag_attrs", None)
                     if reg is None:
                         reg = self.struct_tag_attrs = {}
                     reg[self._unqual(ty).tag] = tuple(
                         list(reg.get(self._unqual(ty).tag, ())) + [(_nm, _a)])
+                elif _nm in ("aligned", "packed"):
+                    # M4 W2.5 (MC 12557): a layout attr on a typedef of a
+                    # NON-struct type raises the alignment OF THE TYPEDEF
+                    # NAME only (measured: the tag's and the underlying
+                    # type's own alignof stay put) — blcc has no per-name
+                    # layout store and the volume is 0 measured (every
+                    # typedef+aligned site in the 706 streams is the
+                    # guid_t shape). LOUD, never a silent strip.
+                    self._sema(pos, "'{}' on a typedef of a non-struct "
+                               "type is LOUD-DIV (gcc raises the NAME's "
+                               "alignment only; corpus volume 0, measured)"
+                               .format(_nm), _nm)
             self.define(name, ("typedef", ty), pos)
             out.append(ast.TypedefDecl(pos.file, pos.line, pos.col, name, ty))
             if self.s.accept_punct(","):

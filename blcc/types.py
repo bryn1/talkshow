@@ -440,7 +440,9 @@ class TypeMap:
         best = None
         for nm, arg in self._tag_attr_list(ty):
             if nm == "aligned":
-                v = self._fold_const(arg, at or ty)
+                # M4 W2.5 (MC 12557): bare `aligned` (arg None) = the
+                # max-fundamental alignment 16 (measured gcc rc0).
+                v = 16 if arg is None else self._fold_const(arg, at or ty)
                 if v <= 0:
                     self._err(at or ty, "'aligned' attribute needs a "
                               "positive constant (§1 row 9)", "aligned")
@@ -451,7 +453,7 @@ class TypeMap:
         best = None
         for nm, arg in getattr(m, "attrs", ()):
             if nm == "aligned":
-                v = self._fold_const(arg, at)
+                v = 16 if arg is None else self._fold_const(arg, at)
                 if v <= 0:
                     self._err(at, "'aligned' attribute needs a positive "
                               "constant (§1 row 9)", "aligned")

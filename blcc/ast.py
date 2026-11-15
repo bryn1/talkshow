@@ -135,6 +135,10 @@ class FuncDecl(Node):
                              # `__attribute__((alias("tgt")))` on a body-less
                              # fn declaration — codegen emits `.set name,tgt`
                              # (measured gcc form); None = ordinary fn.
+    attrs: Tuple[tuple, ...] = ()    # M4 W2.5 (MC 12557): CAPTURED decl-
+                             # bound layout/placement attrs — ("aligned",
+                             # expr|None) / ("section", name); codegen
+                             # honors them (§6 emission law).
 
 
 @dataclass(frozen=True)
@@ -148,6 +152,10 @@ class VarDecl(Node):
     asm_bind: Optional[str] = None   # M3 §3.10 (L10): register-asm var —
                              # the raw asm("binding") string of a
                              # `register` declarator; None = plain object
+    attrs: Tuple[tuple, ...] = ()    # M4 W2.5 (MC 12557): CAPTURED decl-
+                             # bound layout/placement attrs — ("aligned",
+                             # expr|None) / ("section", name); the data
+                             # layer and the frame slot honor them.
 
 
 @dataclass(frozen=True)

@@ -307,10 +307,23 @@ class DataEmitter:
             else:
                 return False
 
+    def _aligned_of(self, vd) -> int:
+        # M4 W2.5 (MC 12557): object `aligned(N)` — the emitted .align
+        # RAISES to max(N, blcc's 8-byte global convention); bare `aligned`
+        # is the max-fundamental 16 (measured). Measured law: the linked
+        # address honors %N==0 (fx/L3+obj legs).
+        al = 8
+        for _nm, _a in getattr(vd, "attrs", ()):
+            if _nm == "aligned":
+                v = 16 if _a is None else self._fold_const(_a, vd)
+                al = max(al, v)
+        return al
+
     def _emit_global(self, vd: ast.VarDecl, ctx: str = "global"):
         items = self._bytes_of(vd.type, vd.init, vd, ctx)
         total = self._bytelen(items)
         is_const = self._is_const_obj(vd.type)
+        align_line = "    .align {}".format(self._aligned_of(vd))
         # .align precedes the label (.data AND .bss): a label written before
         # its padding binds to the pre-padding address, not to the bytes.
         if not is_const and \
@@ -322,9 +335,9 @@ class DataEmitter:
             # global lands at a distinct address. `.zero 0` made them
             # COLLIDE silently. sizeof stays 0; only the allocation foot
             # prints one byte.
-            return "bss", ["    .align 8", "{}:".format(vd.name),
+            return "bss", [align_line, "{}:".format(vd.name),
                            "    .zero {}".format(total if total else 1)]
-        lines = ["    .align 8", "{}:".format(vd.name)]
+        lines = [align_line, "{}:".format(vd.name)]
         acc: List[int] = []
 
         def flush():

@@ -619,6 +619,18 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin):
         # locals entry, sizeof and decay all see the sized type downstream
         # (the node is frozen, so the sized type travels in the local ty).
         ty = self._sized_array_decl(self._untype(vd.type), vd.init, vd)
+        # M4 W2.5 (MC 12557): an auto `aligned(N)` local (N ≤ 16 — the
+        # parser LOUDs above 16, gcc-realigned frames being the named
+        # LOUD-DIV twin) RAISES the slot: the frame base is 16-ABI at
+        # every call (§6), so rounding the running frame to N lands the
+        # address on N (measured run-pair: &x % 16 == 0).
+        for _nm, _a in getattr(vd, "attrs", ()):
+            if _nm == "aligned":
+                al = 16 if _a is None else self._fold_const(_a, vd)
+                if al and al > 8:
+                    r8 = _roundup8(max(self._size(ty, vd), 8))
+                    self.fn.frame = ((_roundup8(self.fn.frame) + al - 1)
+                                     // al) * al - r8
         off = self._slot(ty, vd)
         # bind the ORIGINAL type: _ex_ident needs sized-arrayness to decay to
         # leaq; pointer behaviour everywhere else comes from _decay in _ty.

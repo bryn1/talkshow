@@ -1,10 +1,12 @@
-"""M42 (parse leg) — __attribute__ grammar: PARSE + STRIP the ignore-class,
-LOUD wall for the layout-class until its rule ships. MC 12460 cycle-2,
+"""M42 (parse leg) — __attribute__ grammar: PARSE + STRIP the ignore-class;
+the layout-class ACTS (MC 12460 cycle-2 → M42 T+10 → M4 W2.5 MC 12557, which
+extended the capture positions to the SPECIFIER/base-type family).
 §1 row 9: "IGNORE-class attrs ... parse + strip (sema-side for
 __compiletime_assert/error per §2.9); layout-class `packed`/`aligned` MUST
-ACT"; the ACTION (§2.13 pack legs) lands with the rest of M42 — until then
-layout-class stays a §5 LOUD wall, never a silent strip (silent-strip would
-lie about layout; the oracle says packed changes offsets).
+ACT" — the ACTION landed with M42 (§2.13 pack legs); M4 W2.5 made the SAME
+law reach the spec-position spellings (kernel `#define __aligned_u64`,
+`__initdata`, …). A LAYOUT attr in a position with no object to lay out
+(cast/sizeof type) stays LOUD, never a silent strip.
 The PARSE mechanism is needed NOW: the M58(d) FIXTURE-VDSO-SYNTH carries
 `__attribute__((__gnu_inline__))`/`__attribute__((__unused__))` per §2.17.
 gcc 11.4 -std=gnu89 twins pin every strip leg (rc0).
