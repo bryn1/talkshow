@@ -82,6 +82,10 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin):
     def __init__(self, tu: ast.TranslationUnit):
         self.tu = tu
         self.funcs: Dict[str, ast.FuncDecl] = {}
+        self.aliases: Dict[str, tuple] = {}   # M4 W2 §6 (MC 12545):
+        # alias-name -> (target-name, is_static, decl-node); body-less
+        # `alias` declarations never reach self.funcs (the dict holds
+        # DEFINITIONS only), so they ride this channel to `.set`.
         self.sigs: Dict[str, Tuple[Tuple[ast.Param, ...], ast.Node]] = {}
         self.globals: Dict[str, ast.VarDecl] = {}
         # §2.7: the va tag is PREDEFINED (the kernel .i streams only carry
@@ -117,6 +121,11 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin):
                               d.name)
                 self.sigs[d.name] = (d.params, d.ret_type,
                                   d.variadic)
+                if d.alias_of is not None:
+                    if d.name in self.aliases:
+                        self._err(d, "duplicate 'alias' for '{}'".format(
+                                  d.name), d.name)
+                    self.aliases[d.name] = (d.alias_of, d.is_static, d)
                 if d.body is not None:
                     self.funcs[d.name] = d
             elif isinstance(d, ast.VarDecl):
@@ -336,12 +345,30 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin):
                 # static companion exists.
                 continue
             out.extend(lines)
+        for name in self.aliases:
+            # §6 nm-corner (M4 W2, MC 12545), MEASURED gcc form: the
+            # alias symbol is a `.set` — never a second body. Linkage
+            # letters follow EACH symbol's own declaration (static alias
+            # = local `t`, external = `.globl` + `T`). gcc rc1-twins
+            # when the target has no definition in this TU — LOUD here.
+            tgt, is_static, node = self.aliases[name]
+            if tgt not in self.funcs:
+                self._err(node, "alias target '{}' declared but not "
+                          "defined in this TU (§6 twin of the gcc "
+                          "error)".format(tgt), name)
+            if name in self.funcs:
+                self._err(node, "'{}' cannot be both a definition and "
+                          "an 'alias'".format(name), name)
+            if not is_static:
+                out.append("    .globl {}".format(name))
+            out.append("    .set {},{}".format(name, tgt))
         out.append("    .section .rodata")
         for lab, raw in self._str_order:
             out.append("{}:".format(lab))
             out.append("    .byte {}".format(
                 ",".join(str(b) for b in raw) + ",0"))
         data: List[str] = []
+        rodata: List[str] = []
         bss: List[str] = []
         for name in self.globals:
             vd = self.globals[name]
@@ -351,14 +378,18 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin):
             if not vd.is_static:
                 # §2.8 nm parity: an external object binds GLOBAL (D/B).
                 lines = ["    .globl {}".format(name)] + lines
-            (data if section == "data" else bss).extend(lines)
+            (bss if section == "bss" else
+             data if section == "data" else rodata).extend(lines)
         for vd in self.static_objs:
             # §1c (MC 12486): function-scope `static` locals bind to
-            # TU-level storage with file-scope's .bss/.data law (zero ->
-            # .bss, constant -> .data, init never re-runs) and LOCAL
-            # nm binding — vd.is_static suppresses the .globl.
+            # TU-level storage with file-scope's .rodata/.bss/.data law
+            # (zero -> .bss, const -> .rodata (§6 parity, M4 W2), other
+            # -> .data; init never re-runs) and LOCAL nm binding —
+            # vd.is_static suppresses the .globl.
             section, lines = self._emit_global(vd, "static")
-            (data if section == "data" else bss).extend(lines)
+            (bss if section == "bss" else
+             data if section == "data" else rodata).extend(lines)
+        out.extend(rodata)
         out.append("    .data")
         out.extend(data)
         for lab, lit in getattr(self, "_clit_anons", []):

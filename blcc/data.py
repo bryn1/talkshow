@@ -1,8 +1,10 @@
 """Global data emission for blcc (ARCHITECTURE.md §4): constant evaluation of
 file-scope initializers (integer/char constants, address-of-global, brace
 lists; a string literal is a §5-style diagnostic naming the construct) and
-their .data/.bss assembly lines — all-zero objects go to .bss, the rest to
-.data. Mixin of blcc.codegen.Codegen, which provides
+their .rodata/.data/.bss assembly lines — bytes-immutable (const) objects
+go to .rodata, all-zero objects to .bss, the rest to .data (MEASURED §6
+parity law, M4 W2; see _is_const_obj). Mixin of blcc.codegen.Codegen, which
+provides
 globals/enums/structs/strings tables plus _size/_decay/_struct_layout/_err/
 _str_label (strings interning stays on Codegen with the rodata pool)."""
 from __future__ import annotations
@@ -284,12 +286,35 @@ class DataEmitter:
         return sum(1 if k == "b" else (8 if k == "q" else v)
                    for k, v in entries)
 
+    def _is_const_obj(self, ty) -> bool:
+        """§6 section parity (M4 W2, MC 12545), MEASURED gcc law: the
+        object is .rodata iff its BYTES are immutable — top-level
+        Qualified(const) (scalars, pointers, structs: `const int ci`,
+        `char *const cstr`, `const struct SA csc`), or const down the
+        ARRAY element chain (`const fp_t ro[]` — every byte is reached
+        only as a const element). NOT counted: pointee const
+        (`const int *pi` → .data, measured) and const STRUCT MEMBERS
+        (`struct SA { const int a; } sc;` → .data, measured). `int *const`
+        keeps the W1 qualifier-drop's .data placement — section-only
+        divergence, named in the LEDGER (values unaffected)."""
+        while True:
+            if isinstance(ty, ast.Qualified):
+                if ty.qual == "const":
+                    return True
+                ty = ty.inner
+            elif isinstance(ty, ast.ArrayType):
+                ty = ty.inner
+            else:
+                return False
+
     def _emit_global(self, vd: ast.VarDecl, ctx: str = "global"):
         items = self._bytes_of(vd.type, vd.init, vd, ctx)
         total = self._bytelen(items)
+        is_const = self._is_const_obj(vd.type)
         # .align precedes the label (.data AND .bss): a label written before
         # its padding binds to the pre-padding address, not to the bytes.
-        if all(k == "z" or (k == "b" and v == 0) for k, v in items):
+        if not is_const and \
+                all(k == "z" or (k == "b" and v == 0) for k, v in items):
             # FIX-G1 (gate C1 TRIGGER 2, F-gate-1): a DEFINED zero-sized
             # object still advances the layout by ONE byte — gcc emits
             # `.size N, 0` together with `.zero 1` (measured zsz.c:
@@ -318,6 +343,6 @@ class DataEmitter:
                 flush()
                 lines.append("    .quad {}".format(val))
         flush()
-        return "data", lines
+        return ("rodata" if is_const else "data"), lines
 
 

@@ -737,6 +737,21 @@ class Parser(AsmParseMixin):
                         break
                     continue
                 self.s.next()
+                if nm == "alias" and sink is not None:
+                    # M4 W2 §6 nm-corner (MC 12545): CAPTURE the target
+                    # name (`alias("tgt")` — a string literal; the vdso/
+                    # sched_clock form of the in-universe 4 streams).
+                    # Without a sink the generic class still ignores it.
+                    self.s.expect_punct("(")
+                    tgt = self.s.next()
+                    if tgt.kind != "str":
+                        self._parse_err(tgt, "'alias' attribute needs a "
+                                             "string target name (§6)")
+                    self.s.expect_punct(")")
+                    sink.append(("alias", tgt.text[1:-1]))
+                    if not self.s.accept_punct(","):
+                        break
+                    continue
                 if self.s.accept_punct("("):
                     depth = 1
                     while depth:
@@ -774,14 +789,14 @@ class Parser(AsmParseMixin):
             if self.s.at_punct("(") and \
                     self.s.peek(1).kind == "punct" and \
                     self.s.peek(1).text in ("*", "(", ")"):
-                # M4 W1: an ABSTRACT declarator in a type position (cast
-                # `(int (*)(void))x`, _Generic key `int(*)(void):`) — W2
-                # cast territory, LOUD stays (test_core_m2_gen pin). The
-                # NAMED declarators §1 rows 1a–1f went ACCEPT; unnamed
-                # ones need the abstract-declarator machinery.
-                self._parse_err(lb, "'function pointer' abstract "
-                                "declarator (cast/§Generic key) is not in "
-                                "the subset (§5)")
+                # M4 W2 VALUES (MC 12545): the ABSTRACT declarator in a
+                # type position — the fn-ptr CAST `(int (*)(void))x` and
+                # the §Generic KEY `int(*)(void):` — IS that cast's
+                # spelling (§2 R11). ONE mechanism: the SAME
+                # _declarator_walk + _fold_ops the named W1 rows ride;
+                # the 1g/1h twins keep their arms unchanged.
+                _, ops = self._declarator_walk("cast")
+                return self._fold_ops(ty, ops, False, "cast")
             return ty
 
     def parse_base_type(self) -> ast.Node:
@@ -1193,6 +1208,18 @@ class Parser(AsmParseMixin):
         if unsized and ctx == "member" and not fam_only:
             self._sema(unsized[0][1], "'array' members of a struct must "
                        "have a fixed size (§5)")
+        ty = self._fold_ops(base, ops, fam_only, ctx)
+        self._skip_gnu_attrs(attr_sink)  # declarator tail (§1 row 9)
+        if isinstance(ty, ast.FuncType):
+            return name, ty, True, ty.params
+        return name, ty, False, ()
+
+    def _fold_ops(self, base: ast.Node, ops, fam_only: bool,
+                  ctx: str) -> ast.Node:
+        """The INSIDE-OUT fold of the walk's operator chain onto the base
+        type (M4 W1 law). ONE mechanism: the NAMED declarator and, since
+        M4 W2 (MC 12545), the ABSTRACT declarator of a cast/_Generic key
+        both land here — no second type-builder beside this one."""
         ty = base
         for idx, op in enumerate(ops):
             kind = op[0]
@@ -1233,10 +1260,7 @@ class Parser(AsmParseMixin):
                                "twin)", "function pointer")
                 ty = ast.FuncType(lp.file, lp.line, lp.col, ty, params,
                                   variadic)
-        self._skip_gnu_attrs(attr_sink)  # declarator tail (§1 row 9)
-        if isinstance(ty, ast.FuncType):
-            return name, ty, True, ty.params
-        return name, ty, False, ()
+        return ty
 
     def _declarator_walk(self, ctx: str):
         """M4 W1: the paren-aware declarator walk. Returns (name, ops), ops
@@ -1277,8 +1301,13 @@ class Parser(AsmParseMixin):
             self.s.expect_punct(")")
         else:
             name = None
-            if not (ctx == "param" and (self.s.at_punct(")")
-                                        or self.s.at_punct(","))):
+            if stars and self.s.at_punct(")"):
+                # M4 W2 (MC 12545): ABSTRACT group tail — the `( * )`
+                # inside `int (*)(void)`; the name slot is EMPTY (the
+                # cast/_Generic-key declarator has no identifier).
+                pass
+            elif not (ctx == "param" and (self.s.at_punct(")")
+                                          or self.s.at_punct(","))):
                 name = self.s.expect_id("parse").text
             c_ops = []
         postfixes = []
@@ -1404,6 +1433,12 @@ class Parser(AsmParseMixin):
                     reg[self._unqual(ty).tag] = tuple(
                         list(reg.get(self._unqual(ty).tag, ())) + [(_nm, _a)])
             bind = None
+            alias = next((v for k, v in vsink if k == "alias"), None)
+            if alias is not None and not is_fn:
+                self._sema(pos, "'alias' attribute on an OBJECT declarator "
+                           "is not in the subset (§5 — the §6 nm-corner is "
+                           "the FUNCTION form; object volume in the kernel "
+                           "universe is 0, measured)")
             if self._at("asm", "__asm__"):
                 # M3 §3.10 (L10): the `register T name asm("reg")` bind
                 # suffix. Any OTHER use — a function declarator, or a
@@ -1428,6 +1463,12 @@ class Parser(AsmParseMixin):
                 ret = fty.ret
                 self.define(name, ("fn", ret), pos)
                 body = self.parse_function_body(params) if self.s.at_punct("{") else None
+                if alias is not None and body is not None:
+                    # gcc rc1 "alias definition is not allowed here" —
+                    # the twin refuses to pick one of the two bodies.
+                    self._sema(pos, "a function carrying 'alias' cannot "
+                               "also have a definition (§6 twin of the "
+                               "gcc error)", "alias")
                 # M4 W2 COMMIT-0 (MC 12545): comma continuation for
                 # PROTOTYPE lists — `int f(int x), h(int y);` (the S20/S22
                 # probe wall; the same declarator-list grammar the object
@@ -1440,7 +1481,7 @@ class Parser(AsmParseMixin):
                 out.append(ast.FuncDecl(
                     pos.file, pos.line, pos.col, name, ret, fty.params,
                     body, is_static, variadic=fty.variadic,
-                    inline_kind=inline_kind))
+                    inline_kind=inline_kind, alias_of=alias))
                 if comma:
                     continue
                 break

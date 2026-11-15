@@ -443,12 +443,14 @@ def test_w3_call_deref_form_wall(tmp_path):
 
 
 def test_abstract_fnptr_decl_stays_loud(tmp_path):
-    # Cast/Generic keys spell abstract fn-ptrs — W2 cast territory; the
-    # wall keeps its 'function pointer' sentence (test_core_m2_gen pin).
+    # M4 W2 COMMIT-2 FLIP (MC 12545, §2 R11): the abstract fn-ptr
+    # declarator is the CAST spelling — `(int (*)(void))x` now builds via
+    # the SAME walk+fold the named rows ride; the W1 wall sentence is
+    # retired (m2_gen key pin + m4w2 v_abs/v_key carry the acceptance).
     src = ("int main(void){ long x; x = (int (*)(void))x; return 0; }\n")
     gr, go, br = probe(tmp_path, "mabs", src)
-    assert br.returncode == 2
-    assert "'function pointer'" in br.stderr
+    assert gr.returncode == 0, gr.stderr
+    assert br.returncode == 0, br.stderr
 
 
 # ---- invalid C: blcc LOUD AND the oracle rc!=0 (twin agreement) -------------
@@ -509,8 +511,9 @@ SMATRIX = {
     # the fn-VALUE legs (S01/S07/S17/S19/S23) now COMPILE clean; the
     # table/ternary/member-init probes (S20/S21/S22/S24) advanced PAST the
     # value layer and answer the W3 CALL wall (needle + line pinned);
-    # S14/S18 name the abstract-declarator wall precisely (W2 cast work,
-    # commit-2). Call walls S08-S13/S15/S16/S20-S22/S24 STAY — W3 (§2
+    # S14/S18 advanced PAST the abstract-declarator wall (W2 commit-2
+    # cast/_Generic-key spelling) and answer the SAME W3 CALL wall.
+    # Call walls S08-S13/S15/S16/S20-S22/S24 STAY — W3 (§2
     # INDIRECT CALLS is not this card).
     "S01_decl_local":         (0, None, 0),
     "S02_decl_param":         (0, None, 0),
@@ -525,11 +528,11 @@ SMATRIX = {
     "S11_call_through_member": (2, "'function pointer' calls", 3),
     "S12_call_through_array": (2, "'function pointer' calls", 3),
     "S13_call_through_expr":  (2, "'function pointer' calls", 3),
-    "S14_call_through_cast":  (2, "'function pointer'", 2),
+    "S14_call_through_cast":  (2, "'function pointer' calls", 2),
     "S15_null_compare":       (2, "'function pointer' calls", 2),
     "S16_null_bang_compare":  (2, "callable 'h'", 2),
     "S17_fn_to_voidptr":      (0, None, 0),
-    "S18_voidptr_to_fn":      (2, "abstract declarator", 3),
+    "S18_voidptr_to_fn":      (2, "'function pointer' calls", 3),
     "S19_fn_to_long":         (0, None, 0),
     "S20_static_const_table": (2, "'function pointer' calls", 4),
     "S21_designated_table":   (2, "'function pointer' calls", 4),

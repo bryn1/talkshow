@@ -131,6 +131,10 @@ class FuncDecl(Node):
     inline_kind: str = ""    # §2.8 gnu89: "", "inline", "static-inline",
                              # "extern-inline" (LINKAGE only — blcc never
                              # inlines; it has no DCE either)
+    alias_of: Optional[str] = None   # M4 W2 §6 nm-corner (MC 12545):
+                             # `__attribute__((alias("tgt")))` on a body-less
+                             # fn declaration — codegen emits `.set name,tgt`
+                             # (measured gcc form); None = ordinary fn.
 
 
 @dataclass(frozen=True)

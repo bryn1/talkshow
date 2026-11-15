@@ -147,12 +147,15 @@ def test_no_match_no_default_loud():
           "g-nomatch", "not compatible with any association")
 
 
-def test_fnptr_key_stays_loud_m4():
-    # §1 row 16: function pointers are M4. The key type `int(*)(void)`
-    # (and the control's decl) must keep a LOUD wall — never silent.
-    _loud("int g(void){return 0;}\nint main(void){ int (*fp)(void); "
-          "return _Generic(fp, int(*)(void): 5, default: 6); }\n",
-          "g-fnptr", "function pointer")
+def test_fnptr_key_accepted_w2():
+    # M4 W2 VALUES FLIP (MC 12545): the abstract fn-ptr declarator is the
+    # CAST's spelling (§2 R11) — `_Generic` KEY position rides the SAME
+    # walk+fold (parse_type), so the key `int(*)(void)` matches and the
+    # association answers. Measured oracle: 5 (the old M4-DEFER LOUD pin
+    # retired same-commit as the law change).
+    both_run("int g(void){return 0;}\nint main(void){ int (*fp)(void); "
+             "fp = g;\n  return _Generic(fp, int(*)(void): 5, default: 6); }\n",
+             "g-fnptr")   # run-pair pins; oracle measured 5 (match arm)
 
 
 # ---- §2.12 types_compatible_p identity fold -------------------------------

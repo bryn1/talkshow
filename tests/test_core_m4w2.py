@@ -476,3 +476,154 @@ def test_table_positional_designated(tmp_path):
            "int main(void){ return (des[1] == add) * 4 + (des[2] == 0) * 2\n"
            "  + (des[0] == 0) + (tab[0] == add) * 2 + (tab[1] == 0); }\n")
     assert run_pair(tmp_path, "v_tab", src, expect=10) == 10
+
+
+def test_fnptr_abstract_declarator_cast(tmp_path):
+    # §2 R11 + the W1 pin's death: the ABSTRACT fn-ptr declarator is the
+    # CAST spelling — `(int (*)(int))0`, `(int (*)(int))add`, the
+    # `(long (*)(void))` cross-type cast — and the _Generic KEY position
+    # rides the SAME walk+fold (the m2_gen key pin flipped this commit).
+    # MEASURED: 3 (null-cast is null; cast-to-fn-ptr compares equal to
+    # the fn; a foreign-type fn-ptr cast is non-null).
+    src = (VAL_PRE +
+           "int main(void){ fp_t gp = (int (*)(int))0;\n"
+           "  int (*q)(int) = (int (*)(int))add;\n"
+           "  return (gp == 0) + (q == add) + ((long (*)(void))add != 0); }\n")
+    assert run_pair(tmp_path, "v_abs", src, expect=3) == 3
+
+
+def test_fnptr_generic_key_match(tmp_path):
+    # The §Generic KEY leg itself (the test_core_m2_gen flip's twin over
+    # here): key `int (*)(void)` matches a same-typed control — answer 5,
+    # the default arm must NOT fire (a silent key-mismatch would answer 6
+    # and still run-pair if blcc matched gcc's KEY-REJECT posture — the
+    # expect constant closes that door).
+    src = (VAL_PRE +
+           "int main(void){ int (*fp)(void) = (int (*)(void))0;\n"
+           "  return _Generic(fp, int (*)(void): 5, default: 6); }\n")
+    assert run_pair(tmp_path, "v_key", src, expect=5) == 5
+
+
+# ============ W2 COMMIT-2: §6 nm/section PARITY + the alias corner =========
+
+def _nm_letters(obj):
+    """symbol -> nm section LETTER (R/r/D/d/B/b/T/t) — the §6 parity key
+    (letters, not offsets: layout order is not the claimed law)."""
+    out = subprocess.run(["nm", str(obj)], capture_output=True,
+                         text=True).stdout
+    return {ln.split()[2]: ln.split()[1] for ln in out.splitlines()
+            if len(ln.split()) == 3}
+
+
+def test_const_object_section_parity(tmp_path):
+    # §6 nm/section parity (MC 12545), MEASURED gcc law: the object is
+    # .rodata iff its BYTES are immutable — top-level const (`const int
+    # ci`, zero-inited `const int cz`, `const struct`), const down the
+    # ARRAY element chain (the fn-ptr table `const fp_t ro[]`); pointee
+    # const (`const int *pi`) and const STRUCT MEMBERS stay .data/.bss.
+    # KNOWN deviation pinned honestly: `int *const p` — the W1 declarator
+    # qualifier-drop loses that const, so blcc answers .bss where gcc
+    # answers .rodata (section-only, values unaffected; corpus fn-form
+    # alias/table volume shown, object form 0).
+    src = ("typedef int (*fp_t)(int);\n"
+           "int f(void){ return 0; }\n"
+           "const int ci = 5;\nconst int cz = 0;\nint fi = 4;\n"
+           "const fp_t ro[1] = { f };\n"
+           "const int *pi = (int*)0;\n"
+           "struct SA { const int a; };\nstruct SA sc = { 1 };\n"
+           "struct SM { const int a; int b; };\nstruct SM sm = { 1, 2 };\n"
+           "const struct SA csc = { 3 };\n"
+           "static const int scz[2] = { 9, 0 };\n"
+           "int main(void){ return scz[0] + ci + fi + sc.a + sm.a + csc.a; }\n")
+    s = tmp_path / "sect.c"
+    s.write_text(src)
+    go = tmp_path / "sect.gcc.o"
+    # -O0 EMISSION twin: the SECTION law is an emission fact; -Os DCE
+    # deletes constant-folded statics (blcc has no DCE — the pre-existing
+    # posture difference), which would hide symbols this law speaks about.
+    gr = subprocess.run(["gcc", "-std=gnu89", "-O0", "-fno-pic",
+                         "-c", str(s), "-o", str(go)],
+                        capture_output=True, text=True)
+    assert gr.returncode == 0, gr.stderr
+    bo = tmp_path / "sect.blcc.o"
+    br = blcc(["-c", str(s), "-o", str(bo)])
+    assert br.returncode == 0, br.stderr
+    g, b = _nm_letters(go), _nm_letters(bo)
+    for sym, want in (("ci", "R"), ("cz", "R"), ("ro", "R"), ("csc", "R"),
+                      ("scz", "r"), ("fi", "D"), ("sc", "D"), ("sm", "D"),
+                      ("pi", "B")):
+        assert g.get(sym) == want, "oracle: {} is {} not {}".format(
+            sym, g.get(sym), want)
+        assert b.get(sym) == want, \
+            "blcc {} = {}, oracle {} (law: bytes-immutable → rodata)".format(
+                sym, b.get(sym), want)
+
+
+def test_alias_t_presence(tmp_path):
+    # §6 alias corner (F12ii, MC 12545): the alias name's T-presence law —
+    # gcc `T al` / blcc strip-only was the FAIL-class; W2 ships `.set`:
+    # static alias = local `t`, external = `.globl`+`T`, letters follow
+    # EACH symbol's own linkage; the kernel vdso form (`sched_clock` →
+    # `native_sched_clock`) RUNS. gcc's OWN body-less alias prototype is
+    # VALID C (oracle first), and both error twins (undefined target,
+    # alias+body) answer rc 1 there and LOUD here (§8 one-line diag).
+    src = ("static int tgt(void){ return 7; }\n"
+           "static int al(void) __attribute__((alias(\"tgt\")));\n"
+           "int al2(void) __attribute__((alias(\"tgt\")));\n"
+           "int main(void){ return al() + tgt() + al2(); }\n")
+    assert run_pair(tmp_path, "v_ali", src, expect=21) == 21
+    s = tmp_path / "v_ali.c"
+    bo = tmp_path / "v_ali.blcc.o"
+    br = blcc(["-c", str(s), "-o", str(bo)])
+    assert br.returncode == 0, br.stderr
+    go = tmp_path / "v_ali.gcc.o"
+    gr = subprocess.run(["gcc", "-std=gnu89", "-O0", "-fno-pic",
+                         "-c", str(s), "-o", str(go)],
+                        capture_output=True, text=True)
+    assert gr.returncode == 0, gr.stderr
+    g, b = _nm_letters(go), _nm_letters(bo)
+    for sym in ("tgt", "al", "al2"):
+        assert g[sym] == b[sym], \
+            "alias nm letter diverges on {}: gcc {} blcc {}".format(
+                sym, g[sym], b[sym])
+    assert b["al"] == "t" and b["al2"] == "T", \
+        "letters must follow each symbol's OWN linkage: {}".format(b)
+
+
+def test_alias_error_twins(tmp_path):
+    # gcc rc 1 twins (measured: "aliased to undefined symbol" / attribute
+    # sentence): blcc LOUD with the §8 line shape, naming the target.
+    s = tmp_path / "v_albad.c"
+    s.write_text("extern int nosuch(void);\n"
+                 "int al4(void) __attribute__((alias(\"nosuch\")));\n"
+                 "int main(void){ return al4(); }\n")
+    gr = gcc(["-c", str(s), "-o", str(tmp_path / "x.o")])
+    assert gr.returncode != 0, "oracle must reject: undefined alias target"
+    br = blcc(["-c", str(s), "-o", str(tmp_path / "y.o")])
+    assert br.returncode == 2
+    assert "alias target 'nosuch' declared but not defined" in br.stderr, \
+        br.stderr
+
+
+def test_alias_object_form_stays_loud(tmp_path):
+    # The OBJECT-alias form is a §5 subset wall (in-universe volume 0,
+    # measured over the 706 streams: all alias(" … ") sites are the fn
+    # form). Silent symbol-shape lies are forbidden — LOUD.
+    s = tmp_path / "v_alobj.c"
+    s.write_text("int tgtv = 1;\nint alvo __attribute__((alias(\"tgtv\")));\n"
+                 "int main(void){ return alvo; }\n")
+    br = blcc(["-c", str(s), "-o", str(tmp_path / "y.o")])
+    assert br.returncode == 2
+    assert "'alias' attribute on an OBJECT" in br.stderr, br.stderr
+
+
+def test_vdso_alias_shape_run_pair(tmp_path):
+    # THE in-universe carrier verbatim (arch/x86 vdso/tsc streams):
+    # `unsigned long long sched_clock(void)
+    # __attribute__((alias("native_sched_clock")));` — T-presence + call
+    # through the alias name resolve at link.
+    src = ("unsigned long long native_sched_clock(void){ return 3; }\n"
+           "unsigned long long sched_clock(void)\n"
+           "    __attribute__((alias(\"native_sched_clock\")));\n"
+           "int main(void){ return (int)sched_clock(); }\n")
+    assert run_pair(tmp_path, "v_vdso", src, expect=3) == 3
