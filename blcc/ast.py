@@ -427,6 +427,16 @@ class Sizeof(Node):
 
 
 @dataclass(frozen=True)
+class Alignof(Node):
+    """M4 W2.5 (MC 12557): the GCC `__alignof__`/`__alignof`/`_Alignof`
+    operator — the SAME two forms as Sizeof (§4), folded through the
+    EXISTING layout mirror (parser._calign / TypeMap._align), never a
+    second layout: a constant wherever sizeof is one."""
+    typ: Optional[Node]      # exactly one of typ/arg is set (§4 forms)
+    arg: Optional[Node]
+
+
+@dataclass(frozen=True)
 class Overflow(Node):
     """§1 row 16 (M53): `__builtin_{add,sub,mul}_overflow(a, b, &r)` —
     op in {"add","sub","mul"}. The store through PTR is a SIDE EFFECT,

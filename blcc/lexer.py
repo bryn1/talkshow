@@ -24,6 +24,11 @@ KEYWORDS = frozenset({
     "volatile", "__volatile__", "__label__", "typeof", "__typeof__",
     "__extension__", "_Generic", "asm", "__asm__", "__attribute__",
     "__alignof__", "restrict", "__restrict__", "__restrict",
+    # M4 W2.5 (MC 12557, AMENDMENT-3): the ONE alignof family. gcc 11.4
+    # gnu89 accepts `__alignof__`, `__alignof` and `_Alignof` (the C11
+    # spelling — 9 sites in arch/x86/kernel/fpu/init.c streams). BARE
+    # `alignof` is NOT an operator (measured: it stays an identifier).
+    "__alignof", "_Alignof",
     # M4 W2 COMMIT-0 (AMENDMENT-2 arm a, MC 12545): C99 `_Bool` — the type
     # keyword behind `typedef _Bool bool;` (include/linux/types.h:30), the
     # uniform first-blocker of all 689 kernel streams. `__Bool` is NOT a

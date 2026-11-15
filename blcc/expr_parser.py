@@ -164,6 +164,8 @@ class ExprParser:
             return ast.IncDec(t.file, t.line, t.col, t.text, operand, True)
         if t.kind == "kw" and t.text == "sizeof":
             return self.parse_sizeof()
+        if t.kind == "kw" and t.text in self._ALIGNOF_WORDS:
+            return self.parse_alignof()
         if t.kind == "punct" and t.text == "(" and self._starts_type(1):
             self.s.next()
             typ = self.parse_type()
@@ -200,6 +202,30 @@ class ExprParser:
         # 'sizeof x' (no parens): only a bare operand; anything past it is a
         # loud parse error, never silently mis-sized.
         return ast.Sizeof(t.file, t.line, t.col, None, self.parse_primary())
+
+    # M4 W2.5 (MC 12557, AMENDMENT-3): the ONE alignof family, measured
+    # gcc 11.4 gnu89 law (fx/a1-a3): the PARENTHESIZED form takes a TYPE
+    # or an EXPR; the BARE form takes an EXPR ONLY (`__alignof__ long` is
+    # gcc rc1); `alignof` (no underscores) is NOT an operator (identifier).
+    _ALIGNOF_WORDS = ("__alignof__", "__alignof", "_Alignof")
+
+    def parse_alignof(self) -> ast.Node:
+        t = self.s.next()  # the operator word
+        if self.s.accept_punct("("):
+            if self._starts_type(0):
+                typ = self.parse_type()
+                self.s.expect_punct(")")
+                if self.s.at_punct("{") and self.parse_init is not None:
+                    # `__alignof__(int){7}` = alignof (int) — the literal
+                    # rides the TYPE (§1 row 11, the sizeof law mirrored).
+                    self.parse_init()
+                return ast.Alignof(t.file, t.line, t.col, typ, None)
+            expr = self.parse_expression()
+            self.s.expect_punct(")")
+            return ast.Alignof(t.file, t.line, t.col, None, expr)
+        # Bare form: EXPR ONLY. A type word answers the parse wall
+        # (parse_primary), matching gcc's rc1 "expected expression".
+        return ast.Alignof(t.file, t.line, t.col, None, self.parse_primary())
 
     # -- postfix chain: call, subscript, member, ++/-- -------------------------
 

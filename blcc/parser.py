@@ -154,6 +154,13 @@ class Parser(AsmParseMixin):
                 return self._csize(node.typ)
             ty = self.expr_type(node.arg)
             return self._csize(ty) if ty is not None else None
+        if isinstance(node, ast.Alignof):
+            # M4 W2.5 (MC 12557): the alignof mirror of the SAME layout
+            # law — `_calign` is the shipped §2.13/offsetof mirror.
+            if node.typ is not None:
+                return self._calign(node.typ)
+            ty = self.expr_type(node.arg)
+            return self._calign(ty) if ty is not None else None
         if isinstance(node, ast.Binary):
             op = node.op
             if op in ("&&", "||"):                      # short-circuit

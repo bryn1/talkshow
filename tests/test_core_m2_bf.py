@@ -122,10 +122,11 @@ int main(void) {
     if (sizeof(struct S15) != 8) return 16;
     if (sizeof(struct S16) != 8) return 17;
     /* alignment law probed the C way — a char prefix reveals the member
-       alignment (blcc subset has no __alignof__ expression; padding IS
-       alignof): anonymous bitfields contribute NO alignment (S10b Pad=2:
-       char then char), named ones contribute the declared type's
-       (S15 Pad=16, S16 Pad=12 — the tail int:1 rides the int unit). */
+       alignment (this predates M4 W2.5's `__alignof__` — MC 12557;
+       padding IS alignof): anonymous bitfields contribute NO alignment
+       (S10b Pad=2: char then char), named ones contribute the declared
+       type's (S15 Pad=16, S16 Pad=12 — the tail int:1 rides the int
+       unit). */
     if (sizeof(struct Pad)   != 8)  return 18;
     if (sizeof(struct Pad2)  != 2)  return 19;
     if (sizeof(struct Pad7)  != 2)  return 20;

@@ -92,6 +92,8 @@ def what(n) -> str:
         return "cast expression"
     if isinstance(n, ast.Sizeof):
         return "sizeof expression"
+    if isinstance(n, ast.Alignof):
+        return "alignof expression"              # M4 W2.5 (MC 12557)
     if isinstance(n, ast.Binary):
         return "{} expression".format(n.op)
     if isinstance(n, ast.Cond):
@@ -250,6 +252,12 @@ class TypeMap:
             if n.typ is not None:
                 return self._size(n.typ, at or n)
             return self._size(self._ty(n.arg), at or n)
+        if isinstance(n, ast.Alignof):
+            # M4 W2.5 (MC 12557): alignof folds through the SAME
+            # TypeMap._align law the struct layout already computes.
+            if n.typ is not None:
+                return self._align(n.typ, at or n)
+            return self._align(self._ty(n.arg), at or n)
         if isinstance(n, ast.Binary):
             if n.op in ("&&", "||"):
                 a = self._fold_const(n.left, at)
@@ -836,6 +844,11 @@ class TypeMap:
             # expression; `({;})` is void (GCC ext).
             return self._ty_stmtexpr(n)
         if isinstance(n, ast.Sizeof):
+            return ast.BuiltinType(n.file, n.line, n.col, "long")
+        if isinstance(n, ast.Alignof):
+            # M4 W2.5: alignof answers the SAME type as sizeof here
+            # (the shipped unsigned-law convention; fx: sizeof of either
+            # is 8).
             return ast.BuiltinType(n.file, n.line, n.col, "long")
         if isinstance(n, ast.Ident):
             return self._untype(self._ident_ty(n))

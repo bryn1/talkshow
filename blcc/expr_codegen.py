@@ -176,6 +176,12 @@ class ExprEmitter(MemFoldMixin):
         self._imm(self._size(n.typ, n) if n.typ is not None
                   else self._size(self._ty(n.arg), n))
 
+    def _ex_alignof(self, n) -> None:
+        # M4 W2.5 (MC 12557): the runtime arm mirrors _ex_sizeof over the
+        # SAME TypeMap._align law — one layout mechanism, both operators.
+        self._imm(self._align(n.typ, n) if n.typ is not None
+                  else self._align(self._ty(n.arg), n))
+
     _OF_SFX = {1: "b", 2: "w", 4: "l", 8: "q"}
     _OF_IDX = {8: 0, 4: 1, 1: 2, 2: 3}          # into _REGFAM tuples
 
