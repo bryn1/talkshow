@@ -104,6 +104,8 @@ def what(n) -> str:
         return "pointer"
     if isinstance(n, ast.ArrayType):
         return "array"
+    if isinstance(n, ast.FuncType):
+        return "function"                             # M4 W1
     if isinstance(n, ast.StructType):
         return "struct {}".format(n.tag)
     if isinstance(n, ast.InitList):
@@ -210,6 +212,14 @@ class TypeMap:
                               "type, §1 row 13)", "sizeof")
                 return 8
             return esz * self._arrlen(ty, at)
+        if isinstance(ty, ast.FuncType):
+            # M4 W1: `sizeof(FT)` for a typedef'd FUNCTION type — gcc
+            # ERROR "invalid application of 'sizeof' to function type".
+            # A fn-PTR (`sizeof(hnd_t)` where hnd_t is `(*…)(…)`) is a
+            # PtrType and answers 8 on the arm above — never reaches here.
+            self._err(at or self.tu, "'sizeof' of a 'function' type is a "
+                      "gcc ERROR (§4 — a function is not an object)",
+                      "function")
         self._err(at or self.tu, "cannot size this type", self._what(ty))
 
     # -- constant-folded array sizes (P1-2: §4 sizes are expressions) ------------
@@ -480,6 +490,10 @@ class TypeMap:
     def _decay(self, ty: ast.Node) -> ast.Node:
         if isinstance(ty, ast.ArrayType):
             return ast.PtrType(ty.file, ty.line, ty.col, ty.inner)
+        if isinstance(ty, ast.FuncType):
+            # C 6.7.6.3p7 (M4 W1 1b): a FUNCTION type decays to pointer-to-
+            # function — the parameter-position law of the fn-ptr declarator.
+            return ast.PtrType(ty.file, ty.line, ty.col, ty)
         return ty
 
     def _struct_layout(self, ty: ast.StructType,
@@ -738,6 +752,15 @@ class TypeMap:
                     self._ty_eq_strict(a.inner, b.inner))
         if isinstance(a, ast.StructType) and isinstance(b, ast.StructType):
             return a.tag == b.tag      # nominal: same-shape, new tag ⇒ 0
+        if isinstance(a, ast.FuncType) and isinstance(b, ast.FuncType):
+            # M4 W1: fn-ptr TYPE equality (reached through PtrType recursion
+            # — `__builtin_types_compatible_p(hnd_t, hnd_t)` spells the TYPE
+            # with a typedef NAME, no abstract declarator).
+            return (a.variadic == b.variadic
+                    and len(a.params) == len(b.params)
+                    and self._ty_eq_strict(a.ret, b.ret)
+                    and all(self._ty_eq_strict(x.type, y.type)
+                            for x, y in zip(a.params, b.params)))
         return False
 
     def _types_compatible(self, a, b) -> bool:
@@ -823,6 +846,13 @@ class TypeMap:
                     self._err(n, "'*' applied to a non-pointer (§4)", n.op)
                 return base.inner
             if n.op == "!":
+                t = self._decay(self._ty(n.operand))
+                if (isinstance(t, ast.PtrType)
+                        and isinstance(t.inner, ast.FuncType)):
+                    # M4 W1 W2-twin law (sibling of the compare gate in
+                    # _binary_ty): `!fp` is the NULL/0-test spelling.
+                    self._err(n, "'function pointer' comparison is a "
+                              "VALUE use — W2 (§5)", "!")
                 return self._int(n)
             return self._ty(n.operand)
         if isinstance(n, ast.Binary):
@@ -945,6 +975,18 @@ class TypeMap:
 
     def _binary_ty(self, n: ast.Binary) -> ast.Node:
         if n.op in ("==", "!=", "<", "<=", ">", ">=", "&&", "||"):
+            if n.op not in ("&&", "||"):
+                # M4 W1 W2-twin law: fn-ptr NULL/0 COMPARISON stays LOUD
+                # until W2 ships it (the shipped object-pointer law would
+                # otherwise make it SILENT — measured: `p == 0` is rc 0
+                # today). Both operands must TYPE to answer; typing them
+                # here only PRECEDES the same typing codegen does.
+                for side in (n.left, n.right):
+                    t = self._decay(self._ty(side))
+                    if (isinstance(t, ast.PtrType)
+                            and isinstance(t.inner, ast.FuncType)):
+                        self._err(n, "'function pointer' comparison is a "
+                                  "VALUE use — W2 (§5)", n.op)
             return self._int(n)
         lt = self._decay(self._ty(n.left))
         rt = self._decay(self._ty(n.right))

@@ -302,10 +302,16 @@ def test_bitfield_named_zero_width_is_diagnostic():
     assert "zero width" in d.message
 
 
-def test_function_pointer_declaration_is_diagnostic():
-    d = diag("int (*cmp)(int, int);")
-    assert "'function pointer'" in d.message
-    assert (d.line, d.col) == (1, 5)
+def test_function_pointer_declaration_is_parsed():
+    # M4 W1 FLIP (MC 12541): the M1 pin ("'function pointer' LOUD") is
+    # retired by the §1 row 1c/1d law — `int (*cmp)(int, int);` is an
+    # OBJECT of type pointer-to-function, parsed and stored.
+    tu = parse_text("int (*cmp)(int, int);")
+    vd = find(tu, ast.VarDecl)
+    assert vd is not None and vd.name == "cmp"
+    assert isinstance(vd.type, ast.PtrType)
+    assert isinstance(vd.type.inner, ast.FuncType)
+    assert len(vd.type.inner.params) == 2
 
 
 def test_variadic_decl_parses():

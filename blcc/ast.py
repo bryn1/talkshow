@@ -40,6 +40,19 @@ class PtrType(Node):
 
 
 @dataclass(frozen=True)
+class FuncType(Node):
+    # M4 W1 (§1 rows 1a–1f, MC 12541): the FUNCTION TYPE — the thing a
+    # fn-ptr points at. It is NEVER an object: it is materialized only as
+    # PtrType(FuncType) (the fn-ptr), as a TypedefDecl target (kernel
+    # `typedef int wait_bit_action_f(…);`), or decayed in parameter
+    # position (C 6.7.6.3p7). params holds Param records with DECAYED
+    # types; variadic is the `...` arm. sizeof/arrays of it are LOUD.
+    ret: Node
+    params: Tuple = ()
+    variadic: bool = False
+
+
+@dataclass(frozen=True)
 class ArrayType(Node):
     inner: Node
     size: Optional[Node]   # IntLit; None only for parameters (§4)

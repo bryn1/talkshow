@@ -768,6 +768,17 @@ class Parser(AsmParseMixin):
                     self.s.expect_punct("]")
                 ty = ast.ArrayType(lb.file, lb.line, lb.col, ty, size)
                 continue
+            if self.s.at_punct("(") and \
+                    self.s.peek(1).kind == "punct" and \
+                    self.s.peek(1).text in ("*", "(", ")"):
+                # M4 W1: an ABSTRACT declarator in a type position (cast
+                # `(int (*)(void))x`, _Generic key `int(*)(void):`) — W2
+                # cast territory, LOUD stays (test_core_m2_gen pin). The
+                # NAMED declarators §1 rows 1a–1f went ACCEPT; unnamed
+                # ones need the abstract-declarator machinery.
+                self._parse_err(lb, "'function pointer' abstract "
+                                "declarator (cast/§Generic key) is not in "
+                                "the subset (§5)")
             return ty
 
     def parse_base_type(self) -> ast.Node:
@@ -951,7 +962,12 @@ class Parser(AsmParseMixin):
                 if name is None:
                     self._parse_err(pos, "struct member needs a name")
                 if is_fn:
-                    self._parse_err(pos, "'function' member would be a function pointer")
+                    # M4 W1: the declarator now BUILDS the FuncType — a
+                    # member stays LOUD because a member is an OBJECT;
+                    # gcc rc1 "invalid use of void type" / "function
+                    # declared void" — the twin agrees, nothing regressed.
+                    self._parse_err(pos, "struct member with 'function' "
+                                    "type is a gcc ERROR (§4)")
                 if self.s.accept_punct(":"):
                     width = self._bitfield_width(name, ty, pos)
             self.s.expect_punct(";")
@@ -1059,8 +1075,82 @@ class Parser(AsmParseMixin):
 
     def parse_declarator(self, base: ast.Node, ctx: str = "var",
                          attr_sink=None):
-        """ctx: 'var' | 'param' | 'member'. Returns (name, type, is_fn, params)."""
-        pos = self.s.peek()
+        """ctx: 'var' | 'param' | 'member' | 'typedef'. Returns
+        (name, type, is_fn, params). M4 W1 (MC 12541): when the ENTITY is a
+        function, type is its ast.FuncType (parse_decl unpacks ret/params/
+        variadic from it; the C 6.7.6.3p7 param-decay arm lives in
+        parse_params). Every fn-ptr spelling `(*name)(…)` lands as
+        PtrType(FuncType) with is_fn False — an OBJECT (§1 rows 1a–1f)."""
+        name, ops = self._declarator_walk(ctx)
+        dims = [op for op in ops if op[0] == "arr"]
+        unsized = [op for op in dims if op[2] is None]
+        # §1 row 13 (M46): `int v[];` — a member's SINGLE unsized bracket
+        # is the FLEXIBLE ARRAY declarator (gcc gnu89; the last-member/
+        # union/alone rules belong to the member list, checked by
+        # parse_struct_members). Any other unsized member dimension keeps
+        # the M1 wall (gcc: "array size missing").
+        fam_only = ctx == "member" and len(dims) == 1 and len(unsized) == 1
+        if unsized and ctx == "member" and not fam_only:
+            self._sema(unsized[0][1], "'array' members of a struct must "
+                       "have a fixed size (§5)")
+        ty = base
+        for idx, op in enumerate(ops):
+            kind = op[0]
+            if kind == "ptr":
+                _, ppos = op
+                ty = ast.PtrType(ppos.file, ppos.line, ppos.col, ty)
+            elif kind == "arr":
+                _, bracket, size = op
+                if isinstance(ty, ast.FuncType):
+                    # arrays hold OBJECTS — gcc ERROR (twin agrees rc 1).
+                    self._sema(bracket, "'array' of 'function' elements is "
+                               "a gcc ERROR (§4)", "array")
+                ty = ast.ArrayType(bracket.file, bracket.line, bracket.col,
+                                   ty, size, fam=(fam_only
+                                                  and size is None))
+            else:                                    # ("fn", lp, params, var)
+                _, lp, params, variadic = op
+                if isinstance(ty, ast.FuncType):
+                    self._sema(lp, "'function' returning a 'function' is a "
+                               "gcc ERROR (§4)", "function")
+                if isinstance(ty, ast.ArrayType):
+                    self._sema(lp, "'function' returning an 'array' is a "
+                               "gcc ERROR (§4)", "function")
+                if (idx == len(ops) - 1             # the ENTITY is the
+                        and isinstance(ty, ast.PtrType)   # FUNCTION here
+                        and isinstance(ty.inner, ast.FuncType)
+                        and ty is not base):
+                    # §1 row 1g — LOUD TWIN kept by v4 §7 W1 (census EXACT
+                    # class, kernel volume 0): the star-form `T (*f(…))(…)`
+                    # — the ENTITY is a function whose return fn-ptr is
+                    # BUILT IN THIS declarator. `int *(*(*q)(void))(int)`
+                    # (an inner fn-ptr RETURNS a fn-ptr; entity is a ptr)
+                    # is NOT this row — gcc rc 0, leg-pinned. A typedef'd
+                    # fn-ptr base (`ty is base`) — `work_func_t
+                    # wq_worker_last_func(…)` (5 corpus streams) — passes.
+                    self._sema(lp, "'function pointer' as a RETURN type "
+                               "(row 1g) is not in the subset (§5 LOUD "
+                               "twin)", "function pointer")
+                ty = ast.FuncType(lp.file, lp.line, lp.col, ty, params,
+                                  variadic)
+        self._skip_gnu_attrs(attr_sink)  # declarator tail (§1 row 9)
+        if isinstance(ty, ast.FuncType):
+            return name, ty, True, ty.params
+        return name, ty, False, ()
+
+    def _declarator_walk(self, ctx: str):
+        """M4 W1: the paren-aware declarator walk. Returns (name, ops), ops
+        being the INSIDE-OUT type-operator chain (each entry wraps what the
+        previous produced, starting from the base type). The composition
+        law — verified form-by-form against gcc in test_core_m4w1 — is
+        ops(level) = [ptr × stars] + reversed(postfixes as they appear)
+        + ops(child). The paren group is what REORDERS the operators: a
+        postfix after `( … )` applies UNDER the group's outer stars and
+        BEFORE the child's operators — exactly why `int (*f)(void)` is
+        pointer-to-function while `int *f(void)` is function-returning-
+        pointer. The M1 §5 wall on this shape ('function pointer'
+        declarations are not in the subset) DIES here (MC 12541)."""
+        pos0 = self.s.peek()
         stars = 0
         while True:
             # T+10b: `int * const p`, `char * volatile v`, `int const * q`
@@ -1072,59 +1162,55 @@ class Parser(AsmParseMixin):
                 break
             stars += 1
         self._skip_qualifiers()
-        if self.s.at_punct("("):
-            nxt = self.s.peek(1)
-            if stars or (nxt.kind == "punct" and nxt.text == "*"):
-                self._sema(pos, "'function pointer' declarations are not in the subset (§5)", "(")
-        name: Optional[str] = None
-        if not (ctx == "param" and (self.s.at_punct(")") or self.s.at_punct(","))):
-            name = self.s.expect_id("parse").text
-        ty = base
-        for _ in range(stars):
-            ty = ast.PtrType(pos.file, pos.line, pos.col, ty)
-        dims = []
-        while self.s.at_punct("["):
-            bracket = self.s.next()
-            size = (None if self.s.at_punct("]") else self.expr.parse_expression())
-            self.s.expect_punct("]")
-            dims.append((bracket, size))
-        # §1 row 13 (M46): `int v[];` — a member's SINGLE unsized bracket
-        # is the FLEXIBLE ARRAY declarator (gcc gnu89; the last-member/
-        # union/alone rules belong to the member list, checked by
-        # parse_struct_members). Any other unsized member dimension keeps
-        # the M1 wall (gcc: "array size missing").
-        fam_dim = (ctx == "member" and len(dims) == 1
-                   and dims[0][1] is None)
-        if (any(s is None for _, s in dims) and ctx == "member"
-                and not fam_dim):
-            self._sema(dims[0][0], "'array' members of a struct must "
-                       "have a fixed size (§5)")
-        # C reads declarators right-to-left: in `int m[2][3]` the bracket
-        # CLOSEST to m ([2]) is the OUTERMOST array — array of 2 rows of 3.
-        # Wrapping each successive bracket outward reversed the dimensions
-        # (DA-c3 P0-2: stride 8, false "too many initializers", m[i][j] off).
-        for bracket, size in reversed(dims):
-            ty = ast.ArrayType(bracket.file, bracket.line, bracket.col,
-                               ty, size, fam=fam_dim)
-        params: Tuple[ast.Param, ...] = ()
-        is_fn = False
-        if self.s.at_punct("("):
-            if ctx != "var":
-                self._parse_err(pos, "'function' declarator is not allowed here")
-            params = self.parse_params()
-            is_fn = True
-        self._skip_gnu_attrs(attr_sink)  # declarator tail (§1 row 9)
-        return name, ty, is_fn, params
+        nxt = self.s.peek(1)
+        group = (self.s.at_punct("(")
+                 and (nxt.kind == "id"
+                      or (nxt.kind == "punct"
+                          and (nxt.text in ("*", "(")
+                               or (nxt.text == ")" and stars)))))
+        if group:
+            self.s.next()
+            if stars and self.s.accept_punct(")"):   # abstract `(* )` group
+                name, c_ops = None, []
+            else:
+                name, c_ops = self._declarator_walk(ctx)
+            self.s.expect_punct(")")
+        else:
+            name = None
+            if not (ctx == "param" and (self.s.at_punct(")")
+                                        or self.s.at_punct(","))):
+                name = self.s.expect_id("parse").text
+            c_ops = []
+        postfixes = []
+        while True:
+            if self.s.at_punct("["):
+                bracket = self.s.next()
+                size = (None if self.s.at_punct("]")
+                        else self.expr.parse_expression())
+                self.s.expect_punct("]")
+                postfixes.append(("arr", bracket, size))
+                continue
+            if self.s.at_punct("("):
+                lparen = self.s.peek()       # parse_params CONSUMES it
+                params = self.parse_params()
+                postfixes.append(("fn", lparen, params,
+                                  self._params_variadic))
+                continue
+            break
+        return name, ([("ptr", pos0)] * stars
+                      + list(reversed(postfixes)) + c_ops)
 
     def parse_params(self) -> Tuple[ast.Param, ...]:
         self.s.expect_punct("(")
         params: List[ast.Param] = []
         self._params_variadic = False
         if self.s.accept_punct(")"):
-            return ()
+            self._params_variadic = False   # M4 W1: the side channel
+            return ()                       # describes THIS list only —
         if self._at("void") and self.s.at_punct(")", 1):
-            self.s.next()
-            self.s.next()
+            self.s.next()                   # nesting cannot clobber it:
+            self.s.next()                   # _declarator_walk snapshots it
+            self._params_variadic = False   # per '(' right after the call
             return ()
         while True:
             t = self.s.peek()
@@ -1140,12 +1226,18 @@ class Parser(AsmParseMixin):
             base = self.parse_base_type()
             name, ty, is_fn, _ = self.parse_declarator(base, ctx="param")
             if is_fn:
-                self._parse_err(t, "parameter with function type is not in the subset")
+                # C 6.7.6.3p7 (M4 W1 row 1b): a parameter of FUNCTION type
+                # is ADJUSTED to pointer-to-function — `void cb(int)` and
+                # `void (*cb)(int)` declare the same thing. The M1 wall
+                # ("parameter with function type is not in the subset")
+                # dies here; the oracle twin is test_core_m4w1 1b-decay.
+                ty = ast.PtrType(ty.file, ty.line, ty.col, ty)
             params.append(ast.Param(name, ty))
             if self.s.accept_punct(","):
                 continue
             self.s.expect_punct(")")
             break
+        self._params_variadic = False
         return tuple(params)
 
     # -- declarations -----------------------------------------------------------------
@@ -1228,15 +1320,20 @@ class Parser(AsmParseMixin):
             if is_fn:
                 if self.s.at_punct("{") and len(self.scopes) > 1:
                     self._parse_err(pos, "function definition inside a function is not in the subset")
-                self.define(name, ("fn", ty), pos)
+                # M4 W1: `ty` IS the ast.FuncType the declarator built
+                # (§1 row 1b/1d law) — the symbol table keeps the plain
+                # RETURN type (the shipped `("fn", ret)` shape), the
+                # FuncDecl carries ret/params/variadic from the FuncType.
+                fty = ty
+                ret = fty.ret
+                self.define(name, ("fn", ret), pos)
                 body = self.parse_function_body(params) if self.s.at_punct("{") else None
                 if body is None:
                     self.s.expect_punct(";")
                 out.append(ast.FuncDecl(
-                    pos.file, pos.line, pos.col, name, ty, params,
-                    body, is_static, variadic=self._params_variadic,
+                    pos.file, pos.line, pos.col, name, ret, fty.params,
+                    body, is_static, variadic=fty.variadic,
                     inline_kind=inline_kind))
-                self._params_variadic = False
                 break
             init = self.parse_initializer() if self.s.accept_punct("=") else None
             if init is not None:
@@ -1289,10 +1386,31 @@ class Parser(AsmParseMixin):
         while True:
             pos = self.s.peek()
             tsink: List[tuple] = []
-            name, ty, is_fn, _ = self.parse_declarator(base, ctx="var",
+            name, ty, is_fn, _ = self.parse_declarator(base, ctx="typedef",
                                                        attr_sink=tsink)
             if is_fn:
-                self._parse_err(pos, "typedef of a function type is a function pointer (§5)")
+                # M4 W1 (§1 row 1c): typedef of a FUNCTION TYPE is a
+                # synonym for that function type — the kernel spells it
+                # `typedef void __signalfn_t(int);` in 586 streams and
+                # `wait_bit_action_f` in 461. The typedef stores the
+                # FuncType; `FT *p;` then builds the fn-ptr. The M1 wall
+                # ("typedef of a function type is a function pointer")
+                # dies here.
+                pass
+            else:
+                bare = ty is base
+                u = self._unqual(ty)
+                if bare and isinstance(u, ast.PtrType) and \
+                        isinstance(u.inner, ast.FuncType):
+                    # §1 row 1h — LOUD TWIN kept by v4 §7 W1 (census
+                    # NAME-KEYED; the universe site is scripts/mod/modpost
+                    # `typedef FN_T x;`, HOST tier): a bare typedef NAME
+                    # over an existing fn-ptr typedef just RENAMES it —
+                    # deferred with its wave. A star-spelled `typedef
+                    # hnd_t *pp_t;` builds a NEW type and passes.
+                    self._parse_err(pos, "'function pointer' typedef "
+                                    "chain (row 1h) is not in the subset "
+                                    "(§5 LOUD twin)")
             for _nm, _a in tsink:            # M42: typedef-tail layout attrs
                 if isinstance(self._unqual(ty), ast.StructType):
                     reg = getattr(self, "struct_tag_attrs", None)

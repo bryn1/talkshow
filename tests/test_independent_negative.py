@@ -161,8 +161,14 @@ def test_bitfield():
 
 
 def test_function_pointer_declaration():
-    assert_loud("int (*fp)(int);\nint main(void){ return 0; }\n",
-                "fptrdecl", "function pointer")
+    # M4 W1 FLIP (MC 12541): §1 row 1d — a file-scope fn-ptr declaration
+    # is an OBJECT declaration; the M1 negative pin is retired. The
+    # VALUE-use negatives above/below (fptrcall, fnvalue) stay LOUD.
+    r, src, out = blcc_compile("int (*fp)(int);\nint main(void){ return 0; }\n",
+                               "fptrdecl")
+    if os.path.exists(out):
+        os.remove(out)
+    assert r.returncode == 0, r.stderr
 
 
 def test_function_pointer_call_through():
