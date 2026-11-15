@@ -379,7 +379,10 @@ def test_cc_phase_flags_blcc_loud_divergence(tmp_path):
     # -m64 678x, -c 773x). gcc ACCEPTS them at -E; blcc's §2 surface is
     # "No other flags" — the PINNED M4-divergence: never silent, always
     # naming the flag (doc §2 table, ARCHITECTURE v5.1).
-    for flag in ("-Wall", "-O2", "-m64", "-c", "-fno-common", "-MD"):
+    # M4 W0 FLIP (plan v4 §3.5, named same-commit row): `-c` LEAVES the
+    # LOUD loop — `main` is a LINK-MODE requirement; the other FIVE stay
+    # LOUD-pinned IN blcc (their IGNORE-LOUD is a WRAPPER-layer class).
+    for flag in ("-Wall", "-O2", "-m64", "-fno-common", "-MD"):
         path = write(tmp_path, "t.c", VFOO)
         # cwd=tmp_path: gcc -MD WRITES a .d beside the object target, and
         # with an absolute src it lands in the CWD — without this pin the
@@ -389,6 +392,31 @@ def test_cc_phase_flags_blcc_loud_divergence(tmp_path):
         assert g.returncode == 0, (flag, g.stderr)
         assert b.returncode == 2
         assert flag in b.stderr
+    # The flipped ACCEPT posture, three ways (all measured at gcc 11.4:
+    # `gcc -E -c` rc 0 — -E wins silently):
+    #   (a) -E + -c answers the pp stream rc 0 on BOTH sides;
+    path = write(tmp_path, "t.c", VFOO)
+    g = gcc_run(["-c", path] + PINS, cwd=str(tmp_path))
+    b = blcc_run(["-c", path] + PINS, cwd=str(tmp_path))
+    assert g.returncode == 0, g.stderr
+    assert b.returncode == 0, b.stderr
+    #   (b) compile-mode -c: rc 0 + OBJECT at -o + no main (§3.5 law;
+    #       the full posture incl. no-ld-ran is pinned by the W0 legs in
+    #       tests/test_core_m4w0.py — this is the flip itself, in place);
+    src = tmp_path / "kstyle.c"
+    src.write_text("static long counter;\nlong get(void){ return counter; }\n")
+    obj = tmp_path / "kstyle.o"
+    r = subprocess.run([sys.executable, "-m", "blcc", str(src), "-c",
+                        "-o", str(obj)], capture_output=True, text=True,
+                       timeout=180, env=dict(os.environ, PYTHONPATH=REPO))
+    assert r.returncode == 0, r.stderr
+    assert obj.exists() and obj.read_bytes()[:4] == b"\x7fELF"
+    #   (c) same source WITHOUT -c stays LOUD (link-mode law intact).
+    r2 = subprocess.run([sys.executable, "-m", "blcc", str(src), "-o",
+                         str(tmp_path / "kstyle.elf")],
+                        capture_output=True, text=True, timeout=180,
+                        env=dict(os.environ, PYTHONPATH=REPO))
+    assert r2.returncode == 2 and "no 'main' function defined" in r2.stderr
 
 
 def test_E_dash_o_writes_the_pp_stream_to_file(tmp_path):

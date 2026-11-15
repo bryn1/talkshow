@@ -7,6 +7,11 @@ preproc -> lexer -> parser -> codegen, the exact external commands
 files under the repo .tmp/, and the exit-code contract 0/2/3. `-E` runs the
 preprocessor only and writes the pp output to stdout (exit 0, no -o needed;
 pp diagnostics still exit 2, the §8 warning tier never changes the code).
+`-c` (M4 W0, plan v4 §3.5): `main` is a LINK-MODE requirement — `-c` runs
+parse→sema(no-main)→asm→`as --64 -o <o-operand verbatim>` and stops: no `ld`,
+no `_require_main`. No `-c`: the gate runs unchanged. Any diagnostic on the
+`-c` path leaves NO file at `-o` (unlink partial; kbuild/fixdep read the
+target's existence). `-c` without `-o`: REJECT-LOUD exit 2.
 """
 from __future__ import annotations
 
@@ -52,6 +57,7 @@ def _parse_args(argv: List[str]):
     emit_asm = False
     verbose = False
     pp_only = False
+    compile_only = False
     opts = PpOpts()
     i = 0
     while i < len(argv):
@@ -67,6 +73,8 @@ def _parse_args(argv: List[str]):
             verbose = True
         elif a == "-E":
             pp_only = True
+        elif a == "-c":                  # M4 W0 (§3.5): compile to the -o
+            compile_only = True          # object and STOP — no ld, no gate
         elif a == "-nostdinc":
             pass                             # blcc HAS no default system dirs
         elif a in ("-I", "-isystem", "-include", "-std"):
@@ -116,12 +124,18 @@ def _parse_args(argv: List[str]):
         i += 1
     if in_path is None:
         raise SystemExit("blcc: need an input file\n" + USAGE)
+    if compile_only and not pp_only and out_path is None:
+        # §3.5 law: kbuild always carries -o (741/741); gcc's implicit
+        # <stem>.o-in-cwd posture is deliberately NOT copied — LOUD.
+        raise SystemExit("blcc: -c needs -o <output>\n" + USAGE)
     if not pp_only and out_path is None:
         raise SystemExit("blcc: need an input file and -o <output>\n" + USAGE)
-    return (in_path, out_path, emit_asm, verbose), pp_only, opts
+    return (in_path, out_path, emit_asm, verbose, compile_only), pp_only, opts
 
 
 def _require_main(tu: ast.TranslationUnit, eof, in_path: str) -> None:
+    # LINK-MODE law (§3.5): called on the link path only — `-c` never
+    # reaches this gate (kernel TUs have no main by nature).
     for d in tu.decls:
         if isinstance(d, ast.FuncDecl) and d.name == "main" and d.body is not None:
             return
@@ -147,11 +161,23 @@ def _run_tool(cmd: List[str]) -> Optional[int]:
 
 def main(argv: List[str]) -> int:
     try:
-        (in_path, out_path, emit_asm, verbose), pp_only, opts = \
+        (in_path, out_path, emit_asm, verbose, compile_only), pp_only, opts = \
             _parse_args(argv)
     except SystemExit as exc:            # usage errors are §2 exit 2
         sys.stderr.write(str(exc) + "\n")
         return 2
+
+    # §3.5 failure law (compile paths): any diagnostic leaves NO file at
+    # -o — kbuild/fixdep read the target's existence, a surviving object
+    # after a failed compile is a false green. (-E mode never unlinks: it
+    # answers the pp-stream posture, where the oracle never deletes.)
+    def _fail(code: int) -> int:
+        if compile_only and not pp_only:
+            try:
+                os.remove(out_path)
+            except OSError:
+                pass
+        return code
 
     opts.emit_pragmas = pp_only          # -E passes pragmas through (oracle);
     # compile mode keeps pp output comment- AND pragma-free for the lexer.
@@ -160,12 +186,12 @@ def main(argv: List[str]) -> int:
         lines = pp.preprocess_file(in_path)
     except DiagError as exc:
         sys.stderr.write(str(exc) + "\n")
-        return 2
+        return _fail(2)
     except Exception as exc:            # §8 belt also guards the -E path
         sys.stderr.write("{}:0:0: pp: internal compiler error, found "
                          "'{}: {}'\n".format(in_path, type(exc).__name__,
                                              str(exc).replace("'", "")))
-        return 2
+        return _fail(2)
 
     if pp_only:
         # gcc -E -o FILE sends the pp stream to FILE (measured c7 — the
@@ -190,18 +216,25 @@ def main(argv: List[str]) -> int:
     try:
         toks = Lexer(lines).tokenize()
         tu = parse_tokens(toks)
-        _require_main(tu, toks[-1], in_path)
-        asm_text = RUNTIME_ASM + compile_tu(tu)
+        if not compile_only:
+            _require_main(tu, toks[-1], in_path)
+        # The RUNTIME_ASM blob is LINK-mode furniture: it defines `_start`
+        # and references `U main` (M1 static-exe law). A relocatable `-c`
+        # object must carry the TU and NOTHING else — the blob in a .o is
+        # `U main` poison ×669 TUs and a _start redefinition wall at any
+        # link (§6 nm-parity: blcc_U(TU) − gcc_U(TU) must stay ∅).
+        asm_text = compile_tu(tu) if compile_only \
+            else RUNTIME_ASM + compile_tu(tu)
     except DiagError as exc:
         sys.stderr.write(str(exc) + "\n")
-        return 2
+        return _fail(2)
     except Exception as exc:            # §2/§8 belt: a raw traceback is NEVER
         # a permitted compiler behaviour — every internal fault becomes a
         # §8-format diagnostic, exit 2, and NOTHING is emitted.
         sys.stderr.write("{}:0:0: asm: internal compiler error, found "
                          "'{}: {}'\n".format(in_path, type(exc).__name__,
                                              str(exc).replace("'", "")))
-        return 2
+        return _fail(2)
 
     os.makedirs(TMP_DIR, exist_ok=True)
     stem = os.path.basename(out_path) or "out"
@@ -214,6 +247,20 @@ def main(argv: List[str]) -> int:
             fh.write(asm_text)
     with open(scratch_s, "w", encoding="utf-8") as fh:
         fh.write(asm_text)
+
+    if compile_only:
+        # §3.5 mode law: parse→sema(no-main)→asm→as -o <operand VERBATIM>
+        # → STOP. No ld, no scratch object — the object answers to the
+        # exact `-o` string kbuild spelled.
+        as_cmd = ["as", "--64", "-o", out_path, scratch_s]
+        if verbose:
+            sys.stdout.write(" ".join(as_cmd) + "\n")
+            sys.stdout.flush()
+        code = _run_tool(as_cmd)
+        if code is not None:
+            return _fail(code)         # as left a partial: leave NOTHING
+        os.remove(scratch_s)
+        return 0
 
     as_cmd = ["as", "--64", "-o", scratch_o, scratch_s]
     ld_cmd = ["ld", "-static", "-o", out_path, scratch_o]
