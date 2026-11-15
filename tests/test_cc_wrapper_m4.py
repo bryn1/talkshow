@@ -276,3 +276,21 @@ def test_w18_blcc_path_passes_accepted_argv_and_forwards_rc(tmp_path):
     assert out.exists() and out.read_bytes()[:4] == b"\x7fELF"
     assert rows(tmp_path, "deleg.log") == []      # blcc path: no delegation
     assert rows(tmp_path, "probe.log") == []
+
+
+def test_w19_verbose_echo_and_census_channel(tmp_path):
+    # §3.2 L6 observability: -v echoes the FINAL blcc argv and records the
+    # IGNORE-LOUD set once; optional BLCC_BLCC_LOG census channel writes
+    # `blcc <o> <law> rc<N>` (blcc-path rows are neither delegate nor probe).
+    src = tmp_path / "v.c"
+    src.write_text(GOOD)
+    r = wrap(["-v", KDEF, "-Wall", "-O2", "-c", str(src),
+              "-o", str(tmp_path / "v.o")], tmp_path,
+             env_extra={"BLCC_BLCC_LOG": str(tmp_path / "blcc.log")})
+    assert r.returncode == 0, r.stderr
+    assert "blcc-cc: blcc argv:" in r.stdout
+    assert str(src) in r.stdout and "-Wall" not in r.stdout.split(
+        "blcc argv:")[1]
+    assert "IGNORE-LOUD x2: -O2 -Wall" in r.stderr
+    assert rows(tmp_path, "blcc.log") == [
+        "blcc %s §3.5-c rc0" % (tmp_path / "v.o")]
