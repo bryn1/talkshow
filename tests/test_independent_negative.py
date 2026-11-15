@@ -177,8 +177,17 @@ def test_function_pointer_call_through():
 
 
 def test_function_name_used_as_value():
-    assert_loud("int g(void){ return 1; }\nint h;\nint main(void){ h = g; "
-                "return 0; }\n", "fnvalue", "function pointer")
+    # M4 W2 VALUES FLIP (MC 12545, plan §2 R1): the fn-name VALUE is now
+    # the function's address, accepted by both sides. `h = g;` into an int
+    # rides the PRE-EXISTING silent implicit-conversion class (void*→int
+    # implicit assign measured rc 0 at tip; gcc: warning + rc 0). The
+    # CALL-through-pointer negative (fptrcall above) STAYS LOUD — W3.
+    r, src, out = blcc_compile("int g(void){ return 1; }\nint h;\n"
+                               "int main(void){ h = g; return 0; }\n",
+                               "fnvalue")
+    if os.path.exists(out):
+        os.remove(out)
+    assert r.returncode == 0, r.stderr
 
 
 def test_variadic_declaration():

@@ -363,3 +363,116 @@ def test_corpus_bool_wall_is_dead(stream, tmp_path):
     r = blcc(["-c", str(clean), "-o", str(tmp_path / "corpw2.o")])
     assert "found '_Bool'" not in r.stderr, \
         "{} still hits the _Bool wall:\n{}".format(stream, r.stderr[:600])
+
+
+# ============ W2 VALUES: fn-name decays to an 8-byte address rvalue ========
+
+VAL_PRE = ("typedef int (*fp_t)(int);\n"
+           "int add(int x){ return x + 1; }\n"
+           "int sub(int x){ return x - 1; }\n")
+
+def test_fn_value_battery_run_pair(tmp_path):
+    # §2 R1: `gp = add;` (bare-name decay), fn-ptr == fn, != &add, the
+    # NULL spellings 0/(void*)0, the bang, fn↔long and fn↔void* casts,
+    # copy through a block-scope var, table slots. MEASURED answer 10.
+    src = (VAL_PRE +
+           "int takes(fp_t f){ return f == add; }\n"
+           "fp_t gives(void){ return add; }\n"
+           "fp_t tab[2] = { add, 0 };\n"
+           "int main(void){ int r = 0; fp_t gp; gp = add;\n"
+           "  r += (gp == add) + (gp != &add) + (gp != 0) + (gp != (void*)0)\n"
+           "    + !gp + (gp == 0);\n"
+           "  r += ((long)add == (long)gp) + ((void*)add == (void*)gp);\n"
+           "  r += takes(add) + takes(gives()) + (gives() == add);\n"
+           "  r += (tab[0] == add) + (tab[1] == 0);\n"
+           "  return r; }\n")
+    assert run_pair(tmp_path, "v_batt", src, expect=10) == 10
+
+
+def test_fn_value_dynamic_run_pair(tmp_path):
+    # Values NOT constant-foldable: fn-ptr returned through a Cond,
+    # re-assigned to 0 mid-run, and the raw fn==fn / fn!=fn compares.
+    # MEASURED oracle answer 8.
+    src = (VAL_PRE +
+           "fp_t pick(int k){ return k ? add : sub; }\n"
+           "int main(void){ fp_t gp = pick(1); int r = 0;\n"
+           "  r += (gp == add); r += (gp == &add); r += (gp != 0);\n"
+           "  r += (gp != (void*)0); r += !gp; gp = 0; r += !gp;\n"
+           "  r += (gp == 0); r += (add == add); r += (add != sub);\n"
+           "  return r; }\n")
+    assert run_pair(tmp_path, "v_dyn", src, expect=8) == 8
+
+
+def test_fn_value_static_null(tmp_path):
+    # A zero-initialised table slot and an uninitialised static compare
+    # equal to 0 and (void*)0; the SET slot does not. MEASURED answer 5.
+    src = (VAL_PRE +
+           "fp_t gs;\nfp_t tab[2] = { add, 0 };\n"
+           "int main(void){ return !gs + (gs == 0) + (gs == (void*)0)\n"
+           "  + (tab[1] == 0) + (tab[0] == 0) + !!tab[0]; }\n")
+    assert run_pair(tmp_path, "v_null", src, expect=5) == 5
+
+
+def test_fn_addr_is_data_reference_not_plt(tmp_path):
+    # THE GOTCHA (measured): the kernel recipe (-fno-pic -Os, plan §6's
+    # universe) answers a fn-ADDRESS with an ABSOLUTE relocation —
+    # R_X86_64_32/R_X86_64_32S on `mov/cmp $add` — a DATA reference.
+    # PLT32 belongs to the direct-CALL arm ONLY; GOTPCREL is the
+    # Ubuntu-DEFAULT -fPIC world, which is NOT §6's universe (measured
+    # twin: gcc's own -fPIC object carries U _GLOBAL_OFFSET_TABLE_ —
+    # asserting the PIC shape would contradict the kernel law).
+    src = (VAL_PRE +
+           "fp_t gp;\nint k;\n"
+           "int main(int argc){ if (argc > 1) gp = add;\n"
+           "  k = (gp == add); return k; }\n")
+    s = tmp_path / "v_law.c"
+    s.write_text(src)
+    go = tmp_path / "v_law.gcc.o"
+    gr = gcc(["-fno-pic", "-c", str(s), "-o", str(go)])
+    assert gr.returncode == 0, gr.stderr
+    bo = tmp_path / "v_law.blcc.o"
+    br = blcc(["-c", str(s), "-o", str(bo)])
+    assert br.returncode == 0, br.stderr
+    for tag, obj in (("gcc", go), ("blcc", bo)):
+        txt = subprocess.run(["objdump", "-dr", str(obj)],
+                             capture_output=True, text=True).stdout
+        assert "GOTPCREL" not in txt, \
+            "{} fn-address rode a GOT load (§6 kernel universe: -fno-pic)".format(tag)
+        assert re.search(r"R_X86_64_32S?\s+add\b", txt), \
+            "{}: no ABSOLUTE fn-address reloc on add (data-reference law):\n{}".format(
+                tag, txt[-600:])
+
+
+def test_fn_cast_roundtrip(tmp_path):
+    # §2 R11: fn↔void*/long casts are WIDTH-IDENTICAL no-ops — the
+    # roundtrip `(fp_t)(long)add == add` holds; NULL-casts ride R10.
+    # MEASURED answer: 4 terms all true.
+    src = (VAL_PRE +
+           "int main(void){ fp_t gp = (fp_t)(long)add;\n"
+           "  return (gp == add) + ((long)(void*)add == (long)add)\n"
+           "    + ((fp_t)(void*)0 == 0) + ((fp_t)0L == (void*)0); }\n")
+    assert run_pair(tmp_path, "v_cast", src, expect=4) == 4
+
+
+def test_fn_value_param_return_run_pair(tmp_path):
+    # fn-ptr PARAM and RETURN carry the value law; `takes(add)` passes
+    # the decayed address. MEASURED oracle answer 4.
+    src = (VAL_PRE +
+           "int takes(fp_t f){ return f == add; }\n"
+           "fp_t gives(void){ return add; }\n"
+           "int main(void){ return takes(add) * 2 + takes(gives())\n"
+           "  + (gives() == add); }\n")
+    assert run_pair(tmp_path, "v_argret", src, expect=4) == 4
+
+
+def test_table_positional_designated(tmp_path):
+    # Positional { add, 0 } AND designated { [1] = add, [0] = 0 } table
+    # inits are ADDRESS CONSTANTS in data.py (the T+10b decay arm):
+    # designated order cannot reorder the fills, unset slots stay 0.
+    # MEASURED: des(=7) + tab(=3) legs.
+    src = (VAL_PRE +
+           "fp_t tab[2] = { add, 0 };\n"
+           "fp_t des[3] = { [1] = add, [0] = 0 };\n"
+           "int main(void){ return (des[1] == add) * 4 + (des[2] == 0) * 2\n"
+           "  + (des[0] == 0) + (tab[0] == add) * 2 + (tab[1] == 0); }\n")
+    assert run_pair(tmp_path, "v_tab", src, expect=10) == 10

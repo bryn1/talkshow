@@ -386,40 +386,44 @@ def test_1h_star_spelled_chain_is_accepted(tmp_path):
 # ---- W2/W3 LOUD twins stay LOUD — now LIVE behind the declaration ------------
 
 def test_w2_fn_name_as_value_wall_live(tmp_path):
+    # M4 W2 VALUES FLIP (MC 12545, §2 R1): the W1-twin wall is DEAD —
+    # `f = add;` is a plain 8-byte address assignment (the twin of this
+    # pin's death is pinned RUN-PAIR by tests/test_core_m4w2.py).
     src = ("int add(int,int);\nint (*f)(int,int);\n"
            "int main(void){ f = add; return 0; }\n")
     gr, go, br = probe(tmp_path, "m2v", src)
     assert gr.returncode == 0
-    assert br.returncode == 2
-    assert "function name used as a value" in br.stderr      # types.py wall
-    assert br.stderr.splitlines()[0].split(":")[1] == "3"    # the VALUE line
+    assert br.returncode == 0, br.stderr
 
 
 def test_w2_addrof_fn_wall_live(tmp_path):
+    # M4 W2 VALUES FLIP (MC 12545): `f = &add;` — the measured
+    # data-reference emission (R_X86_64_32[S], never PLT32/GOT).
     src = ("int add(void);\nint (*f)(void);\n"
            "int main(void){ f = &add; return 0; }\n")
     gr, go, br = probe(tmp_path, "m2a", src)
     assert gr.returncode == 0
-    assert br.returncode == 2
-    assert "function name used as a value" in br.stderr
+    assert br.returncode == 0, br.stderr
 
 
 def test_w2_null_compare_wall(tmp_path):
+    # M4 W2 VALUES FLIP (MC 12545, §2 R10): NULL/0 compare rides the
+    # shipped int-relational law (the answer legs live in m4w2 v_null).
     src = ("int (*f)(void);\nint main(void){ return f == 0; }\n")
     gr, go, br = probe(tmp_path, "m2c", src)
     assert gr.returncode == 0
-    assert br.returncode == 2
-    assert "W2" in br.stderr and "function pointer" in br.stderr
+    assert br.returncode == 0, br.stderr
 
 
 def test_w2_member_null_bang_wall(tmp_path):
+    # M4 W2 VALUES FLIP (MC 12545): `!o->go` — the bang gate died with the
+    # compare gate; member fn-ptr truthiness rides generic truthy law.
     src = ("struct ops { int (*go)(void); };\n"
            "int t(struct ops *o){ return !o->go; }\n"
            "int main(void){ return 0; }\n")
     gr, go, br = probe(tmp_path, "m2b", src)
     assert gr.returncode == 0
-    assert br.returncode == 2
-    assert "W2" in br.stderr
+    assert br.returncode == 0, br.stderr
 
 
 def test_w3_call_through_var_wall(tmp_path):
@@ -501,30 +505,37 @@ def test_invalid_fn_returning_fn_via_typedef(tmp_path):
 # TYPES the expression (return/assign); an untyped if-condition keeps the
 # later call wall — both shapes pinned honestly below.
 SMATRIX = {
-    "S01_decl_local":         (2, "function name used as a value", 3),
+    # RE-PINNED MEASURED at M4 W2 VALUES (MC 12545 — first wall wins):
+    # the fn-VALUE legs (S01/S07/S17/S19/S23) now COMPILE clean; the
+    # table/ternary/member-init probes (S20/S21/S22/S24) advanced PAST the
+    # value layer and answer the W3 CALL wall (needle + line pinned);
+    # S14/S18 name the abstract-declarator wall precisely (W2 cast work,
+    # commit-2). Call walls S08-S13/S15/S16/S20-S22/S24 STAY — W3 (§2
+    # INDIRECT CALLS is not this card).
+    "S01_decl_local":         (0, None, 0),
     "S02_decl_param":         (0, None, 0),
     "S03_decl_return":        (2, "row 1g", 1),
     "S04_decl_member":        (0, None, 0),
     "S05_decl_typedef":       (0, None, 0),
     "S06_decl_typedef_chain": (2, "row 1h", 2),
-    "S07_decl_array_of_fnptr": (2, "function name used as a value", 3),
+    "S07_decl_array_of_fnptr": (0, None, 0),
     "S08_addrof_fn":          (2, "'function pointer' calls", 3),
     "S09_call_through_var":   (2, "callable 'f'", 3),
     "S10_call_deref_form":    (2, "'function pointer' calls", 3),
-    "S11_call_through_member": (2, None, 0),
-    "S12_call_through_array": (2, None, 0),
-    "S13_call_through_expr":  (2, None, 0),
-    "S14_call_through_cast":  (2, "'function pointer'", 0),
+    "S11_call_through_member": (2, "'function pointer' calls", 3),
+    "S12_call_through_array": (2, "'function pointer' calls", 3),
+    "S13_call_through_expr":  (2, "'function pointer' calls", 3),
+    "S14_call_through_cast":  (2, "'function pointer'", 2),
     "S15_null_compare":       (2, "'function pointer' calls", 2),
     "S16_null_bang_compare":  (2, "callable 'h'", 2),
-    "S17_fn_to_voidptr":      (2, "function name used as a value", 0),
-    "S18_voidptr_to_fn":      (2, None, 0),
-    "S19_fn_to_long":         (2, "function name used as a value", 0),
-    "S20_static_const_table": (2, None, 0),
-    "S21_designated_table":   (2, None, 0),
-    "S22_fnptr_ternary_arm":  (2, None, 0),
-    "S23_fnptr_as_arg":       (2, "function name used as a value", 0),
-    "S24_fnptr_struct_member_init": (2, None, 0),
+    "S17_fn_to_voidptr":      (0, None, 0),
+    "S18_voidptr_to_fn":      (2, "abstract declarator", 3),
+    "S19_fn_to_long":         (0, None, 0),
+    "S20_static_const_table": (2, "'function pointer' calls", 4),
+    "S21_designated_table":   (2, "'function pointer' calls", 4),
+    "S22_fnptr_ternary_arm":  (2, "'function pointer' calls", 2),
+    "S23_fnptr_as_arg":       (0, None, 0),
+    "S24_fnptr_struct_member_init": (2, "'function pointer' calls", 4),
 }
 
 

@@ -851,13 +851,9 @@ class TypeMap:
                     self._err(n, "'*' applied to a non-pointer (§4)", n.op)
                 return base.inner
             if n.op == "!":
-                t = self._decay(self._ty(n.operand))
-                if (isinstance(t, ast.PtrType)
-                        and isinstance(t.inner, ast.FuncType)):
-                    # M4 W1 W2-twin law (sibling of the compare gate in
-                    # _binary_ty): `!fp` is the NULL/0-test spelling.
-                    self._err(n, "'function pointer' comparison is a "
-                              "VALUE use — W2 (§5)", "!")
+                # M4 W2 VALUES (MC 12545): the W1 twin gate DIED — `!fp`
+                # is the NULL/0-test spelling and rides the generic
+                # truthiness law (the operand now TYPES to PtrType).
                 return self._int(n)
             return self._ty(n.operand)
         if isinstance(n, ast.Binary):
@@ -980,18 +976,10 @@ class TypeMap:
 
     def _binary_ty(self, n: ast.Binary) -> ast.Node:
         if n.op in ("==", "!=", "<", "<=", ">", ">=", "&&", "||"):
-            if n.op not in ("&&", "||"):
-                # M4 W1 W2-twin law: fn-ptr NULL/0 COMPARISON stays LOUD
-                # until W2 ships it (the shipped object-pointer law would
-                # otherwise make it SILENT — measured: `p == 0` is rc 0
-                # today). Both operands must TYPE to answer; typing them
-                # here only PRECEDES the same typing codegen does.
-                for side in (n.left, n.right):
-                    t = self._decay(self._ty(side))
-                    if (isinstance(t, ast.PtrType)
-                            and isinstance(t.inner, ast.FuncType)):
-                        self._err(n, "'function pointer' comparison is a "
-                                  "VALUE use — W2 (§5)", n.op)
+            # M4 W2 VALUES (MC 12545, plan §2 R10): the fn-ptr compare
+            # gate DIED — NULL/0/fn comparisons ride the SHIPPED
+            # relational law unchanged (int answers, generic 64-bit
+            # compares); no fn-ptr-specific arm survives here.
             return self._int(n)
         lt = self._decay(self._ty(n.left))
         rt = self._decay(self._ty(n.right))
@@ -1029,12 +1017,16 @@ class TypeMap:
         if gd is not None:
             return gd.type
         if n.name in self.sigs:
-            # §5: a function name used as a VALUE is a function pointer
-            # (M4 DEFER). This is the ONE wall — _ty and _ex_ident share it
-            # so any context (assign, call arg, return) names it identically.
-            self._err(n, "'{}' is a function name used as a value — 'function "
-                      "pointer' is not in the subset (§5)".format(n.name),
-                      n.name)
+            # M4 W2 VALUES (MC 12545, plan §2 R1): a function name used
+            # as a VALUE decays to a pointer to its function type — the
+            # SAME _decay W1's type law ships; the sigs table (params,
+            # ret, variadic) rebuilds the FuncType. This is the ONE arm:
+            # _ty and _ex_ident share it so any context (assign, compare,
+            # cast, arg, return) types identically.
+            params, ret, variadic = self.sigs[n.name]
+            ft = ast.FuncType(n.file, n.line, n.col, self._untype(ret),
+                              tuple(params), variadic)
+            return ast.PtrType(n.file, n.line, n.col, ft)
         # M3 §3.10: a register-asm bind TYPES as its declared T (the value
         # is C-visible; only its HOME differs — the register or a hidden
         # shadow slot). Resolution lands HERE so _ty and _ex_ident agree.

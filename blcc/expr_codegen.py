@@ -130,8 +130,14 @@ class ExprEmitter(MemFoldMixin):
                 self._load(ty, "{}(%rip)".format(n.name), at=n)
             return
         if n.name in self.sigs:
-            self._err(n, "'{}' is a function name used as a value — 'function "
-                     "pointer' is not in the subset (§5)".format(n.name), n.name)
+            # M4 W2 VALUES (MC 12545, plan §2 R1): a bare fn-name is a
+            # normal 8-byte rvalue — the function's ADDRESS. The kernel
+            # recipe law is MEASURED (-fno-pic -Os): taking an address is
+            # a DATA reference — `movq $add, ...` (R_X86_64_32S), never
+            # the PLT32 the direct-call form rides and (with -fno-pic)
+            # never a GOT load. The CALL path is UNTOUCHED.
+            self._e("movq ${}, %rax".format(n.name))
+            return
         self._err(n, "'{}' undeclared — not a local, parameter, global or "
                   "enum constant".format(n.name), n.name)
 
@@ -1303,9 +1309,14 @@ class ExprEmitter(MemFoldMixin):
             if n.name in self.globals:
                 self._e("leaq {}(%rip), %rax".format(n.name))
                 return
-            self._err(n, "no addressable object '{}': enum constants and "
-                     "function names have no address (§4/§5)".format(n.name),
-                     n.name)
+            if n.name in self.sigs:
+                # M4 W2 VALUES (MC 12545): `&fn` decays to the SAME
+                # measured data-reference emission as the bare name
+                # (b1k.s: `cmpq $add, slot(%rip)` — absolute immediate).
+                self._e("movq ${}, %rax".format(n.name))
+                return
+            self._err(n, "no addressable object '{}': enum constants have "
+                     "no address (§4)".format(n.name), n.name)
         if isinstance(n, ast.Unary) and n.op == "*":
             self._emit_expr(n.operand)                 # pointer value IS it
             return
