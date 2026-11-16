@@ -1,0 +1,214 @@
+"""M4 W3 (MC 12563) — INDIRECT CALLS, plan §2 (R1–R10).
+
+One file per wave-leg-cluster (file hygiene): commit-1 = the CORE law —
+a call through a FUNCTION-POINTER VALUE (bare `fp(x)`, the deref form
+`(*fp)(x)`, a typedef'd target, NULL-check-then-call) — with the oracle
+asm/reloc parity legs and run-pairs. Commit-2 = the addressing SHAPES
+(table slot, struct member, array of fns); commit-3 = %r10 variadic;
+commit-4 = the twins that STAY LOUD + §6 .set-alias.
+
+Oracle captured at .tmp/m4-w3/out/indir.s (gcc 11.4, kernel recipe
+-std=gnu89; -O0 -fno-pic for asm/reloc parity): the callee reaches a
+SCRATCH register and the call is `call *%reg` — NEVER a call relocation;
+the named call arm keeps R_X86_64_PLT32 name-0x4 (measured W2 fact).
+"""
+import re
+import subprocess
+import sys
+
+import pytest
+
+REPO = "/home/claudecode/Blaha/c-compiler"
+
+
+def blcc(args):
+    return subprocess.run([sys.executable, "-m", "blcc"] + args,
+                          capture_output=True, text=True, cwd=REPO,
+                          env={"PYTHONPATH": REPO, "PATH": "/usr/bin:/bin"})
+
+
+def gcc(args):
+    return subprocess.run(["gcc", "-std=gnu89", "-Os"] + args,
+                          capture_output=True, text=True)
+
+
+def link_run(tmp_path, tag, o):
+    base = tmp_path / (tag + ".bin")
+    r = subprocess.run(["ld", "-static", "-o", str(base), str(o)],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    run = subprocess.run([str(base)], capture_output=True, text=True)
+    return run.returncode
+
+
+# ---- R1/R2: the CORE call-through-value law -------------------------------
+
+VIA = ("typedef unsigned long size_t;\n"
+       "static long add(long a, long b){ return a + b; }\n"
+       "static long via(long (*f)(long, long)){ return f(4, 5); }\n"
+       "int main(void){ return (int)via(add); }\n")
+
+
+def _pair(tmp_path, tag, src, expect):
+    """ORACLE-DECIDES (the shipped run_pair shape): full link both sides
+    — gcc with its CRT, blcc with the §6 blob — run, SAME exit code."""
+    s = tmp_path / (tag + ".c")
+    s.write_text(src)
+    gx = tmp_path / (tag + ".gcc")
+    gr = gcc([str(s), "-o", str(gx)])
+    assert gr.returncode == 0, "oracle must build:\n" + gr.stderr
+    bx = tmp_path / (tag + ".blcc")
+    br = blcc([str(s), "-o", str(bx)])
+    assert br.returncode == 0, "blcc must build:\n" + br.stderr
+    g = subprocess.run([str(gx)], capture_output=True, text=True, timeout=30)
+    b = subprocess.run([str(bx)], capture_output=True, text=True, timeout=30)
+    assert g.returncode == b.returncode == expect, \
+        "run-pair: gcc {} blcc {} expect {}".format(
+            g.returncode, b.returncode, expect)
+
+
+def test_call_through_fnptr_value(tmp_path):
+    _pair(tmp_path, "iv0", VIA, 9)              # 4+5 == 9, both sides
+
+
+def test_call_star_deref_form(tmp_path):
+    # `(*fp)(x)` IS `fp(x)` (measured rc0; the §1 pointer arithmetic law)
+    src = VIA.replace("return f(4, 5);", "return (*f)(4, 5);")
+    _pair(tmp_path, "iv1", src, 9)
+
+
+def test_typedef_fnptr_param_call(tmp_path):
+    # THE corpus witness behind the 2 undeclared-`cmp` call first-blockers:
+    # `typedef int (*cmp_t)(const void*, const void*); … c(a, b);`
+    src = ("typedef unsigned long size_t;\n"
+           "typedef int (*cmp_t)(const void *, const void *);\n"
+           "static long a[2] = {7, 9};\n"
+           "static int mycmp(const void *x, const void *y);"
+           "static long sortish(cmp_t c){ return c(a, a + 1); }\n"
+           "static int mycmp(const void *x, const void *y){ "
+           "(void)x; (void)y; return 3; }\n"
+           "int main(void){ return (int)sortish(mycmp); }\n")
+    _pair(tmp_path, "iv2", src, 3)
+
+
+def test_null_check_then_call(tmp_path):
+    # the shipped truthy law on a fn-ptr + the call — no compiler check
+    src = ("typedef unsigned long size_t;\n"
+           "static long add(long a, long b){ return a + b; }\n"
+           "static long nullish(long (*f)(long, long)){ "
+           "if (f) return f(2, 5); return 0; }\n"
+           "int main(void){ return (int)nullish(add); }\n")
+    _pair(tmp_path, "iv3", src, 7)
+
+
+def test_call_target_load_is_scratch_reg_indirect(tmp_path):
+    # Oracle shape law (indir.s): the indirect call is `call *%reg` and
+    # the .text carries NO relocation for it; the NAMED call in the same
+    # TU keeps R_X86_64_PLT32 name-0x4 — the TWO addressing shapes stay
+    # DIFFERENT in blcc too (this card's contract row). SAME flags both
+    # sides (-O0 -fno-pic): -Os tail-calls the direct arm away and the
+    # comparison would chase a shape gcc never emitted.
+    src = ("typedef unsigned long size_t;\n"
+           "long add(long, long);\n"
+           "static long via(long (*f)(long, long)){ return f(4, 5); }\n"
+           "int main(void){ return (int)(via(add) + add(1, 2)); }\n")
+    s = tmp_path / "iv4.c"
+    s.write_text(src)
+    go = tmp_path / "iv4.gcc.o"
+    gr = subprocess.run(["gcc", "-std=gnu89", "-O0", "-fno-pic", "-c",
+                         str(s), "-o", str(go)],
+                        capture_output=True, text=True)
+    assert gr.returncode == 0, gr.stderr
+    bo = tmp_path / "iv4.blcc.o"
+    br = blcc(["-c", str(s), "-o", str(bo)])
+    assert br.returncode == 0, br.stderr
+    bt = blcc(["--emit-asm", "-c", str(s), "-o",
+                str(tmp_path / "iv4.b")]).stdout
+    assert re.search(r"call \*%r", bt), bt          # indirect: star form
+    gt_r = subprocess.run(["readelf", "-r", str(go)],
+                          capture_output=True, text=True).stdout
+    bt_r = subprocess.run(["readelf", "-r", str(bo)],
+                          capture_output=True, text=True).stdout
+
+    def text_arms(out):
+        blk = re.search(r"\.rela\.text.*?\n(.*?)(?:\n\n|\Z)", out, re.S)
+        assert blk, out
+        return re.findall(r"(R_X86_64_\S+)\s+\S+\s+(\S+ ?[+-] ?\S+)",
+                          blk.group(1))
+    g_arms, b_arms = text_arms(gt_r), text_arms(bt_r)
+    # 1. the DIRECT call arm: PLT32 `add-4` on BOTH (W2-measured fact,
+    #    now exercised through the kernel-recipe flags on a TU that also
+    #    carries an indirect call).
+    assert ("R_X86_64_PLT32", "add - 4") in g_arms
+    assert ("R_X86_64_PLT32", "add - 4") in b_arms, (g_arms, b_arms)
+    # 2. the INDIRECT call arm adds NOTHING on either side: the remaining
+    #    text reloc is the fn-VALUE arm (`via(add)` — gcc answers
+    #    R_X86_64_32, blcc the W2-pinned R_X86_64_32S on movq $sym —
+    #    that name split is the W2 value law, not a W3 call fact).
+    g_rest = [a for a in g_arms if a[0] != "R_X86_64_PLT32"]
+    b_rest = [a for a in b_arms if a[0] != "R_X86_64_PLT32"]
+    assert len(g_rest) == len(b_rest) == 1, (g_arms, b_arms)
+    assert g_rest[0][1].startswith("add") and b_rest[0][1].startswith("add")
+
+
+# ---- the twins that STAY LOUD ---------------------------------------------
+
+def test_undeclared_ident_call_stays_loud(tmp_path):
+    src = "int main(void){ return mystery(1); }\n"
+    s = tmp_path / "lv0.c"
+    s.write_text(src)
+    br = blcc(["-c", str(s), "-o", str(tmp_path / "lv0.o")])
+    assert br.returncode == 2
+    assert "no declaration for callable" in br.stderr   # sentence survives
+
+
+def test_object_call_is_loud_twin(tmp_path):
+    # gcc rc1: `called object is not a function or function pointer`
+    src = "int main(void){ long x = 3; return x(1); }\n"
+    s = tmp_path / "lv1.c"
+    s.write_text(src)
+    gr = gcc(["-c", str(s), "-o", str(tmp_path / "lv1.gcc.o")])
+    assert gr.returncode == 1, gr.stderr
+    br = blcc(["-c", str(s), "-o", str(tmp_path / "lv1.o")])
+    assert br.returncode == 2 and "function pointer" in br.stderr, br.stderr
+
+
+def test_indirect_arity_is_loud(tmp_path):
+    src = ("typedef unsigned long size_t;\n"
+           "static long add(long a, long b){ return a + b; }\n"
+           "static long via(long (*f)(long, long)){ return f(4); }\n"
+           "int main(void){ return (int)via(add); }\n")
+    s = tmp_path / "lv2.c"
+    s.write_text(src)
+    gr = gcc(["-c", str(s), "-o", str(tmp_path / "lv2.gcc.o")])
+    assert gr.returncode == 1, gr.stderr
+    br = blcc(["-c", str(s), "-o", str(tmp_path / "lv2.o")])
+    assert br.returncode == 2, br.stderr
+
+
+def test_more_than_six_named_stays_loud(tmp_path):
+    # R9 (plan §2): >6 NAMED args on an indirect target KEEPS the shipped
+    # §6-ABI sentence — the gcc twin ACCEPTS (rc0): NAMED LOUD-DIV row.
+    src = ("typedef unsigned long size_t;\n"
+           "static long g7(long a, long b, long c, long d, long e, long f,"
+           " long g){ return a+b+c+d+e+f+g; }\n"
+           "static long via(long (*h)(long,long,long,long,long,long,long))"
+           "{ return h(1,2,3,4,5,6,7); }\n"
+           "int main(void){ return (int)via(g7); }\n")
+    s = tmp_path / "lv3.c"
+    s.write_text(src)
+    gr = gcc(["-c", str(s), "-o", str(tmp_path / "lv3.gcc.o")])
+    assert gr.returncode == 0, gr.stderr           # gcc accepts (div row)
+    br = blcc(["-c", str(s), "-o", str(tmp_path / "lv3.o")])
+    assert br.returncode == 2
+    assert "beyond the \u00a76 call ABI" in br.stderr    # sentence survives
+
+
+def test_fnptr_call_wall_sentence_is_dead(tmp_path):
+    # The W3 wall sentence must NOT appear on an accepted indirect call
+    # (mirrors the W1 sentence-death pin).
+    s = tmp_path / "dv0.c"
+    s.write_text(VIA)
+    br = blcc(["-c", str(s), "-o", str(tmp_path / "dv0.o")])
+    assert br.returncode == 0, br.stderr
+    assert "not in the subset" not in br.stderr

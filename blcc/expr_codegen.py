@@ -461,7 +461,20 @@ class ExprEmitter(MemFoldMixin):
         self._e(line)
 
     def _ex_call(self, n) -> None:
+        if not isinstance(n.callee, ast.Ident):
+            # M4 W3 (MC 12563) §2: the TARGET is an expression value —
+            # the indirect arm (deref form, member, slot, cast).
+            self._ex_call_ind(n)
+            return
         name = n.callee.name
+        if (name not in self.sigs and name not in BUILTINS
+                and name not in predef.MEM_FOLDS
+                and name not in predef.MEM_PLAIN
+                and name not in predef.VA_FOLDS
+                and name not in predef.INTRINSIC_FOLDS
+                and not name.startswith("__builtin")):
+            self._ex_call_ind(n)               # §2 R1: fn-ptr VARIABLE
+            return
         if name in predef.VA_FOLDS:
             # §2.7: the four va intrinsics — never a symbol, never a
             # sigs entry; emitted here from the pinned field layout.
@@ -581,17 +594,34 @@ class ExprEmitter(MemFoldMixin):
                 # residual: not measured in the tiny universe).
                 self._err(n, "more than 6 arguments is beyond the §6 call "
                           "ABI", name, "asm")
-        slots = []
-        # temp slots of THIS call start at fn.temp_top + 1 — a nested call
-        # evaluated after another temp (e.g. `a*100 + f(...)`) is NOT based
-        # at T1; the stack-push addressing below must honour the base.
-        slot_base = self.fn.temp_top
         # M4 W3 COMMIT-0: the WINNER law — a re-declared builtin stages
         # and converts through the USER prototype (same precedence).
         decl_params = (self.sigs[name][0]
                        if name not in BUILTINS or name in self.sigs
                        else None)
-        for idx, a in enumerate(n.args):
+        self._stage_call(n.args, want, decl_params, variadic, name)
+
+    # -- staging + call tail: ONE mechanism for named AND indirect calls ----
+
+    def _stage_call(self, args, want, decl_params, variadic, call_arm,
+                    target=None) -> None:
+        """§2.14 caller sequence, the single home of: args → temps →
+        rdi/rsi/rdx/rcx/r8/r9, the >6-variadic push block, `%al = 0` on a
+        variadic call, and the `call` itself. `call_arm` is the operand
+        text ("add" for the direct arm — the shipped R_X86_64_PLT32
+        shape; "*%r10" / "*%rax" for the indirect arms of M4 W3). A
+        variadic indirect target pre-loaded %r10 BEFORE this ran (the
+        push block moves %rsp — the target cannot ride a temp slot);
+        the non-variadic indirect target is `target`, the callee
+        EXPRESSION, evaluated here AFTER the args are staged (the
+        evaluation clobbers %rax; the staged args must already be in
+        their own slots) and it lands in %rax for `call *%rax`."""
+        slots = []
+        # temp slots of THIS call start at fn.temp_top + 1 — a nested call
+        # evaluated after another temp (e.g. `a*100 + f(...)`) is NOT based
+        # at T1; the stack-push addressing below must honour the base.
+        slot_base = self.fn.temp_top
+        for idx, a in enumerate(args):
             if decl_params is not None and idx < want:
                 self._fp_guard(self._ty(a), decl_params[idx].type, a)
             self._emit_expr(a)
@@ -618,7 +648,7 @@ class ExprEmitter(MemFoldMixin):
                 # live arg slot (rdi..r9 still hold args 1..6 here).
                 self._e("pushq {}(%rsp)".format(off))
             self._e("xorl %eax, %eax")
-            self._e("call {}".format(name))
+            self._e("call {}".format(call_arm))
             self._e("addq ${}, %rsp".format(16 + 8 * (len(slots) - 6)))
             self._unt(len(slots))
             return
@@ -629,7 +659,75 @@ class ExprEmitter(MemFoldMixin):
             # §2.14: the vector-register count — GP-only universe ⇒ 0,
             # pinned on EVERY variadic call site (call3 leg).
             self._e("xorl %eax, %eax")
-        self._e("call {}".format(name))
+        if target is not None:
+            self._emit_expr(target)      # → %rax for `call *%rax`
+        self._e("call {}".format(call_arm))
+
+    def _ex_call_ind(self, n) -> None:
+        """M4 W3 (MC 12563) §2 R1–R10: the INDIRECT CALL — the target is
+        a VALUE (fn-ptr variable / `(*fp)` designator / table slot /
+        struct member). The arity, §2.14 scalar-extra and >6-§6-ABI law
+        all ride the TARGET FuncType, identical to the named arm; the
+        ADDRESSING differs (measured gcc -O0 oracle, .tmp/m4-w3/indir.s):
+        the callee reaches a scratch register and the call is
+        `call *%reg` — a named call emits the R_X86_64_PLT32 relocation,
+        an indirect call emits NO call-site relocation at all (the two
+        shapes are pinned apart in tests/test_core_m4w3_ind.py)."""
+        tgt = self._decay(self._ty(n.callee))
+        if isinstance(tgt, ast.PtrType) and \
+                isinstance(tgt.inner, ast.FuncType):
+            ft = tgt.inner
+        elif isinstance(tgt, ast.FuncType):
+            ft = tgt
+        else:
+            self._err(n, "called object is not a 'function' or a 'function "
+                      "pointer' (§8 — gcc rc1 twin)", "call")
+        want = len(ft.params)
+        # `(*fp)(x)` IS `fp(x)` (measured rc0, the pointer law): a
+        # deref whose expression TYPES as a FuncType is the function
+        # DESIGNATOR — the star folds through the decay and must NOT
+        # emit a memory load (a second load would chase the target's
+        # first word — a segfault, not a call).
+        ce = n.callee
+        while isinstance(ce, ast.Unary) and ce.op == "*" \
+                and isinstance(self._ty(ce), ast.FuncType):
+            ce = ce.operand
+        if isinstance(self._decay(ft.ret), ast.StructType):
+            self._err(n, "call to a 'struct'-returning function is 'struct "
+                      "assignment' (§5)", ft.ret.tag or "struct", "asm")
+        if ft.variadic:
+            if len(n.args) < want:
+                self._err(n, "variadic 'function pointer' call passes {} "
+                          "argument(s); the target names {} (§2.14)".format(
+                              len(n.args), want), "function pointer")
+            for a in n.args[want:]:
+                ety = self._decay(self._ty(a))
+                if isinstance(ety, ast.BuiltinType) and ety.name in (
+                        "float", "double"):
+                    self._err(n, "float/double variadic extra argument at a "
+                              "'function pointer' call is not in the subset "
+                              "(§2.14)", "float")
+                if isinstance(ety, ast.StructType):
+                    self._err(n, "struct/union variadic extra argument "
+                              "breaks the 8-byte-slot model (§2.14)",
+                              "struct")
+        else:
+            if len(n.args) != want:
+                self._err(n, "'function pointer' call has {} argument(s), "
+                          "the target takes {} (§4)".format(
+                              len(n.args), want), "function pointer")
+            if want > 6:
+                # §2.14: FIXED-arity >6 KEEPS the shipped LOUD sentence —
+                # on the indirect arm too (M48 residual law, target-form).
+                self._err(n, "more than 6 arguments is beyond the §6 call "
+                          "ABI", "function pointer", "asm")
+        if ft.variadic:
+            self._emit_expr(ce)                # push block moves %rsp —
+            self._e("movq %rax, %r10")         # the target rides %r10
+            self._stage_call(n.args, want, ft.params, True, "*%r10")
+        else:
+            self._stage_call(n.args, want, ft.params, False, "*%rax",
+                             target=ce)
 
     def _ex_cast(self, n) -> None:
         self._fp_guard(self._ty(n.operand), n.type, n)

@@ -426,20 +426,28 @@ def test_w2_member_null_bang_wall(tmp_path):
     assert br.returncode == 0, br.stderr
 
 
-def test_w3_call_through_var_wall(tmp_path):
+def test_w3_call_through_var_now_accepted(tmp_path):
+    # M4 W3 COMMIT-1 FLIP (MC 12563, §2 R1): the fn-ptr VARIABLE call
+    # falls to the indirect-call law — `f(1)` on `int (*f)(int)` types
+    # and emits `call *%reg` (measured gcc rc0 twin; the W1 probe posture
+    # "no declaration for callable" was the W3 TODO, now retired). The
+    # runtime behaviour of an UNSET pointer is not the compile contract —
+    # the oracle answers rc0 at -Os and blcc now matches.
     src = ("int main(void){ int (*f)(int); return f(1); }\n")
     gr, go, br = probe(tmp_path, "m3v", src)
     assert gr.returncode == 0
-    assert br.returncode == 2
-    assert "no declaration for callable 'f'" in br.stderr
+    assert br.returncode == 0, br.stderr
 
 
-def test_w3_call_deref_form_wall(tmp_path):
+def test_w3_call_deref_form_now_accepted(tmp_path):
+    # M4 W3 COMMIT-1 FLIP (MC 12563, §2 R2): `(*f)(x)` IS `f(x)` — the
+    # W1 §5 wall sentence dies; the deref rides the DESIGNATOR fold (no
+    # memory load — pinned with run-pairs in tests/test_core_m4w3_ind.py).
     src = ("int main(void){ int (*f)(int); return (*f)(1); }\n")
     gr, go, br = probe(tmp_path, "m3d", src)
     assert gr.returncode == 0
-    assert br.returncode == 2
-    assert "'function pointer' calls are not in the subset" in br.stderr
+    assert br.returncode == 0, br.stderr
+    assert "'function pointer' calls are not in the subset" not in br.stderr
 
 
 def test_abstract_fnptr_decl_stays_loud(tmp_path):
@@ -507,14 +515,14 @@ def test_invalid_fn_returning_fn_via_typedef(tmp_path):
 # TYPES the expression (return/assign); an untyped if-condition keeps the
 # later call wall — both shapes pinned honestly below.
 SMATRIX = {
-    # RE-PINNED MEASURED at M4 W2 VALUES (MC 12545 — first wall wins):
-    # the fn-VALUE legs (S01/S07/S17/S19/S23) now COMPILE clean; the
-    # table/ternary/member-init probes (S20/S21/S22/S24) advanced PAST the
-    # value layer and answer the W3 CALL wall (needle + line pinned);
-    # S14/S18 advanced PAST the abstract-declarator wall (W2 commit-2
-    # cast/_Generic-key spelling) and answer the SAME W3 CALL wall.
-    # Call walls S08-S13/S15/S16/S20-S22/S24 STAY — W3 (§2
-    # INDIRECT CALLS is not this card).
+    # RE-PINNED MEASURED at M4 W3 COMMIT-1 (MC 12563, §2): the W3 CALL
+    # wall DIED for the value-shapes — S08-S13/S15/S16/S24 compile clean
+    # (bare call, deref form, member, array slot, chained expr, the two
+    # NULL-check shapes, member-init slot call). STILL LOUD (measured at
+    # this tree; W3 commit-2 territory — the callee EXPRESSION types cast/
+    # ternary/const-qualified struct are the remaining parse-side gap,
+    # the §8 twin sentence answers them in the meantime): S14/S18 (cast
+    # target), S20/S21 (const-qualified struct target), S22 (ternary).
     "S01_decl_local":         (0, None, 0),
     "S02_decl_param":         (0, None, 0),
     "S03_decl_return":        (2, "row 1g", 1),
@@ -522,23 +530,23 @@ SMATRIX = {
     "S05_decl_typedef":       (0, None, 0),
     "S06_decl_typedef_chain": (2, "row 1h", 2),
     "S07_decl_array_of_fnptr": (0, None, 0),
-    "S08_addrof_fn":          (2, "'function pointer' calls", 3),
-    "S09_call_through_var":   (2, "callable 'f'", 3),
-    "S10_call_deref_form":    (2, "'function pointer' calls", 3),
-    "S11_call_through_member": (2, "'function pointer' calls", 3),
-    "S12_call_through_array": (2, "'function pointer' calls", 3),
-    "S13_call_through_expr":  (2, "'function pointer' calls", 3),
-    "S14_call_through_cast":  (2, "'function pointer' calls", 2),
-    "S15_null_compare":       (2, "'function pointer' calls", 2),
-    "S16_null_bang_compare":  (2, "callable 'h'", 2),
+    "S08_addrof_fn":          (0, None, 0),
+    "S09_call_through_var":          (0, None, 0),
+    "S10_call_deref_form":          (0, None, 0),
+    "S11_call_through_member":          (0, None, 0),
+    "S12_call_through_array":          (0, None, 0),
+    "S13_call_through_expr":          (0, None, 0),
+    "S14_call_through_cast":  (2, "not a 'function' or a 'function pointer'", 2),
+    "S15_null_compare":          (0, None, 0),
+    "S16_null_bang_compare":          (0, None, 0),
     "S17_fn_to_voidptr":      (0, None, 0),
-    "S18_voidptr_to_fn":      (2, "'function pointer' calls", 3),
+    "S18_voidptr_to_fn":      (2, "not a 'function' or a 'function pointer'", 3),
     "S19_fn_to_long":         (0, None, 0),
-    "S20_static_const_table": (2, "'function pointer' calls", 4),
-    "S21_designated_table":   (2, "'function pointer' calls", 4),
-    "S22_fnptr_ternary_arm":  (2, "'function pointer' calls", 2),
+    "S20_static_const_table": (2, "not a 'function' or a 'function pointer'", 4),
+    "S21_designated_table":   (2, "not a 'function' or a 'function pointer'", 4),
+    "S22_fnptr_ternary_arm":  (2, "not a 'function' or a 'function pointer'", 2),
     "S23_fnptr_as_arg":       (0, None, 0),
-    "S24_fnptr_struct_member_init": (2, "'function pointer' calls", 4),
+    "S24_fnptr_struct_member_init":          (0, None, 0),
 }
 
 

@@ -41,8 +41,9 @@ table fills, NULL/0 cmp, fn↔void*/long"):
  static ADDRESS CONSTANTS (data.py _const decay, T+10b law) — they land in
  the ORACLE'S SECTION (R/.rodata for const, .data/.bss otherwise) with
  exact nm/section parity (§6).
- STAY LOUD (W3): any CALL through a pointer-valued fn (`fp(x)`, `(*fp)(x)`,
- `tbl[i](x)`) and the 1g/1h twins.
+ SUPERSEDED (M4 W3, MC 12563): calls through fn-pointer VALUES — bare
+ `fp(x)`, `(*fp)(x)`, `tbl[i](x)` — are W3's CONTRACT and LAND there;
+ this file keeps the VALUES-only legs (the 1g/1h twins stay LOUD).
 
 Every leg: gcc 11.4 -std=gnu89 -Os oracle FIRST; blcc posture; RUN-PAIRS
 (gcc-linked exe vs blcc-linked exe, same exit code) wherever a value,

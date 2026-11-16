@@ -882,7 +882,20 @@ class TypeMap:
             # §1c: the comma operator's value is its RIGHT operand.
             return self._ty(n.right)
         if isinstance(n, ast.Call):
+            if not isinstance(n.callee, ast.Ident):
+                # M4 W3 (MC 12563) §2: the target is a VALUE — the call
+                # types as the TARGET's return (`(*fp)(x)`, `o->f(x)`).
+                return self._ind_call_ty(n)
             name = n.callee.name
+            if (name not in self.sigs and name not in BUILTINS
+                    and name not in predef.MEM_FOLDS
+                    and name not in predef.MEM_PLAIN
+                    and name not in predef.VA_FOLDS
+                    and name not in predef.INTRINSIC_FOLDS
+                    and not name.startswith("__builtin")):
+                # M4 W3: a fn-ptr VARIABLE answers the name — the §2 R1
+                # law (the parse gate already LOUDed non-callables).
+                return self._ind_call_ty(n)
             if name in BUILTINS and name not in self.sigs:
                 # M4 W3 COMMIT-0 (MC 12563) WINNER law: the §6 table
                 # answers the UNDECLARED spelling only; a re-declared
@@ -922,8 +935,7 @@ class TypeMap:
                                                        n.col, "void"))
                 return ast.BuiltinType(n.file, n.line, n.col, "int")
             return self.sigs[name][1]
-        if isinstance(n, ast.Generic):
-            # §2.6d: the type of the SELECTED association's expression.
+        if isinstance(n, ast.Generic):            # §2.6d: the type of the SELECTED association's expression.
             return self._ty(self.generic_select(n)[1])
         if isinstance(n, (ast.Assign, ast.AssignOp)):
             return self._ty(n.target)
@@ -937,6 +949,19 @@ class TypeMap:
                 self._err(n, "'[]' applied to a non-pointer/array (§4)", "[]")
             return base.inner
         self._err(n, "cannot type this expression", self._what(n))
+
+    def _ind_call_ty(self, n: ast.Call) -> ast.Node:
+        """M4 W3 (MC 12563) §2 R1: type a call through a VALUE — the
+        callee expression decays to PtrType(FuncType) (or the FuncType
+        designator `(*fp)`, which the decay rebuilds); the call's type is
+        the TARGET's return. A non-callable target answers the §8 twin
+        (the parse gate is the first line; this is the engine's)."""
+        tgt = self._decay(self._ty(n.callee))
+        if isinstance(tgt, ast.PtrType) and \
+                isinstance(tgt.inner, ast.FuncType):
+            return tgt.inner.ret
+        self._err(n, "called object is not a 'function' or a 'function "
+                  "pointer' (§8 — gcc rc1 twin)", "call")
 
     def _cond_ty(self, n: ast.Cond) -> ast.Node:
         """§1c AMENDMENT v4.2 (MC 12486) — the conditional's result type,

@@ -67,6 +67,27 @@ class ExprParser:
         self.objsize = objsize                    # §1 row 19 object_size
         self._lenient_calls = False               # inside GNU fold args
 
+    def _callable_ty(self, node):
+        """M4 W3 (MC 12563) §2 R1: the call-TARGET view of a callee
+        expression — its type DECAYED to a callable: PtrType(FuncType)
+        (the fn-ptr value) or FuncType (the designator `(*fp)` — C folds
+        the deref back through the decay). Qualifiers drop. None = NOT a
+        call target; the §8 gcc-rc1-twin sentence answers. Light mirror
+        of types._decay — parse-side only (the full engine types the same
+        node again for the call's RETURN type)."""
+        ty = self.expr_type(node)
+        while isinstance(ty, ast.Qualified):
+            ty = ty.inner
+        if isinstance(ty, ast.FuncType):
+            return ty
+        if isinstance(ty, ast.PtrType):
+            inner = ty.inner
+            while isinstance(inner, ast.Qualified):
+                inner = inner.inner
+            if isinstance(inner, ast.FuncType):
+                return inner
+        return None
+
     # -- entry: assignment level (right-associative) ------------------------
 
     def parse_expression(self) -> ast.Node:
@@ -350,12 +371,19 @@ class ExprParser:
                     continue
                 args = self._parse_call_args(t)
                 if not isinstance(node, ast.Ident):
-                    raise DiagError(
-                        "sema", t.file, t.line, t.col,
-                        "'function pointer' calls are not in the subset (§5) "
-                        "— only named calls of declared functions or the §6 "
-                        "builtins", "call")
-                if not self.callable_known(node.name):
+                    # M4 W3 (MC 12563) §2 R1/R2/R5: the call TARGET may be
+                    # any expression that TYPES as a function pointer
+                    # (`(*fp)(x)`, `o->f(x)`, `t[i](x)`). The M1 §5 wall
+                    # ("'function pointer' calls … only named calls") dies
+                    # HERE; gcc's rc1 twin for a NON-callable target
+                    # (`long x; x(1);`) replaces it — LOUD, never silent.
+                    if not self._lenient_calls and \
+                            self._callable_ty(node) is None:
+                        raise DiagError(
+                            "sema", t.file, t.line, t.col,
+                            "called object is not a 'function' or a "
+                            "'function pointer' (§8 — gcc rc1 twin)", "call")
+                elif not self.callable_known(node.name):
                     if self._lenient_calls:
                         # Inside a __builtin_choose_expr/__builtin_expect
                         # argument: parse-and-discard (§2.6) — the arm that
@@ -363,10 +391,24 @@ class ExprParser:
                         # is never analyzed.
                         node = ast.Call(t.file, t.line, t.col, node, args)
                         continue
-                    raise DiagError(
-                        "sema", t.file, t.line, t.col,
-                        "no declaration for callable '{}' — not a declared "
-                        "function or §6 builtin".format(node.name), node.name)
+                    if self.expr_type(node) is None:
+                        raise DiagError(
+                            "sema", t.file, t.line, t.col,
+                            "no declaration for callable '{}' — not a "
+                            "declared function or §6 builtin".format(
+                                node.name), node.name)
+                    if self._callable_ty(node) is None:
+                        # declared but NOT callable (`long x; x(1);`):
+                        # gcc rc1 "called object…" — the same §8 twin the
+                        # expression-form target above answers with.
+                        raise DiagError(
+                            "sema", t.file, t.line, t.col,
+                            "called object '{}' is not a 'function' or a "
+                            "'function pointer' (§8 — gcc rc1 twin)".format(
+                                node.name), node.name)
+                    # M4 W3: a fn-ptr VARIABLE answers — the §2 R1 law.
+                    # The undeclared-IDENTIFIER wall above keeps its exact
+                    # sentence (expr_type None = name not in any scope).
                 node = ast.Call(t.file, t.line, t.col, node, args)
             elif t.text == "[":
                 self.s.next()
