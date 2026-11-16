@@ -1,3 +1,6 @@
+# LINES reason: one gate-divergence class = one leg cluster; the RED-at-tip
+# witnesses, the RECURRENCE arity ladder and the law shape pins of the
+# M4 W3-fix split across files would hide which gate row each leg closes.
 """M4 W3-fix (MC 12573) — the indirect-call TARGET LAW, gate classes C1/C2.
 
 The W3 gate (MC 12404.2.53, verdict m4-w3-gate-verdict.md) caught two
@@ -28,7 +31,10 @@ Every fixture below is PORTED FROM the gate battery (fixtures frozen at
 .tmp/m4-w3-gate/out/), RED captured at 550998d (out/red-at-550998d in
 .tmp/m4-w3fix/), GREEN at this fix. Expect values are the gcc 11.4
 -Os oracle's exits RE-MEASURED this session (two gate-battery expect
-arithmetic typos corrected: G24 19 not 21, G27 170 not 50).
+arithmetic typos corrected: G24 19 not 21, G27 170 not 50). Gate class
+C3 (the over-LOUD paren-arithmetic arrow base) rides the same file —
+its legs RED-capture on the parser at 550998d (byte-identical at the
+C1/C2 commit) and land with the parse-side fix in the C3 commit.
 """
 import re
 import subprocess
@@ -317,6 +323,67 @@ def test_c2_nested_widemul_arg_r10(tmp_path):                # gate G25 7
            "int main(void){ slots[1] = vsum;\n"
            "  return (int)slots[1](1L, h(2)); }\n")
     _pair(tmp_path, "wfix-g25", src, 7)
+
+
+# ---- C3: the arrow-call on a PARENTHESIZED ARITHMETIC base (gate C3) -------
+# blcc was over-LOUD: `called object is not a 'function'` (rc2) where gcc is
+# rc0 both sides. Root cause: the PARSE-side light typer (parser.expr_type)
+# had no pointer-arithmetic arm, so `(p+2)->fn` never reached the callable
+# view — the engine types the same node fine. Fix: ONE Binary arm mirroring
+# the engine's ptr +/- int = ptr law (a both-pointer difference stays the
+# §8 twin). Corpus volume 0 (all `)->ident(` witnesses are paren-IDENT
+# bases — the G06d fairness leg below); the arity>=4 leg (F06) additionally
+# proves the C1 TARGET LAW holds for these bases once accepted.
+
+def test_c3_arrow_paren_arith_base(tmp_path):                # gate G06a 42
+    src = ("struct op { long (*fn)(long,long); long pad; };\nstruct op arr[3];\n"
+           "long f(long a, long b){ return a+b; }\n"
+           "int main(void){ struct op *p = arr; long r; (p+2)->fn = f;\n"
+           "  r = (p+2)->fn(40,2); return (int)r; }\n")
+    _pair(tmp_path, "wfix-g06a", src, 42)
+
+
+def test_c3_arrow_paren_arith_base_plus_readback(tmp_path):  # gate G06b 42
+    src = ("struct op { long (*fn)(long,long); long pad; };\nstruct op arr[3];\n"
+           "long f(long a, long b){ return a+b; }\n"
+           "int main(void){ struct op *p = arr; long r; (p+2)->fn = f;\n"
+           "  r = (p+2)->fn(40,2); return (int)(r + (p+1)->pad); }\n")
+    _pair(tmp_path, "wfix-g06b", src, 42)
+
+
+def test_c3_arrow_paren_arith_base_4args(tmp_path):          # gate F06 142
+    # the COMPOUND row: C3 acceptance + arity 4 through an arithmetic
+    # arrow base — pre-C1-fix this would have paired GREEN on exit code…
+    # no: it would have diverged (rcx clobber) — both laws ride this leg.
+    src = ("struct op { long (*fn)(long,long,long,long); long pad; };\n"
+           "struct op arr[3];\n"
+           "long f(long a, long b, long c, long d){ return a+3*b+9*c+27*d; }\n"
+           "int main(void){ int i = 1; struct op *p = arr; (p+2)->fn = f;\n"
+           "  return (int)(p+2)->fn(1,2,3,4); }\n")
+    _pair(tmp_path, "wfix-f06", src, 142)
+
+
+def test_c3_paren_ident_base_fairness(tmp_path):             # gate G06d 42
+    # `(p)->fn(...)` (paren-IDENT base) already paired green pre-fix —
+    # the acceptance fix must not disturb it (the corpus's 13-file
+    # `skb)->output(...)` family rides exactly this arm).
+    src = ("struct op { long (*fn)(long,long); long pad; };\nstruct op arr[3];\n"
+           "long f(long a, long b){ return a+b; }\n"
+           "int main(void){ struct op *p = arr+2; p->fn = f;\n"
+           "  return (int)((p)->fn(40,2)); }\n")
+    _pair(tmp_path, "wfix-g06d", src, 42)
+
+
+def test_c3_noncallable_paren_base_stays_loud(tmp_path):
+    # the §8 gcc-rc1 twin survives the acceptance: `(a-b)(1)` on LONGS is
+    # not a call target (both-pointer difference is never a pointer).
+    src = "int main(void){ long a = 3, b = 1; return (int)(a-b)(1); }\n"
+    s = tmp_path / "wfix-c3neg.c"
+    s.write_text(src)
+    gr = gcc(["-c", str(s), "-o", str(tmp_path / "wfix-c3neg.gcc.o")])
+    assert gr.returncode == 1, gr.stderr             # gcc rc1 too
+    br = blcc(["-c", str(s), "-o", str(tmp_path / "wfix-c3neg.o")])
+    assert br.returncode == 2 and "function pointer" in br.stderr, br.stderr
 
 
 # ---- shape pins of the shipped law ------------------------------------------

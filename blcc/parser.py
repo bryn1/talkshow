@@ -715,6 +715,24 @@ class Parser(AsmParseMixin):
             if isinstance(base, (ast.ArrayType, ast.PtrType)):
                 return self._unqual(base.inner)
             return None
+        if isinstance(node, ast.Binary):
+            # M4 W3-fix C3 (MC 12573, gate row G06a/G06b/F06): the
+            # POINTER-ARITHMETIC base of an arrow-call — `(p+2)->fn(x)`
+            # — types on this side too; the light mirror of the engine's
+            # §4 law is ONE arm: ptr +/- int = the pointer, `int + ptr`
+            # (gnu89 rc0) mirrors. A BOTH-pointer difference is the
+            # LONG difference, never a pointer: stays None and answers
+            # the §8 gcc-rc1 twin at the call gate (negative leg).
+            left = self.expr_type(node.left)
+            right = self.expr_type(node.right)
+            if node.op in ("+", "-"):
+                if isinstance(left, ast.PtrType) and not isinstance(
+                        right, ast.PtrType):
+                    return self._unqual(left)
+                if node.op == "+" and isinstance(right, ast.PtrType) \
+                        and not isinstance(left, ast.PtrType):
+                    return self._unqual(right)
+            return None
         if isinstance(node, ast.Select):
             base = self.expr_type(node.base)
             if isinstance(base, ast.Qualified):
