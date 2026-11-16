@@ -151,6 +151,81 @@ def test_call_target_load_is_scratch_reg_indirect(tmp_path):
     assert g_rest[0][1].startswith("add") and b_rest[0][1].startswith("add")
 
 
+# ---- commit-2: the remaining TARGET-expression shapes + §6 alias ---------
+
+def test_call_through_cast_target(tmp_path):
+    # S14 form: `((int (*)(int))add)(1)` — the CAST of a fn value is the
+    # target; the kernel idiom casts through void* (S18 form below).
+    src = ("typedef unsigned long size_t;\n"
+           "static long add(long a, long b){ return a + b; }\n"
+           "int main(void){ return (int)((long (*)(long, long))add)(4, 5); }\n")
+    _pair(tmp_path, "c2a", src, 9)
+
+
+def test_call_through_voidptr_cast_target(tmp_path):
+    # S18 form — the kernel's table-cast shape: the pointer VALUE rides
+    # void*, the CALL casts it back to the fn-ptr type.
+    src = ("typedef unsigned long size_t;\n"
+           "static long add(long a, long b){ return a + b; }\n"
+           "void *p;\n"
+           "int main(void){ p = (void *)add; "
+           "return (int)((long (*)(long, long))p)(4, 5); }\n")
+    _pair(tmp_path, "c2b", src, 9)
+
+
+def test_call_const_qualified_struct_slot(tmp_path):
+    # S20/S21 form: the TARGET lives in a `static const struct` — the
+    # const-qualified struct/member view is the parse-side gap commit-1
+    # left NAMED (SMATRIX S20/S21 rc2 at that tree).
+    src = ("typedef unsigned long size_t;\n"
+           "struct op { long (*h)(long); long n; };\n"
+           "static long f1(long x){ return x + 2; }\n"
+           "static const struct op tbl[] = { { f1, 1 } };\n"
+           "int main(void){ return (int)tbl[0].h(7); }\n")
+    _pair(tmp_path, "c2c", src, 9)
+
+
+def test_call_designated_const_struct_slot(tmp_path):
+    src = ("typedef unsigned long size_t;\n"
+           "struct op { long (*h)(long); long flags; };\n"
+           "static long f1(long x){ return x * 3; }\n"
+           "static const struct op one = { .h = f1, .flags = 3 };\n"
+           "int main(void){ return (int)one.h(3); }\n")
+    _pair(tmp_path, "c2d", src, 9)
+
+
+def test_call_through_ternary(tmp_path):
+    # S22 form: `(c ? f1 : f2)(x)` — the arms are FUNCTION VALUES; the
+    # conditional decays each arm through the shipped fn-value law.
+    src = ("typedef unsigned long size_t;\n"
+           "static long f1(long x){ return x + 1; }\n"
+           "static long f2(long x){ return x + 100; }\n"
+           "static long pick(long c, long x){ return (c ? f1 : f2)(x); }\n"
+           "int main(void){ return (int)(pick(1, 4) - pick(0, 4) + 100); }\n")
+    _pair(tmp_path, "c2e", src, 1)   # 5 - 104 + 100 == 1
+
+
+def test_call_through_set_alias(tmp_path):
+    # §6 ALIAS law (W2 shipped `.set al, tgt` with the T-letter parity):
+    # the W3 row — a CALL THROUGH THE ALIAS NAME works and RUNS (the
+    # kernel's vdso form `sched_clock` → `native_sched_clock`).
+    src = ("static long tgt(long x){ return x + 4; }\n"
+           "static long al(long) __attribute__((alias(\"tgt\")));\n"
+           "int main(void){ return (int)al(5); }\n")
+    _pair(tmp_path, "c2f", src, 9)
+
+
+def test_call_chain_paren_and_double_deref(tmp_path):
+    # `((fp))(x)` and `(**fp)(x)` — the designator fold is GENERAL: every
+    # deref whose type is a FuncType rides it (measured `**fp` folds, rc0).
+    src = ("typedef unsigned long size_t;\n"
+           "static long add(long a, long b){ return a + b; }\n"
+           "static long via(long (*f)(long, long)){ "
+           "return ((f))(4, 5) + (**(&f))(0, 0); }\n"
+           "int main(void){ return (int)via(add); }\n")
+    _pair(tmp_path, "c2g", src, 9)
+
+
 # ---- the twins that STAY LOUD ---------------------------------------------
 
 def test_undeclared_ident_call_stays_loud(tmp_path):

@@ -515,14 +515,19 @@ def test_invalid_fn_returning_fn_via_typedef(tmp_path):
 # TYPES the expression (return/assign); an untyped if-condition keeps the
 # later call wall — both shapes pinned honestly below.
 SMATRIX = {
-    # RE-PINNED MEASURED at M4 W3 COMMIT-1 (MC 12563, §2): the W3 CALL
-    # wall DIED for the value-shapes — S08-S13/S15/S16/S24 compile clean
-    # (bare call, deref form, member, array slot, chained expr, the two
-    # NULL-check shapes, member-init slot call). STILL LOUD (measured at
-    # this tree; W3 commit-2 territory — the callee EXPRESSION types cast/
-    # ternary/const-qualified struct are the remaining parse-side gap,
-    # the §8 twin sentence answers them in the meantime): S14/S18 (cast
-    # target), S20/S21 (const-qualified struct target), S22 (ternary).
+    # RE-PINNED MEASURED at M4 W3 COMMIT-2 (MC 12563, §2): the W3 CALL
+    # wall is DEAD for every S-row's CALL — the 23 call-shape rows
+    # compile clean (bare call, deref form, member, array slot, chained
+    # expr, cast target, the NULL-check shapes, void*-cast target,
+    # designated const table, ternary-of-fn-values, member-init slot).
+    # Commit-1 covered S08-S13/S15/S16/S24; commit-2 adds the cast
+    # (S14/S18), const-qualified struct (S20/S21) and ternary (S22)
+    # TARGET views (expr_type Cast/Index/& arms + _callable_view; the
+    # engine retypes each node for the call's return). S20's residual
+    # wall is NOT a call fact: its `{ f1, "one" }` initializer carries a
+    # string literal in a global initializer — the shipped §4 constant-
+    # initializer law answers (re-pinned from the W2-era CALL-wall
+    # needle; the call itself lands, c2c run-pair in test_core_m4w3_ind).
     "S01_decl_local":         (0, None, 0),
     "S02_decl_param":         (0, None, 0),
     "S03_decl_return":        (2, "row 1g", 1),
@@ -536,15 +541,15 @@ SMATRIX = {
     "S11_call_through_member":          (0, None, 0),
     "S12_call_through_array":          (0, None, 0),
     "S13_call_through_expr":          (0, None, 0),
-    "S14_call_through_cast":  (2, "not a 'function' or a 'function pointer'", 2),
+    "S14_call_through_cast":          (0, None, 0),
     "S15_null_compare":          (0, None, 0),
     "S16_null_bang_compare":          (0, None, 0),
     "S17_fn_to_voidptr":      (0, None, 0),
-    "S18_voidptr_to_fn":      (2, "not a 'function' or a 'function pointer'", 3),
+    "S18_voidptr_to_fn":          (0, None, 0),
     "S19_fn_to_long":         (0, None, 0),
-    "S20_static_const_table": (2, "not a 'function' or a 'function pointer'", 4),
-    "S21_designated_table":   (2, "not a 'function' or a 'function pointer'", 4),
-    "S22_fnptr_ternary_arm":  (2, "not a 'function' or a 'function pointer'", 2),
+    "S20_static_const_table": (2, "string literal in global initializer", 3),
+    "S21_designated_table":          (0, None, 0),
+    "S22_fnptr_ternary_arm":          (0, None, 0),
     "S23_fnptr_as_arg":       (0, None, 0),
     "S24_fnptr_struct_member_init":          (0, None, 0),
 }

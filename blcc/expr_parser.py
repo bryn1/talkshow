@@ -67,15 +67,11 @@ class ExprParser:
         self.objsize = objsize                    # §1 row 19 object_size
         self._lenient_calls = False               # inside GNU fold args
 
-    def _callable_ty(self, node):
-        """M4 W3 (MC 12563) §2 R1: the call-TARGET view of a callee
-        expression — its type DECAYED to a callable: PtrType(FuncType)
-        (the fn-ptr value) or FuncType (the designator `(*fp)` — C folds
-        the deref back through the decay). Qualifiers drop. None = NOT a
-        call target; the §8 gcc-rc1-twin sentence answers. Light mirror
-        of types._decay — parse-side only (the full engine types the same
-        node again for the call's RETURN type)."""
-        ty = self.expr_type(node)
+    def _callable_view(self, ty):
+        """M4 W3 (MC 12563) commit-2: the callable view OF A TYPE —
+        qualifiers drop at every level the CALL reaches (`const struct
+        op tbl[]`'s ARRAY, the const member view); FuncType rides,
+        PtrType(FuncType) rides. None = not a call target."""
         while isinstance(ty, ast.Qualified):
             ty = ty.inner
         if isinstance(ty, ast.FuncType):
@@ -87,6 +83,33 @@ class ExprParser:
             if isinstance(inner, ast.FuncType):
                 return inner
         return None
+
+    def _callable_ty(self, node):
+        """M4 W3 (MC 12563) §2 R1: the call-TARGET view of a callee
+        expression — its type DECAYED to a callable: PtrType(FuncType)
+        (the fn-ptr value) or FuncType (the designator `(*fp)` — C folds
+        the deref back through the decay). Qualifiers drop. None = NOT a
+        call target; the §8 gcc-rc1-twin sentence answers. Light mirror
+        of types._decay — parse-side only (the full engine types the same
+        node again for the call's RETURN type)."""
+        if isinstance(node, ast.Cast):
+            # S14/S18 (W3 commit-2): `((fp_t)expr)(x)` — the CAST type IS
+            # the target type; the operand only supplies the value.
+            return self._callable_view(node.type)
+        if isinstance(node, ast.Cond):
+            # S22: `(c ? f1 : f2)(x)` — arms are FUNCTION VALUES; either
+            # arm's callable view answers (the shipped fn-value/ternary
+            # law types the SAME node for the engine; the gnu `c ?: b`
+            # form has arm1 None and rides arm2).
+            if node.arm1 is None:
+                return self._callable_ty(node.arm2)
+            return (self._callable_ty(node.arm1)
+                    or self._callable_ty(node.arm2))
+        if isinstance(node, ast.Ident) and self.callable_known(node.name):
+            return "designator"        # the fn name itself (the ternary
+                                       # arms above; truthiness only —
+                                       # the engine retypes it via sigs)
+        return self._callable_view(self.expr_type(node))
 
     # -- entry: assignment level (right-associative) ------------------------
 

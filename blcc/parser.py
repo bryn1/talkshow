@@ -701,14 +701,26 @@ class Parser(AsmParseMixin):
         """Light type-of-expression: only what §5 struct checks need."""
         if isinstance(node, ast.Ident):
             sym = self.lookup(node.name)
-            return sym[1] if sym is not None and sym[0] == "var" else None
+            return (self._unqual(sym[1]) if sym is not None
+                    and sym[0] == "var" else None)
+        if isinstance(node, ast.Cast):
+            # M4 W3 commit-2: the value of a cast is its TYPE — the call
+            # target `((fp_t)expr)(x)` types through the cast (S14/S18).
+            return self._unqual(node.type)
         if isinstance(node, ast.Index):
             base = self.expr_type(node.base)
-            return base.inner if isinstance(base, (ast.ArrayType, ast.PtrType)) else None
+            if isinstance(base, ast.Qualified):
+                base = self._unqual(base)   # `const struct op tbl[]` —
+            # W3 commit-2 (S20/S21): the qualified ARRAY view decays too.
+            if isinstance(base, (ast.ArrayType, ast.PtrType)):
+                return self._unqual(base.inner)
+            return None
         if isinstance(node, ast.Select):
             base = self.expr_type(node.base)
+            if isinstance(base, ast.Qualified):
+                base = self._unqual(base)
             if node.arrow and isinstance(base, ast.PtrType):
-                base = base.inner
+                base = self._unqual(base.inner)
             if isinstance(base, ast.StructType):
                 from blcc.types import walk_fields
                 for name, mtype in walk_fields(
@@ -719,8 +731,16 @@ class Parser(AsmParseMixin):
             return None
         if isinstance(node, ast.Unary) and node.op == "*":
             base = self.expr_type(node.operand)
+            if isinstance(base, ast.Qualified):
+                base = self._unqual(base)
             if isinstance(base, (ast.PtrType, ast.ArrayType)):
-                return base.inner
+                return self._unqual(base.inner)
+        if isinstance(node, ast.Unary) and node.op == "&":
+            # W3 commit-2 (S22 chain `**(&f)`): ADDRESS-OF builds the
+            # pointer view — the mirror the deref arm decays back.
+            inner = self.expr_type(node.operand)
+            if inner is not None:
+                return ast.PtrType(node.file, node.line, node.col, inner)
         return None
 
     # -- small token helpers --------------------------------------------------
