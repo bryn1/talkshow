@@ -159,14 +159,18 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
             else:
                 self._load(ty, "(%rax)", at=n)
         elif n.op == "-":
-            self._i128_arith_guard(self._ty(n.operand), n)
+            if is_i128(self._decay(self._ty(n.operand))):
+                self._i128_unary(n)           # measured fneg pair law
+                return
             self._emit_expr(n.operand)
             self._e("negq %rax")
             self._narrow_int(self._ty(n))  # int negation wraps in 32 bits (§4)
         elif n.op == "+":
             self._emit_expr(n.operand)
         elif n.op == "~":
-            self._i128_arith_guard(self._ty(n.operand), n)
+            if is_i128(self._decay(self._ty(n.operand))):
+                self._i128_unary(n)           # measured fcomp pair law
+                return
             self._emit_expr(n.operand)
             self._e("notq %rax")
         elif n.op == "!":
@@ -1017,7 +1021,7 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
             # W-B value law: assign = PAIR COPY (RHS 128-address, or a
             # scalar widened through the measured pair); the assignment
             # VALUE is the target's address (the object IS the value).
-            self._i128_value(n.value)
+            k = self._i128_value(n.value)
             t = self._t()
             self._e("movq %rax, {}".format(t))
             self._emit_addr(n.target)
@@ -1026,8 +1030,9 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
             self._e("movq %rdx, (%rax)")
             self._e("movq 8(%rcx), %rdx")
             self._e("movq %rdx, 8(%rax)")
-            self._unt()
-            return
+            self._unt(k + 1)                  # address temp + any
+            return                            # widened source pair
+
         if isinstance(n.target, ast.Ident) and not isinstance(
                 self._ty(n.target), ast.ArrayType):
             self._emit_expr(n.value)
@@ -1272,12 +1277,6 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
             return None                          # pointer op: no scalar wrap
         return self._uac(lt, rt, n)
 
-    def _i128_arith_guard(self, ty, at) -> None:
-        if is_i128(self._decay(ty)):
-            self._err(at, "128-bit arithmetic on this operator is not in "
-                      "the subset (§5 — the pair ops land with W-B "
-                      "COMMIT-2)", "128-bit value")
-
     def _ex_binary(self, n) -> None:
         op = n.op
         if op in ("&&", "||"):
@@ -1285,10 +1284,16 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
             return
         lt = self._decay(self._ty(n.left))
         rt = self._decay(self._ty(n.right))
-        if is_i128(lt) or is_i128(rt):
-            # LOUD twin (measured gcc rc 0 everywhere): the pair arms are
-            # COMMIT-2's land (add/sub/and/or/xor/shift/cmp/mul/div);
-            # nothing 128-bit silently rides the 64-bit shapes below.
+        if (is_i128(lt) or is_i128(rt)) and not (
+                isinstance(lt, ast.PtrType) or isinstance(rt, ast.PtrType)):
+            # M4 W-B COMMIT-2: the PAIR module owns every pure-128 binary;
+            # outside the measured subset (and for ptr+i128 mixes, a
+            # named LOUD twin — gcc scales 128 indices, corpus volume 0)
+            # the LOUD §5 wall answers. Nothing 128-bit silently rides
+            # the 64-bit shapes below.
+            if op in self._TI_PAIR_OPS:
+                self._i128_binary(n, self._i128_signed(lt, rt))
+                return
             self._err(n, "'{}' on 128-bit values is not in the subset "
                       "(§5)".format(op), op)
         lp, rp = isinstance(lt, ast.PtrType), isinstance(rt, ast.PtrType)

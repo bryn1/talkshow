@@ -729,6 +729,20 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin):
             self._err(vd, "array initializer must be a brace list or string "
                       "literal (§4)", self._what(vd.init))
         self._fp_guard(self._ty(vd.init), ty, vd)
+        if is_i128(self._decay(ty)):
+            # W-B value law: the initializer rides the PAIR law (a scalar
+            # WIDENS through the measured sext/zext pair; a 128 source is
+            # already an address) — the raw 64-bit emit must never reach
+            # _store's pair copy, whose source register is an ADDRESS.
+            k = self._i128_value(vd.init)
+            base = "{}(%rbp)".format(off)
+            self._e("movq %rax, %rcx")
+            self._e("movq (%rcx), %rdx")
+            self._e("movq %rdx, {}".format(base))
+            self._e("movq 8(%rcx), %rdx")
+            self._e("movq %rdx, {}".format(mem8(base)))
+            self._unt(k)
+            return
         self._emit_expr(vd.init)
         self._store(self._decay(ty), "{}(%rbp)".format(off), at=vd)
 
