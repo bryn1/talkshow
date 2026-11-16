@@ -31,9 +31,12 @@ KSTYLE = (
     "static long bump(long v) { return counter + v; }\n"
     "long get(void) { return counter; }\n"
 )
+# SUPERSEDED (M4 W3, MC 12563): the fn-ptr CALL now COMPILES (the W3
+# indirect-call law landed) — the §8 hygiene legs below need a source
+# that STAYS LOUD: a lexer bad token (`@` never lexes in C).
 FNPTR_WALL = (
     "static int (*ops)(void);\n"
-    "static int run(void) { return ops(); }\n"   # M4 W3 wall: LOUD today
+    "static int run(void) { return ops@(); }\n"   # bad token: LOUD forever
 )
 
 
