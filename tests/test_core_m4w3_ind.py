@@ -138,9 +138,14 @@ def test_call_target_load_is_scratch_reg_indirect(tmp_path):
     g_arms, b_arms = text_arms(gt_r), text_arms(bt_r)
     # 1. the DIRECT call arm: PLT32 `add-4` on BOTH (W2-measured fact,
     #    now exercised through the kernel-recipe flags on a TU that also
-    #    carries an indirect call).
-    assert ("R_X86_64_PLT32", "add - 4") in g_arms
-    assert ("R_X86_64_PLT32", "add - 4") in b_arms, (g_arms, b_arms)
+    #    carries an indirect call) — and EXACTLY one each (multiset, not
+    #    membership: an indirect call that degenerated into a direct one
+    #    would add a second PLT32 arm here — the tooth plant named in the
+    #    close-leg proves this leg goes RED on exactly that mutation).
+    assert [a for a in g_arms if a[0] == "R_X86_64_PLT32"] == \
+        [("R_X86_64_PLT32", "add - 4")], g_arms
+    assert [a for a in b_arms if a[0] == "R_X86_64_PLT32"] == \
+        [("R_X86_64_PLT32", "add - 4")], b_arms
     # 2. the INDIRECT call arm adds NOTHING on either side: the remaining
     #    text reloc is the fn-VALUE arm (`via(add)` — gcc answers
     #    R_X86_64_32, blcc the W2-pinned R_X86_64_32S on movq $sym —
