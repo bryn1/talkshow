@@ -60,6 +60,10 @@ class Parser(AsmParseMixin):
         self.struct_tags: Dict[str, Tuple[ast.Member, ...]] = {
             predef.TAG: predef.VA_MEMBERS}
         self._anon_n = 0                  # unique minted-tag counter (T+7)
+        # M4 W3 COMMIT-0 (MC 12563): the re-declaration ledger — name →
+        # (return key, param key list or None for the old-style empty
+        # list, variadic). ONE table, judged by _fn_redecl_law.
+        self.fn_decls: Dict[str, Tuple] = {}
         self._pending: List[ast.Node] = []  # Struct/EnumDecls made by types
         self._bare_type_ok = False          # a tag/enum definition just read
         self.switch_depth = 0
@@ -576,9 +580,101 @@ class Parser(AsmParseMixin):
         return None
 
     def define(self, name: str, sym: tuple, at: Token) -> None:
-        if name in BUILTINS:
+        # M4 W3 COMMIT-0 (MC 12563, plan §7 AMENDMENT-4): the §6 blanket
+        # guard narrows to the NON-FUNCTION spellings. A builtin name
+        # re-declared as a FUNCTION rides the MEASURED law in
+        # _builtin_redecl_law (called by the is_fn branch of parse_decl);
+        # a typedef/var/enum collision is NOT a re-declaration shape
+        # (gcc rc1; the kernel corpus spells none) and keeps the §6
+        # sentence verbatim — the law is never blanket-permissive.
+        if name in BUILTINS and sym[0] != "fn":
             self._sema(at, "cannot re-declare the implicit builtin '{}' (§6)".format(name))
         self.scopes[-1][name] = sym
+
+    # -- M4 W3 COMMIT-0: re-declaration law (MC 12563) ----------------------
+
+    def _skey(self, ty) -> str:
+        """Canonical COMPATIBILITY key for one type (gcc 11.4 re-decl law,
+        all arms MEASURED this card): top-level qualifiers of a PARAM
+        disappear; pointer TARGET qualifiers are load-bearing
+        (`void bar(const char *)` vs `void bar(char *)` = gcc rc1); an
+        array-of-T param and a pointer-to-T param are the SAME key
+        (`void f(int a[])` + `void f(int *a)` = gcc rc0); typedef spellings
+        were already resolved to the concrete node by parse_base_type;
+        struct/union identity is the TAG; a `__typeof__` argument can
+        never be name-compared — keyed opaque (universe volume 0)."""
+        ty = self._unqual(ty)
+        while isinstance(ty, ast.TypeOf):
+            if ty.typ is None:
+                return "?T"            # __typeof__(expr): opaque key,
+            ty = self._unqual(ty.typ)  # resolution needs the fn — volume 0
+        if isinstance(ty, ast.ArrayType):
+            return "*" + self._ikey(ty.inner)
+        if isinstance(ty, ast.PtrType):
+            return "*" + self._ikey(ty.inner)
+        return self._ikey(ty)
+
+    def _ikey(self, ty) -> str:
+        # NO _unqual here: below the parameter's top level the qualifier IS
+        # the type (gcc rc1 on the const pair — measured).
+        if isinstance(ty, ast.Qualified):
+            return "q" + ty.qual + "|" + self._ikey(ty.inner)
+        if isinstance(ty, ast.PtrType):
+            return "*" + self._ikey(ty.inner)
+        if isinstance(ty, ast.ArrayType):
+            return "[" + self._ikey(ty.inner) + "]"
+        if isinstance(ty, ast.FuncType):
+            return ("fn" + self._skey(ty.ret) + "("
+                    + ",".join(self._skey(p.type) for p in ty.params)
+                    + ("..." if ty.variadic else "") + ")")
+        if isinstance(ty, ast.StructType):
+            return ("U" if ty.is_union else "S") + (ty.tag or "?")
+        if isinstance(ty, ast.BuiltinType):
+            return ty.name
+        return "?" + type(ty).__name__
+
+    def _fn_redecl_law(self, name, fty, is_static, pos) -> None:
+        """MEASURED gcc 11.4 collision law for a FUNCTION re-declaration
+        (this card, .tmp/m4-w3/out/probe5.py — DECL-ALONE vs USE-SITE arms
+        separated; the first sweep's rc1s were USE-SITE errors, NAMED):
+        (1) An implicit-builtin name (kernel strlen/strcmp family — the
+        200 first-blockers) re-declared is rc0 + a warning ONLY: even an
+        arity-clash or a `void` return is a warning at the declaration;
+        the LOUD arrives at the USE SITE (`too few arguments`, `void value
+        not ignored`) and blcc's shipped call-arity/void-value law
+        answers it. The re-declared builtin therefore TYPES, ARIETIES and
+        stages from the USER prototype — the §6 builtin table answers the
+        UNDECLARED spelling only (the §2.17 "a user declaration wins" law,
+        generalized). (2) STATIC after a non-static declaration of the
+        same name is a hard gcc rc1 ("static declaration … follows
+        non-static"); static-FIRST is rc0-warn. (3) General fn-vs-fn
+        re-declaration (every name — the non-builtin collision stays a
+        LOUD twin leg, the law is never blanket-permissive): concrete
+        parameter lists and the return must be compatible; old-style `()`
+        carries NO parameter information (measured rc0 `size_t strlen();`
+        + concrete; rc1 on a return clash through it)."""
+        prior = self.fn_decls.get(name)
+        if prior is not None and is_static and not prior[3]:
+            self._sema(pos, "static declaration of '{}' follows non-static "
+                       "declaration (gcc rc1 twin)".format(name), name)
+        key = None if fty.no_proto else tuple(self._skey(p.type)
+                                              for p in fty.params)
+        sig = (self._skey(fty.ret), key, fty.variadic, is_static)
+        if prior is not None and not self._sig_compat(prior, sig):
+            self._sema(pos, "conflicting types for '{}' — a previous "
+                       "declaration of this name is not compatible "
+                       "(measured gcc twin rc1)".format(name), name)
+        if prior is None or prior[1] is None:
+            self.fn_decls[name] = sig
+
+    @staticmethod
+    def _sig_compat(a, b) -> bool:
+        # Old-style `()` carries NO parameter information (measured:
+        # `size_t strlen();` + concrete list merge rc0; a return clash
+        # through it is still rc1). The return and variadic arms always
+        # compare.
+        return (a[0] == b[0] and a[2] == b[2]
+                and (a[1] is None or b[1] is None or a[1] == b[1]))
 
     def is_typename(self, name: str) -> bool:
         sym = self.lookup(name)
@@ -1298,8 +1394,8 @@ class Parser(AsmParseMixin):
                 ty = ast.ArrayType(bracket.file, bracket.line, bracket.col,
                                    ty, size, fam=(fam_only
                                                   and size is None))
-            else:                                    # ("fn", lp, params, var)
-                _, lp, params, variadic = op
+            else:                          # ("fn", lp, params, var, nostd)
+                _, lp, params, variadic, nostd = op
                 if isinstance(ty, ast.FuncType):
                     self._sema(lp, "'function' returning a 'function' is a "
                                "gcc ERROR (§4)", "function")
@@ -1322,7 +1418,7 @@ class Parser(AsmParseMixin):
                                "(row 1g) is not in the subset (§5 LOUD "
                                "twin)", "function pointer")
                 ty = ast.FuncType(lp.file, lp.line, lp.col, ty, params,
-                                  variadic)
+                                  variadic, nostd)
         return ty
 
     def _declarator_walk(self, ctx: str):
@@ -1386,7 +1482,8 @@ class Parser(AsmParseMixin):
                 lparen = self.s.peek()       # parse_params CONSUMES it
                 params = self.parse_params()
                 postfixes.append(("fn", lparen, params,
-                                  self._params_variadic))
+                                  self._params_variadic,
+                                  self._params_no_proto))
                 continue
             break
         return name, ([("ptr", pos0)] * stars
@@ -1396,13 +1493,16 @@ class Parser(AsmParseMixin):
         self.s.expect_punct("(")
         params: List[ast.Param] = []
         self._params_variadic = False
+        self._params_no_proto = False
         if self.s.accept_punct(")"):
             self._params_variadic = False   # M4 W1: the side channel
+            self._params_no_proto = True    # M4 W3 C0: `()` = NO info
             return ()                       # describes THIS list only —
         if self._at("void") and self.s.at_punct(")", 1):
             self.s.next()                   # nesting cannot clobber it:
             self.s.next()                   # _declarator_walk snapshots it
             self._params_variadic = False   # per '(' right after the call
+            self._params_no_proto = False   # (void) says ZERO params
             return ()
         while True:
             t = self.s.peek()
@@ -1548,6 +1648,11 @@ class Parser(AsmParseMixin):
                 # FuncDecl carries ret/params/variadic from the FuncType.
                 fty = ty
                 ret = fty.ret
+                # M4 W3 COMMIT-0 (MC 12563): the MEASURED re-declaration
+                # law (implicit-builtin arity arm + the general fn-vs-fn
+                # collision, the non-builtin twin stays LOUD) runs BEFORE
+                # the name lands in the scope table.
+                self._fn_redecl_law(name, fty, is_static, pos)
                 self.define(name, ("fn", ret), pos)
                 body = self.parse_function_body(params) if self.s.at_punct("{") else None
                 if alias is not None and body is not None:

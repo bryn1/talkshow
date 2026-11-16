@@ -397,12 +397,18 @@ def test_unsized_array_without_initializer_is_diagnostic():
     assert "'array'" in d.message
 
 
-def test_builtins_are_known_callable_but_not_redeclarable():
+def test_builtins_are_known_callable_and_non_fn_redecl_is_loud():
+    # M4 W3 COMMIT-0 (MC 12563) SUPERSEDES the old "…not_redeclarable"
+    # pin: the BLANKET wall died — a FUNCTION re-declaration of a builtin
+    # is measured-gcc rc0 (accepted, the user prototype wins the call
+    # law; every arm pinned in tests/test_core_m4w3.py). What survives —
+    # and what this pin now holds — is the §6 sentence for the NON-FUNCTION
+    # spellings (typedef/var/enum collisions are not re-declarations;
+    # measured gcc rc1-class, corpus volume 0).
     parse("int main(void){ char buf[8]; long n = _sys_write(1, \"hi\\n\", 3); "
           "_sys_read(0, buf, 4); long m = strlen(buf); "
           "m += strcmp(buf, buf); _sys_exit(n + m); }")
-    d = diag("long strlen(const char *s);")
-    assert "builtin" in d.message and "strlen" in d.message
+    parse("long strlen(const char *s);")            # accepted (W3 law)
     d = diag("int strcmp;")
     assert "builtin" in d.message
 

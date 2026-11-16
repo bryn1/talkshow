@@ -883,7 +883,11 @@ class TypeMap:
             return self._ty(n.right)
         if isinstance(n, ast.Call):
             name = n.callee.name
-            if name in BUILTINS:
+            if name in BUILTINS and name not in self.sigs:
+                # M4 W3 COMMIT-0 (MC 12563) WINNER law: the §6 table
+                # answers the UNDECLARED spelling only; a re-declared
+                # builtin types from the user prototype below (measured:
+                # `int strlen(const char*)` re-decl → the call is an int).
                 kind = BUILTINS[name][1]
                 return ast.BuiltinType(n.file, n.line, n.col,
                                        "long" if kind == "void" else kind)

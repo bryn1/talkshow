@@ -537,7 +537,11 @@ class ExprEmitter(MemFoldMixin):
             self._frame_level0(n, name, "movq %rbp, %rax")
             return
         variadic = False
-        if name in BUILTINS:
+        if name in BUILTINS and name not in self.sigs:
+            # M4 W3 COMMIT-0 (MC 12563): the WINNER law — a re-declared
+            # builtin TYPES and ARITIES from the user prototype (measured
+            # int-strlen call rides the int→long sign-extend); the §6
+            # table answers only the UNDECLARED spelling.
             want = BUILTINS[name][0]
         else:
             params, ret, variadic = self.sigs[name]
@@ -582,7 +586,11 @@ class ExprEmitter(MemFoldMixin):
         # evaluated after another temp (e.g. `a*100 + f(...)`) is NOT based
         # at T1; the stack-push addressing below must honour the base.
         slot_base = self.fn.temp_top
-        decl_params = None if name in BUILTINS else self.sigs[name][0]
+        # M4 W3 COMMIT-0: the WINNER law — a re-declared builtin stages
+        # and converts through the USER prototype (same precedence).
+        decl_params = (self.sigs[name][0]
+                       if name not in BUILTINS or name in self.sigs
+                       else None)
         for idx, a in enumerate(n.args):
             if decl_params is not None and idx < want:
                 self._fp_guard(self._ty(a), decl_params[idx].type, a)

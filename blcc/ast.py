@@ -50,6 +50,12 @@ class FuncType(Node):
     ret: Node
     params: Tuple = ()
     variadic: bool = False
+    # M4 W3 COMMIT-0 (MC 12563): OLD-FASHIONED `int f();` — NO parameter
+    # information at all (vs `int f(void)`, which says ZERO). The two are
+    # compatible with each other and with any list (measured gnu89 rc0);
+    # a concrete list must NOT be checked against an empty one. Only the
+    # re-declaration law reads this flag.
+    no_proto: bool = False
 
 
 @dataclass(frozen=True)

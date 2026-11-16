@@ -25,7 +25,7 @@ from blcc.codegen import compile_tu
 from blcc.lexer import DiagError, Lexer
 from blcc.parser import parse_tokens
 from blcc.preproc import PpOpts, Preprocessor
-from blcc.runtime import RUNTIME_ASM
+from blcc.runtime import BUILTINS, RUNTIME_ASM
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TMP_DIR = os.path.join(ROOT, ".tmp")
@@ -217,6 +217,23 @@ def main(argv: List[str]) -> int:
         toks = Lexer(lines).tokenize()
         tu = parse_tokens(toks)
         if not compile_only:
+            # M4 W3 COMMIT-0 (MC 12563): the DEF arm of the re-declaration
+            # law — `-c` accepts a user definition of a §6 builtin (the
+            # blob is absent; nm answers `T strlen` == the gcc twin,
+            # lib/string.c shape). LINK mode is different law: the
+            # RUNTIME_ASM blob OWNS the builtin names, so a user body
+            # there is a collision the §8 contract must answer as a
+            # diagnostic BEFORE any tool runs (gcc rc0 links its libc —
+            # LOUD-DIV row; kernel universe is -c-only, volume 0). This
+            # replaces the old blanket parse-time wall for this shape.
+            for d in tu.decls:
+                if (isinstance(d, ast.FuncDecl) and d.body is not None
+                        and d.name in BUILTINS):
+                    raise DiagError("sema", d.file, d.line, d.col,
+                                    "cannot define the §6 builtin '{}' in "
+                                    "LINK mode — the runtime blob owns it "
+                                    "(-c accepts the definition; §6)",
+                                    d.name)
             _require_main(tu, toks[-1], in_path)
         # The RUNTIME_ASM blob is LINK-mode furniture: it defines `_start`
         # and references `U main` (M1 static-exe law). A relocatable `-c`
