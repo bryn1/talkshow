@@ -226,6 +226,78 @@ def test_call_chain_paren_and_double_deref(tmp_path):
     _pair(tmp_path, "c2g", src, 9)
 
 
+# ---- commit-3: the %r10 VARIADIC indirect law (vr.s oracle) --------------
+
+VA = "typedef __builtin_va_list va_list;\n"
+
+
+def test_variadic_call_through_var(tmp_path):
+    # §2 R-arm (kernel vdso-image-64 shape): a call through a VARIADIC
+    # fn-ptr VALUE. The target must SURVIVE the arg staging — blcc
+    # answers the oracle's law (measured vr.s: callee loaded BEFORE the
+    # extras, `movl $0,%eax` = the shipped xorl, `call *%r10`).
+    src = (VA +
+           "static long vsum(long n, ...){ va_list a; long s = n; "
+           "__builtin_va_start(a, n); "
+           "s += __builtin_va_arg(a, long); s += __builtin_va_arg(a, long); "
+           "__builtin_va_end(a); return s; }\n"
+           "static long (*vp)(long, ...);\n"
+           "int main(void){ vp = vsum; return (int)vp(1, 2, 3); }\n")
+    _pair(tmp_path, "r10a", src, 6)
+
+
+def test_variadic_call_overflow_through_slot(tmp_path):
+    # The %r10 + PUSH-BLOCK interaction: >6 args on a variadic indirect
+    # target — the push block moves %rsp, which is exactly WHY the target
+    # rides %r10 and not a temp or %rax. Run-pair with 8 extras read
+    # through the shipped §2.7 va_arg switch.
+    src = (VA +
+           "static long vsum(long n, ...){ va_list a; long s = n; long i; "
+           "__builtin_va_start(a, n); "
+           "for (i = 0; i < 8; i++) s += __builtin_va_arg(a, long); "
+           "__builtin_va_end(a); return s; }\n"
+           "static long (*slots[2])(long, ...);\n"
+           "int main(void){ slots[1] = vsum; "
+           "return (int)slots[1](1L, 2L, 3L, 4L, 5L, 6L, 7L, 8L, 9L); }\n")
+    _pair(tmp_path, "r10b", src, 45)
+
+
+def test_variadic_indirect_sequence_pin(tmp_path):
+    # Shape pin (oracle vr.s law, register choice documented): the
+    # variadic indirect call loads the target FIRST (survives the
+    # staging), zeroes %al (GP-only universe), and calls `*%r10`.
+    src = (VA +
+           "static long vp_dummy(long n, ...){ (void)n; return 0; }\n"
+           "static long (*vp)(long, ...);\n"
+           "long fire(void){ vp = vp_dummy; return vp(1, 2, 3); }\n")
+    s = tmp_path / "r10c.c"
+    s.write_text(src)
+    br = blcc(["--emit-asm", "-c", str(s), "-o", str(tmp_path / "r10c.b")])
+    assert br.returncode == 0, br.stderr
+    body = br.stdout[br.stdout.index("fire:"):]
+    ci = body.index("call *%r10")
+    assert body.index("movq %rax, %r10") < ci       # target rides %r10…
+    body.index("xorl %eax, %eax")                    # …vector count 0…
+    assert body.index("xorl %eax, %eax") < ci        # …before the call
+
+
+def test_nonvariadic_indirect_target_load_after_args(tmp_path):
+    # The NON-variadic mirror: the target is evaluated AFTER the args
+    # are staged (it clobbers %rax) and the call is `call *%rax`.
+    src = ("typedef unsigned long size_t;\n"
+           "static long add(long a, long b){ return a + b; }\n"
+           "static long (*gfp)(long, long);\n"
+           "long fire(long x){ gfp = add; return gfp(x, x); }\n")
+    s = tmp_path / "r10d.c"
+    s.write_text(src)
+    br = blcc(["--emit-asm", "-c", str(s), "-o", str(tmp_path / "r10d.b")])
+    assert br.returncode == 0, br.stderr
+    body = br.stdout[br.stdout.index("fire:"):]
+    ci = body.index("call *%rax")
+    # the last arg move to %rdi/%rsi happens BEFORE the target load:
+    assert body.rindex("movq 8(%rsp), %rdi") < ci
+
+
 # ---- the twins that STAY LOUD ---------------------------------------------
 
 def test_undeclared_ident_call_stays_loud(tmp_path):
