@@ -36,6 +36,18 @@ from blcc.pp_predefines import builtins
 from blcc import pp_eval
 
 _MAX_INCLUDE_DEPTH = 200         # mirrors gcc's default -fmax-include-depth
+
+
+def _spell(path: str) -> str:
+    """A dep/diagnostic PATH as gcc spells it (M4 W4-fix F-2): a LEADING
+    './' component is dropped (measured: -I. -> n.h, -I./inc -> inc/n.h,
+    -include ./n.h -> n.h); every OTHER segment rides raw — mid-path
+    './', '../' and '//' survive exactly as gcc emits them
+    (inc/./z.h, inc/sub/../z.h, inc/sub//z.h). normpath is never
+    applied: its collapse was the 37/705-recipe universe divergence."""
+    while path.startswith("./"):
+        path = path[2:]
+    return path
 _NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*$")
 _IDENTC_RE = re.compile(r"[A-Za-z0-9_.']")
 # Two spliced tokens must never re-lex as one: `pri`+`ntf` may not print as
@@ -264,7 +276,7 @@ class Preprocessor:
         # event — (spelled candidate path, resolved abspath, is_system) —
         # in resolution order; the renderer never re-walks (depfile.py).
         self.deps: List[Tuple[str, bool]] = []
-        self._dep_keys: set = set()             # (directive name, origin)
+        self._dep_objs: set = set()   # the .d OBJECT keys (see _include)
         self._cond_base: List[int] = []
         self._cur_file = "<input>"
         self._conds: List[List[bool]] = []
@@ -376,10 +388,16 @@ class Preprocessor:
 
     def _process(self, path: str, text: str) -> None:
         lines = _strip_comments(_splice(text))
-        st = {"label": path, "forced": None}   # R10 origin-map state
+        # Diagnostic label: gcc drops a LEADING "./" component only
+        # (mid-path segments ride raw) — normpath is never applied.
+        st = {"label": _spell(path), "forced": None}   # R10 origin-map state
         self.stack.append(os.path.abspath(path))
         self._cond_base.append(len(self._conds))   # this file's floor
-        base_dir = os.path.dirname(path) or "."
+        # The quote-head identity is the includer's dir as its RAW PATH
+        # PREFIX (gcc dir_name_of_file: ends in '/' when non-empty, ""
+        # when the path has no slash — make_cpp_dir hashes the STRING,
+        # so "" != "./" != "d1/"; the W4-fix F-1 law).
+        base_dir = path[:len(path) - len(os.path.basename(path))]
         i = 0
         try:
             while i < len(lines):
@@ -642,34 +660,49 @@ class Preprocessor:
         if not target:
             raise DiagError("pp", path, ln, 1, "empty #include path",
                             "#include " + operand)
-        cand: List[Tuple[str, bool]] = []
-        # (spelled candidate, is_system): only an -isystem-directory match
-        # is a SYSTEM event — the measured MMD/MD boundary (depfile.py
-        # docstring; -I-found `<>` includes are USER, both spellings).
-        # -include (R17) resolves gcc's measured way (verdict-c1 Leg 4,
-        # rows G1-G11): the operand AS-GIVEN first — a relative name
-        # answers to the CWD — then every -I dir in order, then every
-        # -isystem dir. The includer (main file's) directory is NEVER
-        # searched: that is the quoted-#include rule, not this one.
-        if preinclude:
-            cand.append((os.path.normpath(target), False))
-            cand += [(os.path.normpath(os.path.join(d, target)), False)
-                     for d in self.opts.includes_dir]
-            cand += [(os.path.normpath(os.path.join(d, target)), True)
-                     for d in self.opts.isystem]
-        elif not angle:
-            cand.append((os.path.normpath(os.path.join(base_dir, target)),
-                         False))
-            cand += [(os.path.normpath(os.path.join(d, target)), False)
-                     for d in self.opts.includes_dir]
-            cand += [(os.path.normpath(os.path.join(d, target)), True)
-                     for d in self.opts.isystem]
+        # M4 W4-fix (MC 12586) — the SPELLING law is gcc's
+        # append_file_to_dir (libcpp/files.c, read + measured this
+        # session): dir + '/' (ONLY when the dir lacks a trailing
+        # separator) + the raw name, NEVER normalized; the .d drops a
+        # LEADING "./" component only (measured: -I. -> n.h,
+        # -I./inc -> inc/n.h, -include ./n.h -> n.h), while `../`,
+        # `//` and mid-path `./` ride RAW (F-2: gcc spells
+        # inc/sub/../n.h and inc/sub//z.h; the W4 normpath collapse
+        # was the 37/705 universe divergence). System law unchanged:
+        # only an -isystem-directory match is a SYSTEM event (the
+        # measured MMD/MD boundary; -I-found `<>` includes are USER).
+        # -include (R17) keeps its measured order (verdict-c1 Leg 4,
+        # rows G1-G11): the operand AS-GIVEN first (gcc: the shared
+        # "./" cmdline dir — a relative name answers to the CWD), then
+        # every -I dir in order, then every -isystem dir. The includer
+        # (main file's) directory is NEVER searched for -include: that
+        # is the quoted-#include rule, not this one.
+        def _join(dirp: str) -> str:
+            if not dirp or dirp.endswith("/"):
+                return dirp + target
+            return dirp + "/" + target
+
+        def _chain() -> List[Tuple[str, bool]]:
+            out = [(_join(d), False) for d in self.opts.includes_dir]
+            out += [(_join(d), True) for d in self.opts.isystem]
+            return out
+
+        if os.path.isabs(target):
+            # libcpp: an absolute operand searches NO chain
+            # (no_search_path) — its object key is the name alone.
+            cand, key_start = [(target, False)], None
+            key_chain = ("A", target)
+        elif preinclude:
+            cand, key_start = [(target, False)] + _chain(), ("P", target)
+            key_chain = ("C", target)
+        elif angle:
+            cand, key_start = _chain(), ("C", target)
+            key_chain = None
         else:
-            cand += [(os.path.normpath(os.path.join(d, target)), False)
-                     for d in self.opts.includes_dir]
-            cand += [(os.path.normpath(os.path.join(d, target)), True)
-                     for d in self.opts.isystem]
-        hit = next(((c, s) for c, s in cand if os.path.isfile(c)), None)
+            cand, key_start = [(_join(base_dir), False)] + _chain(), \
+                ("D", base_dir, target)
+            key_chain = ("C", target)
+        hit = next((cd for cd in cand if os.path.isfile(cd[0])), None)
         full = hit[0] if hit else None
         shown = "#include %s" % operand
         if full is None:
@@ -695,29 +728,46 @@ class Preprocessor:
                             "(use -fmax-include-depth=DEPTH to increase the "
                             "maximum)" % (_MAX_INCLUDE_DEPTH,
                                           _MAX_INCLUDE_DEPTH), shown)
-        # W4 depfile event law — libcpp's per-_cpp_file-object rule,
-        # gcc-11.4 libcpp/files.c _cpp_stack_file (`!file->stack_count`
-        # emits file->path once) + the (name, search-chain-origin) object
-        # identity of _cpp_find_file (read this session, source cited in
-        # blcc/depfile.py). An include OPEN emits its path iff the
-        # (directive NAME, origin) pair is new: origin p = -include
-        # (no-search start), h = quoted found in the INCLUDER'S OWN dir
-        # (the quote-head start), c = found via the -I/-isystem chain
-        # (angle is always c). Re-includes that hit the same object —
-        # same name, same origin — emit nothing, guarded or not (this is
-        # the 729-line kernel/exit.c witness law: msr-index/taskstats/
-        # kconfig pairs are different names or origins; types.h, 100+
-        # same-name angle includers, rides once).
-        if preinclude:
-            kind = "p"                     # no-search start dir
-        elif not angle and full == cand[0][0]:
-            kind = "h"                     # found in the includer's dir
+        # THE depfile OBJECT law, ported from gcc-11 libcpp/files.c
+        # (_cpp_find_file + _cpp_stack_file, source read AND gcc 11.4
+        # measured this session — gate F-1): ONE object per (fname
+        # string, start_dir), with cache SHARING at the (quote≡bracket)
+        # search-chain head, and the .d emits file->path EXACTLY ONCE
+        # per object, at its FIRST OPEN. start_dir is hashed as a
+        # STRING (make_cpp_dir): the quoted include's includer-dir raw
+        # prefix — "" != "./" != "d1/", so the same NAME resolving to
+        # DIFFERENT files from two includer dirs is TWO objects (the
+        # W4 (name,kind) key over-collapsed exactly that). The chain is
+        # ONE shared key ("C"); -include rides the shared "./" cmdline
+        # key ("P"); an absolute operand never shares ("A"). A miss at
+        # the start dir that finds THROUGH THE CHAIN registers the
+        # chain key too (a later angle lookup then SHARES, no re-emit
+        # — the TA/TB probes); a find AT the start dir registers only
+        # the start key (I1: no chain sharing for own-dir hits); a
+        # start-key re-open never re-emits, guarded or not (measured:
+        # guarded "hd.h" + <hd.h> = 2 lines; <empty.h> twice = 1). This
+        # is the 729-line kernel/exit.c witness law (test_depfile_m4.py
+        # golden replay): the msr-index/kconfig/compiler_types/
+        # taskstats duplicate pairs are different NAMES; types.h's
+        # 100+ same-name angle includers ride once on the chain key.
+        if key_start is None or key_chain is None:
+            obj_key = key_chain if key_start is None else key_start
+            emit = obj_key not in self._dep_objs
+            self._dep_objs.add(obj_key)
+        elif key_start in self._dep_objs:
+            emit = False                          # cache hit at start
+        elif hit is cand[0]:
+            emit = True                           # fresh AT the start
+            self._dep_objs.add(key_start)
+        elif key_chain in self._dep_objs:
+            emit = False                          # shared via chain head
+            self._dep_objs.add(key_start)         # gcc caches start too
         else:
-            kind = "c"                     # found via the -I/-isystem chain
-        key = (target, kind)
-        if key not in self._dep_keys:
-            self.deps.append((full, hit[1]))
-        self._dep_keys.add(key)
+            emit = True                           # fresh via the chain
+            self._dep_objs.add(key_start)
+            self._dep_objs.add(key_chain)
+        if emit:
+            self.deps.append((_spell(full), hit[1]))
         self._process(full, self._read(full))
 
     # -- #define ------------------------------------------------------------------

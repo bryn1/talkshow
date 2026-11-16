@@ -37,21 +37,30 @@ argv on kernel/exit.c through a 5.10 O= objtree, 729 lines, captures
     (fixdep's source_ law depends on it), then -include operands in argv
     order, then every resolved #include AT RESOLUTION, repeats included.
     No second walk, no re-sort, no dedup sweep at render time.
-  * WHICH EVENTS — the libcpp OBJECT law (gcc-11.4 libcpp/files.c read
-    this session: _cpp_stack_file emits file->path once per _cpp_file
-    when !file->stack_count; _cpp_find_file creates one object per
-    (include NAME, search-chain start), reusing cache hits). blcc
-    reproduces it as: an open emits iff (directive-name, origin) is NEW;
-    origin = 'p' (-include), 'h' (quoted found in the includer's own
-    dir), 'c' (found via the -I/-isystem chain; angle always). Guards and
-    file emptiness play NO role (measured: guarded "hd.h" + <hd.h> = 2
-    lines; <empty.h> twice = 1). This is the 729-line kernel/exit.c
-    witness law: replayed through blcc with the real kbuild argv, its
-    dep SET equals the gcc capture exactly (build/replay-exit.d vs
-    out/witness-exit-MMD.d) — the msr-index/kconfig/compiler_types/
-    taskstats duplicate pairs are distinct names or origins; types.h's
-    100+ same-name angle includers ride once. No second walk, no
-    re-sort, no render-time sweep.
+   * WHICH EVENTS — the libcpp OBJECT law, ported from gcc-11
+     libcpp/files.c (source read) AND measured on gcc-11.4 (M4 W4-fix,
+     MC 12586): _cpp_find_file keeps ONE _cpp_file per (fname STRING,
+     start_dir) with cache SHARING at the (quote-equal-bracket) chain
+     head; _cpp_stack_file emits file->path EXACTLY ONCE, at the
+     object's FIRST OPEN. blcc object keys: 'D' = quoted, keyed by the
+     INCLUDER'S DIR RAW PREFIX (make_cpp_dir hashes the string:
+     "" != "./" != "d1/" — the same quoted NAME resolving to
+     DIFFERENT files from two includer dirs emits BOTH, gate F-1);
+     'C' = the ONE shared chain key (angle lookups AND the chain-head
+     cache every quoted walk passes — a name first found THROUGH the
+     chain rides once even when later re-included angle-wise); 'P' =
+     -include (gcc's shared "./" cmdline dir); 'A' = absolute operand,
+     never shares. A fresh own-dir find registers ONLY its start key
+     (no chain sharing); a fresh chain find registers start+chain; a
+     chain-head hit re-registers the start. Guards and file emptiness
+     play NO role (measured: guarded "hd.h" + <hd.h> = 2 lines;
+     <empty.h> twice = 1). Paths ride RAW spellings (PREREQS below);
+     leading "./" components drop. The 729-line kernel/exit.c witness
+     replays dep-for-dep IN ORDER (build/replay-exit.d vs
+     out/witness-exit-MMD.d) — msr-index/kconfig/compiler_types/
+     taskstats duplicate pairs are distinct NAMES; types.h's 100+
+     same-name angle includers ride once on the chain key. No second
+     walk, no re-sort, no render-time sweep.
   * MMD vs MD: MMD omits SYSTEM events, MD keeps them (measured:
     -isystem-dir headers and /usr/include/* vanish under -MMD, return
     under -MD). SYSTEM == the event resolved through an -isystem dir;
