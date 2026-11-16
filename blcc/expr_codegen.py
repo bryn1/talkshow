@@ -609,13 +609,37 @@ class ExprEmitter(MemFoldMixin):
         rdi/rsi/rdx/rcx/r8/r9, the >6-variadic push block, `%al = 0` on a
         variadic call, and the `call` itself. `call_arm` is the operand
         text ("add" for the direct arm — the shipped R_X86_64_PLT32
-        shape; "*%r10" / "*%rax" for the indirect arms of M4 W3). A
-        variadic indirect target pre-loaded %r10 BEFORE this ran (the
-        push block moves %rsp — the target cannot ride a temp slot);
-        the non-variadic indirect target is `target`, the callee
-        EXPRESSION, evaluated here AFTER the args are staged (the
-        evaluation clobbers %rax; the staged args must already be in
-        their own slots) and it lands in %rax for `call *%rax`."""
+        shape; "*%r10" / "*%rax" for the indirect arms of M4 W3).
+
+        THE TARGET LAW (M4 W3-fix MC 12573, gate classes C1/C2): when
+        `target` is set (an indirect call), the callee EXPRESSION is
+        evaluated FIRST — it may clobber anything, because nothing is
+        staged yet — and its ADDRESS is materialized into a pool temp
+        that arg staging cannot reach; only the final MOVE slot→reg
+        rides the tail, AFTER the arg-register staging (§2 R6's letter:
+        the target MOVE happens after arg staging). Both earlier
+        placements were SILENT-CORRUPTION classes measured by the gate:
+        evaluating the target AFTER the REG_ARGS loads let the
+        addressing/arithmetic machinery clobber %rcx/%rdx/%r8/%r9 —
+        staged args 3..6 (C1: `tbl[i].fn(1,2,3,4)` dispatched with arg4
+        = the base address; a div-bearing target kills arg3 at arity 3);
+        and pre-loading %r10 for the variadic arm let a NESTED call
+        inside the args rewrite %r10 — a silent CALLEE SWAP (C2). The
+        push block moves %rsp, so the variadic overflow arm addresses
+        the target slot through the SAME +16+8*extras shift law as the
+        pushed arg slots and re-materializes the register there. This IS
+        the measured gcc law: the oracle stages the callee address in a
+        stack slot and re-materializes the register at the call —
+        evaluation order (target vs args) is UNSPECIFIED in C; blcc's
+        law now reads target-ADDRESS-FIRST, a consistent, clobber-free
+        choice."""
+        tgt_slot = None
+        tgt_reg = None
+        if target is not None:
+            tgt_reg = call_arm[1:]                  # "*%rax" → "%rax"
+            self._emit_expr(target)                 # → %rax: the address
+            tgt_slot = self._t()                    # held until the tail
+            self._e("movq %rax, {}".format(tgt_slot))
         slots = []
         # temp slots of THIS call start at fn.temp_top + 1 — a nested call
         # evaluated after another temp (e.g. `a*100 + f(...)`) is NOT based
@@ -647,10 +671,17 @@ class ExprEmitter(MemFoldMixin):
                 # push-from-memory: a scratch register would clobber a
                 # live arg slot (rdi..r9 still hold args 1..6 here).
                 self._e("pushq {}(%rsp)".format(off))
+            if tgt_slot is not None:
+                # C2 fix: re-materialize the callee register AFTER the
+                # %rsp shift — the target slot moved with the frame
+                # (same shift law as the pushes above), and no nested
+                # call can run between this mov and the call.
+                self._e("movq {}(%rsp), {}".format(
+                    8 * slot_base + 16 + 8 * (len(slots) - 6), tgt_reg))
             self._e("xorl %eax, %eax")
             self._e("call {}".format(call_arm))
             self._e("addq ${}, %rsp".format(16 + 8 * (len(slots) - 6)))
-            self._unt(len(slots))
+            self._unt(len(slots) + (1 if tgt_slot is not None else 0))
             return
         for i, t in enumerate(slots):
             self._e("movq {}, {}".format(t, REG_ARGS[i]))
@@ -659,8 +690,12 @@ class ExprEmitter(MemFoldMixin):
             # §2.14: the vector-register count — GP-only universe ⇒ 0,
             # pinned on EVERY variadic call site (call3 leg).
             self._e("xorl %eax, %eax")
-        if target is not None:
-            self._emit_expr(target)      # → %rax for `call *%rax`
+        if tgt_slot is not None:
+            # THE TARGET LAW's tail: the slot→reg move is the LAST
+            # emission before `call *%reg` — after the REG_ARGS loads,
+            # so no target addressing can reach a staged arg.
+            self._e("movq {}, {}".format(tgt_slot, tgt_reg))
+            self._unt(1)
         self._e("call {}".format(call_arm))
 
     def _ex_call_ind(self, n) -> None:
@@ -722,9 +757,13 @@ class ExprEmitter(MemFoldMixin):
                 self._err(n, "more than 6 arguments is beyond the §6 call "
                           "ABI", "function pointer", "asm")
         if ft.variadic:
-            self._emit_expr(ce)                # push block moves %rsp —
-            self._e("movq %rax, %r10")         # the target rides %r10
-            self._stage_call(n.args, want, ft.params, True, "*%r10")
+            # §2 R5: the variadic target rides %r10 — the TARGET LAW in
+            # _stage_call materializes it into a pool temp BEFORE the
+            # args and re-loads %r10 immediately before `call *%r10`
+            # (a nested call in the args must not be able to rewrite
+            # the callee — gate class C2).
+            self._stage_call(n.args, want, ft.params, True, "*%r10",
+                             target=ce)
         else:
             self._stage_call(n.args, want, ft.params, False, "*%rax",
                              target=ce)

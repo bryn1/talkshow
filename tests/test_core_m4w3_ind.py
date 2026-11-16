@@ -268,9 +268,13 @@ def test_variadic_call_overflow_through_slot(tmp_path):
 
 
 def test_variadic_indirect_sequence_pin(tmp_path):
-    # Shape pin (oracle vr.s law, register choice documented): the
-    # variadic indirect call loads the target FIRST (survives the
-    # staging), zeroes %al (GP-only universe), and calls `*%r10`.
+    # Shape pin — RE-PINNED at the M4 W3-fix (MC 12573). The old form
+    # ("target into %r10 FIRST") pinned exactly the ordering gate class
+    # C2 proved corruptible: a nested call inside the args rewrites %r10
+    # (silent callee swap). The shipped law (measured gcc, gate oracle):
+    # the target ADDRESS is materialized into a pool temp before the
+    # args, and the %r10 RELOAD from that slot is the last move before
+    # `call *%r10` — nothing can clobber the callee between them.
     src = (VA +
            "static long vp_dummy(long n, ...){ (void)n; return 0; }\n"
            "static long (*vp)(long, ...);\n"
@@ -281,14 +285,19 @@ def test_variadic_indirect_sequence_pin(tmp_path):
     assert br.returncode == 0, br.stderr
     body = br.stdout[br.stdout.index("fire:"):]
     ci = body.index("call *%r10")
-    assert body.index("movq %rax, %r10") < ci       # target rides %r10…
-    body.index("xorl %eax, %eax")                    # …vector count 0…
-    assert body.index("xorl %eax, %eax") < ci        # …before the call
+    assert body.index("movq %rax, 8(%rsp)") < body.index("movq 16(%rsp), %rdi")
+    m = re.search(r"movq \d+\(%rsp\), %r10", body)   # reload…
+    assert m and m.start() < ci                       # …from the slot…
+    assert body.rindex(", %rdi") < m.start()          # …after arg staging
+    assert body.index("xorl %eax, %eax") < ci         # vector count 0
 
 
-def test_nonvariadic_indirect_target_load_after_args(tmp_path):
-    # The NON-variadic mirror: the target is evaluated AFTER the args
-    # are staged (it clobbers %rax) and the call is `call *%rax`.
+def test_nonvariadic_indirect_target_move_after_args(tmp_path):
+    # The NON-variadic mirror of the TARGET LAW (M4 W3-fix): the target
+    # is evaluated FIRST and its address parked in a pool temp (the old
+    # "evaluated after the args" placement was gate class C1 — the
+    # addressing clobbers staged %rcx/%rdx/%r8/%r9); the slot→%rax MOVE
+    # stays the last emission before `call *%rax` (§2 R6's letter).
     src = ("typedef unsigned long size_t;\n"
            "static long add(long a, long b){ return a + b; }\n"
            "static long (*gfp)(long, long);\n"
@@ -299,8 +308,11 @@ def test_nonvariadic_indirect_target_load_after_args(tmp_path):
     assert br.returncode == 0, br.stderr
     body = br.stdout[br.stdout.index("fire:"):]
     ci = body.index("call *%rax")
-    # the last arg move to %rdi/%rsi happens BEFORE the target load:
-    assert body.rindex("movq 8(%rsp), %rdi") < ci
+    # address materialized BEFORE any arg staging:
+    assert body.index("movq %rax, 8(%rsp)") < body.index("movq 16(%rsp), %rdi")
+    # the slot→%rax move after the last arg move, immediately before call:
+    assert body.rindex("movq 24(%rsp), %rsi") < body.rindex(
+        "movq 8(%rsp), %rax") < ci
 
 
 # ---- the twins that STAY LOUD ---------------------------------------------
