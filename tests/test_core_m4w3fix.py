@@ -429,3 +429,38 @@ def test_variadic_indirect_r10_reloaded_after_the_push_block(tmp_path):
     assert m, body                       # reload FROM A SLOT, not %rax…
     assert body.rindex("pushq ") < m.start() < ci   # …after the pushes…
     assert body.index("xorl %eax, %eax") < ci        # …vector count 0
+
+
+# ---- W4 re-gate carry (MC 12581; verdict m4-w3-regate-verdict.md F-A) -----
+# The C3 parse-side expr_type fix had a behavior delta the shipped row
+# claimed away: the sizeof/__builtin_choose_expr consumer of the typed-None
+# gap was a FALSE-LOUD at 550998d (rc2, §2.6 sentence, capture
+# .tmp/m4-w4/out/red-choose-at-550998d.txt) and is a PAIR from a11608a.
+# The improvement landed legless; the legs below pin it (oracle decides).
+
+def test_w4regate_choose_expr_sizeof_ptr_arith_pair(tmp_path):
+    # sizeof(p + 2) must FOLD (else the choose control dies §2.6 rc2 — the
+    # 550998d class) and fold RIGHT (the FALSE arm would answer n-38, not
+    # n+40, changing the exit code; the bare sizeof(p+2) rides the same
+    # fold). Expect 42: gcc -std=gnu89 -Os and blcc, SAME exit, measured.
+    src = ("struct s { long a; };\n"
+           "long f(struct s *p, long n) {\n"
+           "  return __builtin_choose_expr(sizeof(p + 2) == 8, n + 40, n - 38);\n"
+           "}\n"
+           "long g(struct s *p) { return sizeof(p + 2); }\n"
+           "int main(void){ struct s v; return (int)(f(&v, 2) + g(&v) - 8); }\n")
+    _pair(tmp_path, "w4regate-choose", src, 42)
+
+
+def test_w4regate_sizeof_alignof_binary_consumers_pair(tmp_path):
+    # The three OTHER expr_type consumers over Binary operands, measured:
+    # sizeof(p-p) = the LONG difference (8, not a pointer), sizeof(p+2) = 8,
+    # __alignof__(p+2) = 8. gcc 24, blcc 24 — the parse gate and the engine
+    # now agree on every consumer of the pointer view.
+    src = ("struct s { long a; int b; };\n"
+           "int main(void){ struct s v; struct s *p = &v;\n"
+           "  long d = sizeof(p - p);\n"
+           "  long w = sizeof(p + 2);\n"
+           "  long al = __alignof__(p + 2);\n"
+           "  return (int)(d + w + al); }\n")
+    _pair(tmp_path, "w4regate-cons", src, 24)
