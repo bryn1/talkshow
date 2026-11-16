@@ -9,6 +9,9 @@ Precedence (§3.2, NUMBERED — the matcher runs in EXACTLY this order):
       families from `-W` — the boundary is the literal COMMA, never bare
       `-W`. A `-Wp,-MMD` line can therefore NEVER be silently eaten by the
       pure `-W` IGNORE-LOUD bucket (§3.2's measured swallowing, closed).
+      W4 (MC 12581): the FIVE depfile subflags `-Wp,-MD/-MMD/-MF/-MT/-MQ,
+      <x>` (single operand, comma-free) ride L6 to blcc VERBATIM for the
+      blcc/depfile.py writer; any other `-Wp,` payload is REJECT-LOUD.
   L4  tier + ISA tables run BEFORE IGNORE-LOUD (§3.1 tier law, §3.3 ISA).
   L5  unmatched `-`-token → REJECT-LOUD rc 2 NAMING it — never default-ignore.
   L6  everything accepted rides to blcc VERBATIM in argv order; `-v` echoes
@@ -168,12 +171,16 @@ def main(argv):
         return _loud2(probel, "unknown shape",
                       "no .c input on a kernel-tier invocation: %s"
                       % " ".join(argv))
+    from blcc.depfile import is_forwardable
     for a in argv:
-        if a.startswith("-Wp,"):
-            # §3.3/§4.4: dropping the depfile line is the false-incremental
-            # channel — until the W4 writer it is REJECT-LOUD, named.
-            return _loud2(probel, "-Wp depfile not implemented (writer ships "
-                          "W4, plan §3.3/§4.4)", a)
+        if a.startswith("-Wp,") and not is_forwardable(a):
+            # §3.3/§4.4 W4 law: the FIVE depfile subflags (single-operand
+            # spellings) ride L6 to blcc VERBATIM — the writer lives in
+            # blcc/depfile.py. ANY other -Wp payload stays REJECT-LOUD,
+            # named: dropping a depfile line is the false-incremental
+            # channel and a silent swallow is the W0-planted matcher bug.
+            return _loud2(probel, "-Wp subflag not implemented "
+                          "(W4 forwards -MD/-MMD/-MF/-MT/-MQ only)", a)
     for a in argv:
         if a.startswith("-g"):
             return _loud2(probel, "-g on the blcc path",
@@ -194,6 +201,10 @@ def main(argv):
                                  "-std="))
                 or not a.startswith("-")):
             accepted.append(a)
+        elif a.startswith("-Wp,"):
+            accepted.append(a)              # W4 depfile channel (all here
+                                            # passed the is_forwardable
+                                            # gate — never IGNORE-LOUD)
         elif a.startswith(("-W", "-O", "-f", "-m")):
             ignored.append(a)              # IGNORE-LOUD classes (§3.3 rows)
         else:

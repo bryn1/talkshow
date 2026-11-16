@@ -1,9 +1,13 @@
 """M1 GCC-compatible preprocessor: directive dispatch & source bookkeeping
 (plan R1, R2, R4, R10–R14, R17, R20, R21).
 
-LINES (825 > 400): directive dispatch is ONE concern — the #if-conditional
+LINES (861 > 400): directive dispatch is ONE concern — the #if-conditional
 stack, #line origin state and include search must share the per-file state
-machine; splitting would duplicate that state across files.
+machine; splitting would duplicate that state across files. The M4 W4
+depfile writer (plan §4.4) rides THIS machine on purpose: the include
+event list (self.deps) is recorded inside _include/_process, where the
+resolver already spells and opens the file — no second include walk (the
+rendering half lives in blcc/depfile.py, its own module).
 
 Pass order per plan §2: pass-0 line splice (backslash-newline, keeping a
 (file,line) origin map) BEFORE comment strip; directive dispatch on logical
@@ -167,6 +171,7 @@ def _emit_join(toks: List[str]) -> str:
     return "".join(out)
 
 
+
 def _splice(text: str) -> List[Tuple[int, List[Tuple[int, str]]]]:
     """Pass 0: join backslash-newline physical lines into logical lines
     (trailing splicing backslash removed, R2); each keeps its physical-line
@@ -255,6 +260,11 @@ class Preprocessor:
             time.strftime("%b %e %Y", now), time.strftime("%H:%M:%S", now),
             self.opts.emit_pragmas)
         self.stack: List[str] = []
+        # M4 W4 depfile events (plan §4.4): one entry per EMITTED include
+        # event — (spelled candidate path, resolved abspath, is_system) —
+        # in resolution order; the renderer never re-walks (depfile.py).
+        self.deps: List[Tuple[str, bool]] = []
+        self._dep_keys: set = set()             # (directive name, origin)
         self._cond_base: List[int] = []
         self._cur_file = "<input>"
         self._conds: List[List[bool]] = []
@@ -632,24 +642,35 @@ class Preprocessor:
         if not target:
             raise DiagError("pp", path, ln, 1, "empty #include path",
                             "#include " + operand)
-        cand: List[str] = []
+        cand: List[Tuple[str, bool]] = []
+        # (spelled candidate, is_system): only an -isystem-directory match
+        # is a SYSTEM event — the measured MMD/MD boundary (depfile.py
+        # docstring; -I-found `<>` includes are USER, both spellings).
+        # -include (R17) resolves gcc's measured way (verdict-c1 Leg 4,
+        # rows G1-G11): the operand AS-GIVEN first — a relative name
+        # answers to the CWD — then every -I dir in order, then every
+        # -isystem dir. The includer (main file's) directory is NEVER
+        # searched: that is the quoted-#include rule, not this one.
         if preinclude:
-            # -include (R17) resolves gcc's measured way (verdict-c1 Leg 4,
-            # rows G1-G11): the operand AS-GIVEN first — a relative name
-            # answers to the CWD — then every -I dir in order, then every
-            # -isystem dir. The includer (main file's) directory is NEVER
-            # searched: that is the quoted-#include rule, not this one.
-            cand.append(os.path.normpath(target))
-            cand += [os.path.normpath(os.path.join(d, target))
-                     for d in self.opts.includes_dir + self.opts.isystem]
+            cand.append((os.path.normpath(target), False))
+            cand += [(os.path.normpath(os.path.join(d, target)), False)
+                     for d in self.opts.includes_dir]
+            cand += [(os.path.normpath(os.path.join(d, target)), True)
+                     for d in self.opts.isystem]
         elif not angle:
-            cand.append(os.path.normpath(os.path.join(base_dir, target)))
-            cand += [os.path.normpath(os.path.join(d, target))
-                     for d in self.opts.includes_dir + self.opts.isystem]
+            cand.append((os.path.normpath(os.path.join(base_dir, target)),
+                         False))
+            cand += [(os.path.normpath(os.path.join(d, target)), False)
+                     for d in self.opts.includes_dir]
+            cand += [(os.path.normpath(os.path.join(d, target)), True)
+                     for d in self.opts.isystem]
         else:
-            cand += [os.path.normpath(os.path.join(d, target))
-                     for d in self.opts.includes_dir + self.opts.isystem]
-        full = next((c for c in cand if os.path.isfile(c)), None)
+            cand += [(os.path.normpath(os.path.join(d, target)), False)
+                     for d in self.opts.includes_dir]
+            cand += [(os.path.normpath(os.path.join(d, target)), True)
+                     for d in self.opts.isystem]
+        hit = next(((c, s) for c, s in cand if os.path.isfile(c)), None)
+        full = hit[0] if hit else None
         shown = "#include %s" % operand
         if full is None:
             raise DiagError("pp", path, ln, 1, "no such file or directory",
@@ -674,6 +695,29 @@ class Preprocessor:
                             "(use -fmax-include-depth=DEPTH to increase the "
                             "maximum)" % (_MAX_INCLUDE_DEPTH,
                                           _MAX_INCLUDE_DEPTH), shown)
+        # W4 depfile event law — libcpp's per-_cpp_file-object rule,
+        # gcc-11.4 libcpp/files.c _cpp_stack_file (`!file->stack_count`
+        # emits file->path once) + the (name, search-chain-origin) object
+        # identity of _cpp_find_file (read this session, source cited in
+        # blcc/depfile.py). An include OPEN emits its path iff the
+        # (directive NAME, origin) pair is new: origin p = -include
+        # (no-search start), h = quoted found in the INCLUDER'S OWN dir
+        # (the quote-head start), c = found via the -I/-isystem chain
+        # (angle is always c). Re-includes that hit the same object —
+        # same name, same origin — emit nothing, guarded or not (this is
+        # the 729-line kernel/exit.c witness law: msr-index/taskstats/
+        # kconfig pairs are different names or origins; types.h, 100+
+        # same-name angle includers, rides once).
+        if preinclude:
+            kind = "p"                     # no-search start dir
+        elif not angle and full == cand[0][0]:
+            kind = "h"                     # found in the includer's dir
+        else:
+            kind = "c"                     # found via the -I/-isystem chain
+        key = (target, kind)
+        if key not in self._dep_keys:
+            self.deps.append((full, hit[1]))
+        self._dep_keys.add(key)
         self._process(full, self._read(full))
 
     # -- #define ------------------------------------------------------------------

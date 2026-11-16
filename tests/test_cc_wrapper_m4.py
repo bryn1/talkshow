@@ -54,20 +54,23 @@ def test_w1_werror_is_a_distinct_family_and_never_a_reject(tmp_path):
 
 
 def test_w2_mmd_precedence_leg_never_silently_eaten(tmp_path):
-    # THE precedence leg (§3.2 W0-planted (i)): `-Wall` AND `-Wp,-MMD,x.d`
-    # — -Wall is IGNORE-LOUD-dropped, the -Wp,-MMD line SURVIVES the bucket
-    # and answers REJECT-LOUD rc 2 NAMING it. If the -W bucket were tried
-    # first (matcher swap = the W0 tooth plant) this leg goes RED: either
-    # rc 0 (depfile silently eaten) or a message naming -Wall.
+    # THE precedence leg (§3.2 W0-planted (i); W4 RE-PIN, MC 12581 — the
+    # W0 body asserted the REJECT-LOUD refusal the writer retires):
+    # `-Wall` AND `-Wp,-MMD,x.d` — -Wall is IGNORE-LOUD-dropped, the
+    # -Wp,-MMD line SURVIVES the bucket and reaches the blcc writer. If
+    # the -W bucket were tried first (matcher swap = the W0 tooth plant)
+    # this leg goes RED: rc 0 but NO depfile (silently eaten) or a
+    # message naming -Wall.
     src = tmp_path / "u.c"
     src.write_text(GOOD)
     dep = tmp_path / "u.o.d"
     r = wrap([KDEF, "-Wall", "-Wp,-MMD,{}".format(dep),
-              "-c", str(src), "-o", str(tmp_path / "u.o")], tmp_path)
-    assert r.returncode == 2, "MMD must survive to the REJECT-LOUD wall"
-    assert "-Wp,-MMD" in r.stderr
-    assert not dep.exists(), "REJECT-LOUD writes no depfile (§4.3 posture)"
-    assert not (tmp_path / "u.o").exists()
+              "-std=gnu89", "-c", str(src), "-o", str(tmp_path / "u.o")],
+             tmp_path)
+    assert r.returncode == 0, "MMD must survive to the W4 writer: " + r.stderr
+    assert dep.exists(), "surviving -Wp,-MMD must produce the depfile"
+    assert (tmp_path / "u.o").exists()
+    assert "-Wall" not in r.stderr          # IGNORE-LOUD, not a refusal
 
 
 def test_w3_unknown_flag_rejects_naming_it(tmp_path):

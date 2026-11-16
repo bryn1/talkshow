@@ -20,7 +20,7 @@ import subprocess
 import sys
 from typing import List, Optional
 
-from blcc import ast
+from blcc import ast, depfile
 from blcc.codegen import compile_tu
 from blcc.lexer import DiagError, Lexer
 from blcc.parser import parse_tokens
@@ -75,6 +75,11 @@ def _parse_args(argv: List[str]):
             pp_only = True
         elif a == "-c":                  # M4 W0 (§3.5): compile to the -o
             compile_only = True          # object and STOP — no ld, no gate
+        elif a.startswith("-Wp,"):
+            # M4 W4 (plan §4.4): the depfile channel — ONE parse in
+            # depfile.parse_wp below validates EVERY -Wp token; an
+            # unknown subflag is the same §8 rc 2 usage channel.
+            pass
         elif a == "-nostdinc":
             pass                             # blcc HAS no default system dirs
         elif a in ("-I", "-isystem", "-include", "-std"):
@@ -130,7 +135,13 @@ def _parse_args(argv: List[str]):
         raise SystemExit("blcc: -c needs -o <output>\n" + USAGE)
     if not pp_only and out_path is None:
         raise SystemExit("blcc: need an input file and -o <output>\n" + USAGE)
-    return (in_path, out_path, emit_asm, verbose, compile_only), pp_only, opts
+    try:
+        wp = depfile.parse_wp(argv)     # operand law is parse_wp's: a
+    except ValueError as bad:           # -MD/-MMD without its path is
+        raise SystemExit("blcc: unknown -Wp subflag '{}'\n{}".format(
+            bad, USAGE))                # the same LOUD rc 2
+    return (in_path, out_path, emit_asm, verbose, compile_only), \
+        pp_only, opts, wp
 
 
 def _require_main(tu: ast.TranslationUnit, eof, in_path: str) -> None:
@@ -161,8 +172,8 @@ def _run_tool(cmd: List[str]) -> Optional[int]:
 
 def main(argv: List[str]) -> int:
     try:
-        (in_path, out_path, emit_asm, verbose, compile_only), pp_only, opts = \
-            _parse_args(argv)
+        (in_path, out_path, emit_asm, verbose, compile_only), pp_only, \
+            opts, wp = _parse_args(argv)
     except SystemExit as exc:            # usage errors are §2 exit 2
         sys.stderr.write(str(exc) + "\n")
         return 2
@@ -192,6 +203,26 @@ def main(argv: List[str]) -> int:
                          "'{}: {}'\n".format(in_path, type(exc).__name__,
                                              str(exc).replace("'", "")))
         return _fail(2)
+
+    # M4 W4 (plan §4.4) — the ONE depfile writer, at the gcc-measured
+    # write point: the .d goes out when PREPROCESSING ENDS (gcc writes it
+    # even when the compile then fails, and on -E too), while a pp-phase
+    # failure never wrote one. The event list is the include resolver's
+    # own (pp.deps); MMD filters SYSTEM events, MD keeps them. A failed
+    # recipe later still leaves the .d (fixdep only runs after rc 0 —
+    # §4.3; the -o object unlink is _fail's §3.5 law, unchanged).
+    if wp.active():
+        deps = [in_path] + [sp for (sp, sys_h) in pp.deps
+                            if wp.wants_system() or not sys_h]
+        # The target is -MT accumulates, else the source stem + .o —
+        # NEVER the -o operand (measured dd1/dd2: `-c sub/abc.c -o zz.o`
+        # -> `abc.o:`), so no -o is needed to write the .d at all.
+        try:
+            depfile.write(wp.depfile_path(), wp.targets, in_path, deps)
+        except OSError as exc:
+            sys.stderr.write("blcc: cannot open depfile '%s': %s\n"
+                             % (wp.depfile_path(), exc.strerror))
+            return _fail(2)
 
     if pp_only:
         # gcc -E -o FILE sends the pp stream to FILE (measured c7 — the
