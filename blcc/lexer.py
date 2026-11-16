@@ -20,6 +20,12 @@ KEYWORDS = frozenset({
     # and the GNU spellings the parser must SEE as keywords to fold (or to
     # reject LOUD with a stable, classifiable diagnostic text):
     "signed", "__signed__", "__signed", "register", "inline", "__inline__",
+    # M4 W-B (MC 12596): the 128-bit integer family. Kernel census
+    # (5.10 tree, grep): the ONLY spellings in the corpus are `__int128`
+    # (12 sites) and `unsigned __int128` (13); `__int128_t`/`__uint128_t`
+    # are glibc stdint names — NOT keywords, NOT kernel spellings, they
+    # stay identifiers (undeclared-loud both sides, measured).
+    "__int128",
     "__inline", "__typeof",
     "volatile", "__volatile__", "__label__", "typeof", "__typeof__",
     "__extension__", "_Generic", "asm", "__asm__", "__attribute__",

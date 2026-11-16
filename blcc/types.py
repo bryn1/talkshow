@@ -23,16 +23,31 @@ TYPE_SIZE = {
     "int": 4, "unsigned int": 4,
     "long": 8, "unsigned long": 8,
     "long long": 8, "unsigned long long": 8,
+    # M4 W-B (MC 12596): __int128 family — sizeof/alignof MEASURED 16/16
+    # (gcc 11.4, facts1.c); spec words commute with the sign family only.
+    "__int128": 16, "unsigned __int128": 16,
     "float": 4, "double": 8,          # STORAGE only (§1 row 14): arith LOUD
     "_Bool": 1,                      # sizeof measured 1; promotes to int
     "void": 0,
 }
 UNSIGNED_NAMES = frozenset({"unsigned char", "unsigned short", "unsigned int",
-                            "unsigned long", "unsigned long long"})
+                            "unsigned long", "unsigned long long",
+                            "unsigned __int128"})
 _RANK = {"int": 1, "unsigned int": 1, "long": 2, "unsigned long": 2,
-         "long long": 3, "unsigned long long": 3}
+         "long long": 3, "unsigned long long": 3,
+         # M4 W-B (MC 12596): 128-bit sits ABOVE long long (gcc-measured
+         # UAC: any 64-bit operand converts UP to the 128 operand's type).
+         "__int128": 4, "unsigned __int128": 4}
 _UNSIGNED_OF = {"int": "unsigned int", "long": "unsigned long",
-                "long long": "unsigned long long"}
+                "long long": "unsigned long long",
+                "__int128": "unsigned __int128"}
+
+# M4 W-B (MC 12596): the 128-bit class, one membership test everywhere.
+I128_NAMES = frozenset({"__int128", "unsigned __int128"})
+
+
+def is_i128(ty) -> bool:
+    return isinstance(ty, ast.BuiltinType) and ty.name in I128_NAMES
 
 
 def is_unsigned(ty) -> bool:
@@ -228,6 +243,29 @@ class TypeMap:
 
     # -- constant-folded array sizes (P1-2: §4 sizes are expressions) ------------
 
+    def _fold_ty(self, n, at):
+        """M4 W-B (MC 12596): the TYPE a fold subexpression carries — the
+        fold becomes WIDTH-aware exactly for the 128-bit class (the 64-bit
+        arms keep their shipped wording and masks UNCHANGED). Answers None
+        when the node is untyped in this context (the caller keeps the
+        legacy 64-bit law)."""
+        try:
+            return self._decay(self._untype(self._ty(n)))
+        except DiagError:
+            return None
+
+    @staticmethod
+    def _wrapw(v, wbits, signed):
+        m = (1 << wbits) - 1
+        v &= m
+        return ((v + 2 ** (wbits - 1)) % 2 ** wbits) - 2 ** (wbits - 1) \
+            if signed and wbits else v
+
+    def _wrap128(self, v, unsigned):
+        m = (1 << 128) - 1
+        v &= m
+        return v if unsigned else ((v + 2 ** 127) % 2 ** 128) - 2 ** 127
+
     def _fold_const(self, n, at) -> int:
         """Constant-fold an array-size expression (§4: integer literals, enum
         constants, + - * / % and parentheses; gcc's C rules)."""
@@ -239,6 +277,9 @@ class TypeMap:
             return self.enums[n.name]
         if isinstance(n, ast.Unary) and n.op == "~":
             v = self._fold_const(n.operand, at)
+            oty = self._fold_ty(n.operand, at)
+            if is_i128(oty):           # M4 W-B: 128-wide wrap (measured)
+                return self._wrap128(~v, is_unsigned(oty))
             v = ~v & 0xFFFFFFFFFFFFFFFF
             return ((v + 2 ** 63) % 2 ** 64) - 2 ** 63
         if isinstance(n, ast.Unary) and n.op in ("-", "+"):
@@ -281,13 +322,42 @@ class TypeMap:
             if n.op in ("<<", ">>"):
                 a = self._fold_const(n.left, at)
                 b = self._fold_const(n.right, at)
+                lty = self._fold_ty(n.left, at)
+                if is_i128(lty):       # M4 W-B: 128-bit fold law, 0..127
+                    if b < 0 or b > 127:
+                        self._err(at or n, "shift amount must be a "
+                                  "constant in 0..127 for a 128-bit "
+                                  "value (§4)", n.op)
+                    v = (a << b) & ((1 << 128) - 1) if n.op == "<<" \
+                        else a >> b
+                    return self._wrap128(v, is_unsigned(lty))
                 if b < 0 or b > 63:
                     self._err(at or n, "shift amount must be a constant in "
                               "0..63 (§4)", n.op)
                 v = (a << b) & 0xFFFFFFFFFFFFFFFF if n.op == "<<" else a >> b
                 return ((v + 2 ** 63) % 2 ** 64) - 2 ** 63
         if isinstance(n, ast.Cast):
-            return self._fold_const(n.operand, at)
+            v = self._fold_const(n.operand, at)
+            sty = self._fold_ty(n.operand, at)
+            tty = (self._decay(self._untype(n.type))
+                   if n.type is not None else None)
+            if is_i128(sty) or is_i128(tty):
+                # M4 W-B: a fold that CROSSES the 128-bit boundary wraps
+                # through the TARGET width (measured: (u64)((u128)1<<64)
+                # is 0; (u128)(long)-1 keeps all ones).
+                if isinstance(tty, ast.BuiltinType) \
+                        and tty.name in TYPE_SIZE and tty.name != "void":
+                    if is_i128(tty):
+                        return self._wrap128(v, is_unsigned(tty))
+                    w = 8 * TYPE_SIZE[tty.name]
+                    return self._wrapw(v, w, not is_unsigned(tty)
+                                       and tty.name not in
+                                       ("unsigned char", "unsigned short",
+                                        "unsigned int", "unsigned long",
+                                        "unsigned long long"))
+                if isinstance(tty, ast.PtrType):
+                    return self._wrapw(v, 64, False)
+            return v
         if isinstance(n, ast.Cond):
             # §1c (MC 12486): constant `?:` folds like C's own constant
             # expression rule — fold the TEST, then ONLY the chosen arm

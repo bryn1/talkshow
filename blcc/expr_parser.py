@@ -33,6 +33,8 @@ _CAST_KW = frozenset(
      "enum",
      "float", "double", "unsigned", "signed", "__signed__", "__signed",
      "volatile", "__volatile__", "restrict", "__restrict", "__restrict__",
+     # M4 W-B (MC 12596): the 128-bit integer word in type position
+     "__int128",
      # §1 row 6c: __typeof__ is legal in cast/sizeof type position
      "typeof", "__typeof__", "__typeof",
      # M4 W2 COMMIT-0 (MC 12545): C99 `_Bool` is a type keyword everywhere

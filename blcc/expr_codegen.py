@@ -17,9 +17,10 @@ ADDRESS of an l-value in %rax (§4 lvalues: idents, *p, [], . and ->)."""
 from __future__ import annotations
 
 from blcc import ast, predef
+from blcc.i128 import I128Mixin
 from blcc.memfold import MemFoldMixin
 from blcc.runtime import BUILTINS
-from blcc.types import TYPE_SIZE, is_unsigned
+from blcc.types import TYPE_SIZE, is_i128, is_unsigned
 
 # §6 call ABI: the first six args; beyond them codegen raises (§6 pin).
 REG_ARGS = ("%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9")
@@ -52,7 +53,7 @@ def _fp(ty) -> bool:
     return isinstance(ty, ast.BuiltinType) and ty.name in ("float", "double")
 
 
-class ExprEmitter(MemFoldMixin):
+class ExprEmitter(MemFoldMixin, I128Mixin):
             # inner ast.Switch bodies are the inner switch's own chain (§4)
 
     # -- expressions: result lands in %rax --------------------------------------------------------
@@ -95,6 +96,9 @@ class ExprEmitter(MemFoldMixin):
 
     def _ex_ident(self, n) -> None:
         ra = self._asm_regasm(n.name)
+        if ra is not None and is_i128(self._decay(self._ty(n))):
+            self._err(n, "an asm-bound 128-bit value is not in the subset "
+                      "(§3.10 binds 64-bit registers)", n.name)
         if ra is not None:
             # M3 §3.10(b) C-READ: STABLE bind rides the register itself
             # (value persistently there); SCRATCH loads the shadow slot at
@@ -155,18 +159,20 @@ class ExprEmitter(MemFoldMixin):
             else:
                 self._load(ty, "(%rax)", at=n)
         elif n.op == "-":
+            self._i128_arith_guard(self._ty(n.operand), n)
             self._emit_expr(n.operand)
             self._e("negq %rax")
             self._narrow_int(self._ty(n))  # int negation wraps in 32 bits (§4)
         elif n.op == "+":
             self._emit_expr(n.operand)
         elif n.op == "~":
+            self._i128_arith_guard(self._ty(n.operand), n)
             self._emit_expr(n.operand)
             self._e("notq %rax")
         elif n.op == "!":
             self._fp_guard(self._ty(n.operand), self._int(n), n)
             self._emit_expr(n.operand)
-            self._e("testq %rax, %rax")
+            self._truth(n.operand)
             self._e("sete %al")
             self._e("movzbq %al, %rax")
         else:
@@ -646,6 +652,8 @@ class ExprEmitter(MemFoldMixin):
         # at T1; the stack-push addressing below must honour the base.
         slot_base = self.fn.temp_top
         for idx, a in enumerate(args):
+            if is_i128(self._decay(self._ty(a))):
+                self._i128_byval_guard(a, "as a call argument")
             if decl_params is not None and idx < want:
                 self._fp_guard(self._ty(a), decl_params[idx].type, a)
             self._emit_expr(a)
@@ -769,6 +777,14 @@ class ExprEmitter(MemFoldMixin):
                              target=ce)
 
     def _ex_cast(self, n) -> None:
+        # M4 W-B (MC 12596): a Cast with a 128-bit side rides the pair law
+        # module — trunc = the measured LOW-limb movq, widening = the
+        # measured lo/hi pair; same-type 128 casts are a no-op passthrough.
+        nty = self._decay(n.type)
+        if is_i128(nty) or is_i128(self._decay(self._ty(n.operand))):
+            self._fp_guard(self._ty(n.operand), n.type, n)
+            self._i128_cast(n)
+            return
         self._fp_guard(self._ty(n.operand), n.type, n)
         self._emit_expr(n.operand)
         ty = self._decay(n.type)
@@ -985,6 +1001,9 @@ class ExprEmitter(MemFoldMixin):
                 return
         if isinstance(n.target, ast.Ident):
             ra = self._asm_regasm(n.target.name)
+            if ra is not None and is_i128(self._decay(self._ty(n.target))):
+                self._err(n, "an asm-bound 128-bit store is not in the "
+                          "subset (§3.10 binds 64-bit registers)", "=")
             if ra is not None:
                 # M3 §3.10(c) C-WRITE: %rax → shadow; STABLE additionally
                 # movq into the register; %rsp/%rbp binds LOUD (N2).
@@ -994,6 +1013,21 @@ class ExprEmitter(MemFoldMixin):
         self._fp_guard(self._ty(n.value), ty, n)
         if isinstance(ty, ast.StructType):
             self._err(n, "'struct assignment' is not in the subset (§5)", "=")
+        if is_i128(ty):
+            # W-B value law: assign = PAIR COPY (RHS 128-address, or a
+            # scalar widened through the measured pair); the assignment
+            # VALUE is the target's address (the object IS the value).
+            self._i128_value(n.value)
+            t = self._t()
+            self._e("movq %rax, {}".format(t))
+            self._emit_addr(n.target)
+            self._e("movq {}, %rcx".format(t))
+            self._e("movq (%rcx), %rdx")
+            self._e("movq %rdx, (%rax)")
+            self._e("movq 8(%rcx), %rdx")
+            self._e("movq %rdx, 8(%rax)")
+            self._unt()
+            return
         if isinstance(n.target, ast.Ident) and not isinstance(
                 self._ty(n.target), ast.ArrayType):
             self._emit_expr(n.value)
@@ -1023,6 +1057,11 @@ class ExprEmitter(MemFoldMixin):
 
     def _ex_assignop(self, n) -> None:
         self._asm_c_rmw_blocked(n, "'op=' compound assignment")
+        if is_i128(self._decay(self._ty(n.target))):
+            # LOUD twin (gcc rc 0): a 128-bit RMW rides the pair ops the
+            # §5 wall below names; corpus volume 0 (706-stream census).
+            self._err(n, "compound assignment '{}' on a 128-bit value is "
+                      "not in the subset (§5)".format(n.op), n.op)
         if isinstance(n.target, ast.Select):
             d = self._bitfield(n.target)         # §1 row 12 (M45)
             if d is not None:                    # M2 fix-g2 (MC 12460):
@@ -1115,6 +1154,9 @@ class ExprEmitter(MemFoldMixin):
         scalar wrap, as _ex_binary's pointer path does). GNU `a ?: b`
         keeps TEST's own value — never re-evaluated."""
         ty = self._decay(self._ty(n))
+        if is_i128(ty):
+            self._err(n, "a 128-bit conditional arm is not in the subset "
+                      "(§5 — mirrors the struct-arm wall)", "?:")
         if isinstance(ty, ast.StructType):
             # The TYPE law lives in _cond_ty (sizeof folds); the VALUE
             # is the shipped §5 struct wall — mirrored, never silent.
@@ -1129,7 +1171,7 @@ class ExprEmitter(MemFoldMixin):
         l_arm2 = self._label("tern")
         l_end = self._label("ternend")
         self._emit_expr(n.test)
-        self._e("testq %rax, %rax")
+        self._truth(n.test)
         self._e("je {}".format(l_arm2))
         if n.gnu:
             # true-side value is TEST itself — already in %rax; only the
@@ -1165,10 +1207,10 @@ class ExprEmitter(MemFoldMixin):
         if n.op == "&&":
             l_false = self._label("scfalse")   # F1: zero path needs its own
             self._emit_expr(n.left)            # label; the true path jumps
-            self._e("testq %rax, %rax")        # over the xorl to l_out
+            self._truth(n.left)                # over the xorl to l_out
             self._e("je {}".format(l_false))
             self._emit_expr(n.right)
-            self._e("testq %rax, %rax")
+            self._truth(n.right)
             self._e("setne %al")
             self._e("movzbq %al, %rax")
             self._e("jmp {}".format(l_out))
@@ -1178,10 +1220,10 @@ class ExprEmitter(MemFoldMixin):
         else:
             l_true = self._label("sctrue")
             self._emit_expr(n.left)
-            self._e("testq %rax, %rax")
+            self._truth(n.left)
             self._e("jne {}".format(l_true))
             self._emit_expr(n.right)
-            self._e("testq %rax, %rax")
+            self._truth(n.right)
             self._e("setne %al")
             self._e("movzbq %al, %rax")
             self._e("jmp {}".format(l_out))
@@ -1194,6 +1236,12 @@ class ExprEmitter(MemFoldMixin):
         to_ty (§2.2). A no-op for 64-bit targets and pointers; narrow signed
         re-signs, narrow unsigned zero-fills (§2.2 wrap both ways)."""
         to_ty = self._decay(to_ty)
+        if is_i128(to_ty):
+            # The 128-bit class never re-interns through %rax (the pair
+            # law owns it — _i128_cast/_i128_value); reaching HERE is a
+            # dispatch hole, so it stays LOUD and NAMED, never silent.
+            self._err(at or self.tu, "internal: 128-bit value reached the "
+                      "64-bit re-intern (§4 pair law)", "128-bit value")
         if isinstance(to_ty, ast.BuiltinType):
             ops = _CONV.get(to_ty.name)
             if ops is None:                     # float/double: storage only
@@ -1224,6 +1272,12 @@ class ExprEmitter(MemFoldMixin):
             return None                          # pointer op: no scalar wrap
         return self._uac(lt, rt, n)
 
+    def _i128_arith_guard(self, ty, at) -> None:
+        if is_i128(self._decay(ty)):
+            self._err(at, "128-bit arithmetic on this operator is not in "
+                      "the subset (§5 — the pair ops land with W-B "
+                      "COMMIT-2)", "128-bit value")
+
     def _ex_binary(self, n) -> None:
         op = n.op
         if op in ("&&", "||"):
@@ -1231,6 +1285,12 @@ class ExprEmitter(MemFoldMixin):
             return
         lt = self._decay(self._ty(n.left))
         rt = self._decay(self._ty(n.right))
+        if is_i128(lt) or is_i128(rt):
+            # LOUD twin (measured gcc rc 0 everywhere): the pair arms are
+            # COMMIT-2's land (add/sub/and/or/xor/shift/cmp/mul/div);
+            # nothing 128-bit silently rides the 64-bit shapes below.
+            self._err(n, "'{}' on 128-bit values is not in the subset "
+                      "(§5)".format(op), op)
         lp, rp = isinstance(lt, ast.PtrType), isinstance(rt, ast.PtrType)
         if op in ("+", "-") and (lp or rp):
             # elem_ty = the POINTED-TO type: .inner of the pointer (§4 scaling)

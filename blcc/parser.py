@@ -31,6 +31,8 @@ _DECL_START_KW = _TYPE_KW + ("const", "struct", "enum", "static", "typedef",
                              # M4 W2 COMMIT-0 (MC 12545): `_Bool` opens a
                              # declaration like any other type keyword.
                              "_Bool",
+                             # M4 W-B (MC 12596): so does `__int128`.
+                             "__int128",
                              # M2: the extended specifier vocabulary (§4.1a)
                              "signed", "__signed__", "__signed", "register",
                              "inline", "__inline__", "__inline", "volatile",
@@ -57,6 +59,16 @@ class Parser(AsmParseMixin):
         # stream only carries `typedef __builtin_va_list va_list;`).
         self.scopes[0]["__builtin_va_list"] = ("typedef",
                                                predef.VA_LIST_TY)
+        # M4 W-B (MC 12596): gcc's x86-64 target predefines
+        # `__int128_t`/`__uint128_t` as BUILTIN TYPEDEFS (measured: decl
+        # rc 0, sizeof 16; `unsigned __int128_t` is a parse ERROR — the
+        # typedef law, not keyword commutation). Kernel census: 0 sites
+        # (the kernel spells the keywords), but the names are
+        # compiler-supplied — same §2.7 mechanism as __builtin_va_list.
+        self.scopes[0]["__int128_t"] = ("typedef", ast.BuiltinType(
+            "<predefined>", 0, 0, "__int128"))
+        self.scopes[0]["__uint128_t"] = ("typedef", ast.BuiltinType(
+            "<predefined>", 0, 0, "unsigned __int128"))
         self.struct_tags: Dict[str, Tuple[ast.Member, ...]] = {
             predef.TAG: predef.VA_MEMBERS}
         self._anon_n = 0                  # unique minted-tag counter (T+7)
@@ -1016,7 +1028,15 @@ class Parser(AsmParseMixin):
     # either sign with `_Bool`, a repeated word. `__Bool` is NOT a keyword
     # in gcc 11.4 (measured rc 1 "unknown type name") — it stays an id.
     _SPEC_WORDS = ("_Bool", "void", "unsigned", "signed", "__signed__",
-                   "__signed", "char", "short", "int", "long")
+                   "__signed", "char", "short", "int", "long",
+                   # M4 W-B (MC 12596): __int128 is a LENGTH word of its
+                   # own — measured gcc 11.4 law (probes): it COMMUTES
+                   # with the sign family and qualifiers (`unsigned
+                   # __int128`, `__int128 unsigned`, `__signed__ __int128`
+                   # all rc 0) but joins NO other length party (`long
+                   # __int128`, `int __int128`, `__int128 long`, `_Bool
+                   # __int128`, `void __int128`, a repeat — ALL rc 1).
+                   "__int128")
 
     def _base_type_core(self, quals: List, attr_sink=None) -> ast.Node:
         # M2 §1 rows 2/14: the full scalar specifier family. signedness
@@ -1047,6 +1067,7 @@ class Parser(AsmParseMixin):
             if t.text == "enum":
                 return self.parse_enum_type()
         unsigned = signed = is_bool = is_void = False
+        i128 = False
         longs = 0
         lengths: List[str] = []          # any of char / short / int
         while True:
@@ -1088,6 +1109,12 @@ class Parser(AsmParseMixin):
                                       "'_Bool'" if is_bool else
                                       "another sign specifier"))
                 signed = True
+            elif t.text == "__int128":
+                if i128:
+                    self._sema(t, "two or more data types in declaration "
+                                  "specifiers ('__int128' repeated) is a "
+                                  "gcc ERROR (§1 row 2)")
+                i128 = True
             elif t.text == "long":
                 longs += 1
                 if longs > 2:
@@ -1106,12 +1133,29 @@ class Parser(AsmParseMixin):
             # in declaration specifiers" / "two or more data types". A
             # bare `void` answers as the BuiltinType it always has been —
             # storage laws (size of void) ride downstream UNCHANGED.
-            if is_bool or lengths or longs or unsigned or signed:
+            if is_bool or lengths or longs or unsigned or signed \
+                        or i128:
                 self._sema(t, "'void' combined with another data "
                               "specifier is a gcc ERROR (§1 row 2)")
             return ast.BuiltinType(t.file, t.line, t.col, "void")
         if is_bool:
+            if i128:
+                self._sema(t, "two or more data types in declaration "
+                              "specifiers ('_Bool' and '__int128') is "
+                              "a gcc ERROR (§1 row 2)")
             return ast.BuiltinType(t.file, t.line, t.col, "_Bool")
+        if i128:
+            # Measured (M4 W-B, MC 12596): __int128 answers ALONE or
+            # with a sign word only; `unsigned __int128` keeps its
+            # distinct identity (types.py SIZE/UNSIGNED tables).
+            if lengths or longs:
+                self._sema(t, "two or more data types in declaration "
+                              "specifiers ({}) is a gcc ERROR "
+                              "(§1 row 2)".format(
+                                  " and ".join(
+                                      lengths + ["long"] * longs)))
+            name = ("unsigned __int128" if unsigned else "__int128")
+            return ast.BuiltinType(t.file, t.line, t.col, name)
         if lengths or longs:
             # Two DISTINCT length words are the measured gcc ERROR ("both
             # 'long' and 'char'…" / "two or more data types") with ONE

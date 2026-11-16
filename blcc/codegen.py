@@ -21,7 +21,8 @@ from typing import Dict, List, Optional, Tuple
 from blcc import ast
 from blcc.data import DataEmitter
 from blcc.expr_codegen import REG_ARGS, ExprEmitter, _fp
-from blcc.types import TypeMap, _roundup8, is_unsigned, stmt_children
+from blcc.i128 import mem8   # W-B: hi-limb address form (i128.py law)
+from blcc.types import TypeMap, _roundup8, is_i128, is_unsigned, stmt_children
 from blcc.asmgen import AsmGenMixin
 from blcc import predef
 
@@ -274,7 +275,14 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin):
     def _slot(self, ty: ast.Node, at) -> int:
         # arrays keep their FULL size here (§4) — only _load/_ty/_store decay;
         # an unsized array (parameter) already sizes to 8 in _size().
-        self.fn.frame += _roundup8(max(self._size(ty, at), 8))
+        sz = _roundup8(max(self._size(ty, at), 8))
+        if is_i128(self._decay(ty)) and self.fn.frame % 16:
+            # W-B (MC 12596, al.c measured): a 16-byte object's frame slot
+            # is 16-byte ALIGNED — bump the running frame to a 16 boundary
+            # first (the slot base is rbp-frame, so frame %16==0 ⇒ the
+            # object address is 16-aligned, exactly gcc's -O0 law).
+            self.fn.frame += 8
+        self.fn.frame += sz
         return -self.fn.frame
 
     def _e(self, line: str) -> None:
@@ -287,6 +295,15 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin):
             self._e("movabsq ${}, %rax".format(v))
 
     def _load(self, ty: ast.Node, mem: str, at=None) -> None:
+        # M4 W-B (MC 12596): a 128-bit "content load" IS the VALUE LAW —
+        # the value is the 16-byte OBJECT, so %rax carries its ADDRESS
+        # (the aggregate idiom, §4). A deref `(%rax)` already IS the
+        # address; named storage leaqs it. No consumer ever pair-loads
+        # implicitly: bits move only through blcc/i128.py's measured arms.
+        if is_i128(self._decay(ty)):
+            if mem != "(%rax)":
+                self._e("leaq {}, %rax".format(mem))
+            return
         sz = self._size(self._decay(ty), at)
         uns = is_unsigned(ty) and sz < 8
         if sz == 1:
@@ -306,6 +323,17 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin):
                       "load")
 
     def _store(self, ty: ast.Node, mem: str, src: str = "a", at=None) -> None:
+        # W-B (MC 12596): storing a 128-bit value = PAIR COPY from the
+        # value's ADDRESS (the value law): the source register carries a
+        # 16-byte object, movq by movq — the measured gcc spill is two
+        # 8-byte moves (al.c: `movq %rax,-16(%rbp)` / `movq $0,-8(%rbp)`).
+        if is_i128(self._decay(ty)):
+            sr, tr = _REG[8][src], ("%rcx" if src == "a" else "%rax")
+            self._e("movq ({}), {}".format(sr, tr))
+            self._e("movq {}, {}".format(tr, mem))
+            self._e("movq 8({}), {}".format(sr, tr))
+            self._e("movq {}, {}".format(tr, mem8(mem)))
+            return
         sz = self._size(self._decay(ty), at)
         if sz not in _STORE_OP:
             self._err(at or self.tu, "'struct assignment' is not in the subset "
@@ -457,6 +485,19 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin):
         if isinstance(self._decay(fd.ret_type), ast.StructType):
             self._err(fd, "'struct' returned by value is 'struct assignment' "
                       "(§5) — return a pointer", fd.name, "asm")
+        # M4 W-B (MC 12596): 128-bit BY-VALUE params/returns are the
+        # System V GPR-PAIR ABI (rdi:rsi, rax:rdx) — measured gcc rc 0,
+        # blcc LOUD §6 twin (staging is one 8-byte value per arg slot);
+        # the 706-stream census carries 0 such sites. LEDGER row ships.
+        if is_i128(self._decay(fd.ret_type)):
+            self._err(fd, "a 128-bit value returned by value is not in "
+                      "the subset (§6 — GPR-PAIR return; LOUD-DIV twin)",
+                      fd.name, "asm")
+        for _p in fd.params:
+            if is_i128(self._decay(_p.type)):
+                self._err(fd, "a 128-bit value passed as a parameter is "
+                          "not in the subset (§6 — GPR-PAIR passing)",
+                          fd.name, "asm")
         fn.epilogue = self._label("ep_" + fd.name)
         self._fn_ret = self._untype(fd.ret_type)
         self._fn_variadic = fd.variadic
@@ -528,7 +569,7 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin):
         elif isinstance(n, ast.If):
             l_else, l_end = self._label("else"), self._label("endif")
             self._emit_expr(n.cond)
-            self._e("testq %rax, %rax")
+            self._truth(n.cond)
             self._e("je {}".format(l_else))
             self._stmt(n.then)
             self._e("jmp {}".format(l_end))
@@ -540,7 +581,7 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin):
             l_top, l_end = self._label("while"), self._label("endwhile")
             self.fn.lines.append("{}:".format(l_top))
             self._emit_expr(n.cond)
-            self._e("testq %rax, %rax")
+            self._truth(n.cond)
             self._e("je {}".format(l_end))
             self.loops.append((l_end, l_top))
             self._stmt(n.body)
@@ -556,7 +597,7 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin):
             self.loops.pop()
             self.fn.lines.append("{}:".format(l_cond))
             self._emit_expr(n.cond)
-            self._e("testq %rax, %rax")
+            self._truth(n.cond)
             self._e("jne {}".format(l_top))
             self.fn.lines.append("{}:".format(l_end))
         elif isinstance(n, ast.For):
@@ -618,7 +659,7 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin):
         self.fn.lines.append("{}:".format(l_top))
         if n.cond is not None:
             self._emit_expr(n.cond)
-            self._e("testq %rax, %rax")
+            self._truth(n.cond)
             self._e("je {}".format(l_end))
         self.loops.append((l_end, l_step))
         self._stmt(n.body)
@@ -795,6 +836,12 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin):
         self._collect_cases(list(sw.body), order, default)
         outer_continue = self.loops[-1][1] if self.loops else None
         self.loops.append((l_end, outer_continue))
+        if is_i128(self._decay(self._ty(sw.control))):
+            # LOUD twin (measured gcc rc 0): a 128-bit switch control
+            # needs pair compares against the case chain; the §5 switch
+            # universe compares 64-bit tags. Corpus volume 0.
+            self._err(sw.control, "a 128-bit 'switch' control value is not "
+                      "in the subset (§5)", "switch")
         self._emit_expr(sw.control)
         for node, lab in order:
             if isinstance(node, ast.CaseRange):

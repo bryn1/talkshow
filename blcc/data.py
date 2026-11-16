@@ -313,6 +313,11 @@ class DataEmitter:
         # is the max-fundamental 16 (measured). Measured law: the linked
         # address honors %N==0 (fx/L3+obj legs).
         al = 8
+        from blcc.types import is_i128
+        if is_i128(self._untype(getattr(vd, "type", None))):
+            al = 16                   # M4 W-B (MC 12596): measured gcc
+            # law — u128 globals carry `.align 16` (consts.c: gi/gz both
+            # .align 16; the .data word rows sit 16-aligned)
         for _nm, _a in getattr(vd, "attrs", ()):
             if _nm == "aligned":
                 v = 16 if _a is None else self._fold_const(_a, vd)
