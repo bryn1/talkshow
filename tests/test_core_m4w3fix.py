@@ -36,11 +36,12 @@ C3 (the over-LOUD paren-arithmetic arrow base) rides the same file —
 its legs RED-capture on the parser at 550998d (byte-identical at the
 C1/C2 commit) and land with the parse-side fix in the C3 commit.
 """
+import os
 import re
 import subprocess
 import sys
 
-REPO = "/home/claudecode/Blaha/c-compiler"
+REPO = os.environ.get("BLCC_REPO") or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 VA = "typedef __builtin_va_list va_list;\n"
 

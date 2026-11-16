@@ -39,14 +39,21 @@ _MAX_INCLUDE_DEPTH = 200         # mirrors gcc's default -fmax-include-depth
 
 
 def _spell(path: str) -> str:
-    """A dep/diagnostic PATH as gcc spells it (M4 W4-fix F-2): a LEADING
-    './' component is dropped (measured: -I. -> n.h, -I./inc -> inc/n.h,
-    -include ./n.h -> n.h); every OTHER segment rides raw — mid-path
-    './', '../' and '//' survive exactly as gcc emits them
-    (inc/./z.h, inc/sub/../z.h, inc/sub//z.h). normpath is never
-    applied: its collapse was the 37/705-recipe universe divergence."""
+    """A dep/diagnostic PATH as gcc spells it (M4 W4-fix F-2 + M4 W-B
+    COMMIT-0): a LEADING `.` component is dropped and eats EVERY slash
+    that follows it (measured, gate m4-w4-fixgate LEG2 rep: -I. -> n.h,
+    -I./inc -> inc/n.h, -include ./n.h -> n.h, `-I.//inc` -> inc/n.h,
+    `././/dd/a.h` -> dd/a.h); every OTHER segment rides raw — mid-path
+    './', '../', a leading '/' and '//' survive exactly as gcc emits
+    them (inc/./z.h, inc/sub/../z.h, inc/sub//z.h). Object IDENTITY is
+    untouched: the drop happens at SPELL time only, so two raw
+    spellings of one file stay TWO libcpp objects (g3.d emits both).
+    normpath is never applied: its collapse was the 37/705-recipe
+    universe divergence."""
     while path.startswith("./"):
         path = path[2:]
+        while path.startswith("/"):   # the dot eats its whole slash run
+            path = path[1:]
     return path
 _NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*$")
 _IDENTC_RE = re.compile(r"[A-Za-z0-9_.']")

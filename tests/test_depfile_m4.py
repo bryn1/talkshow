@@ -17,7 +17,7 @@ import sys
 
 import pytest
 
-REPO = "/home/claudecode/Blaha/c-compiler"
+REPO = os.environ.get("BLCC_REPO") or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 KERNEL = os.environ.get("KERNEL_510")
 BUILD = "/home/claudecode/Blaha/.tmp/m4-w4/build"   # olddefconfig'd O= objtree
 KCOPY = "/home/claudecode/Blaha/.tmp/m4-w4/kcopy"   # rsynced kernel source (law file bc9eecb5)

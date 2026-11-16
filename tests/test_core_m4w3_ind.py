@@ -12,13 +12,14 @@ Oracle captured at .tmp/m4-w3/out/indir.s (gcc 11.4, kernel recipe
 SCRATCH register and the call is `call *%reg` — NEVER a call relocation;
 the named call arm keeps R_X86_64_PLT32 name-0x4 (measured W2 fact).
 """
+import os
 import re
 import subprocess
 import sys
 
 import pytest
 
-REPO = "/home/claudecode/Blaha/c-compiler"
+REPO = os.environ.get("BLCC_REPO") or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def blcc(args):

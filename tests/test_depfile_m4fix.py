@@ -36,7 +36,7 @@ import sys
 
 import pytest
 
-REPO = "/home/claudecode/Blaha/c-compiler"
+REPO = os.environ.get("BLCC_REPO") or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def _blcc(args, cwd):
