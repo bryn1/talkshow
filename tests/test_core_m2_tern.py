@@ -439,12 +439,19 @@ int main(void){ int r = c ? 1 : x = 5; return r; }
 """, "thirdassign", "parse")
 
 
-def test_tern_statement_comma_stays_loud():
-    # `x = 1 ? 2 : 3, 5;` — gcc rc0 (top-level comma operator); blcc's
-    # comma-operator wall is shipped §5 (the census names it separately).
-    blcc_loud("""
+def test_tern_statement_comma_flipped():
+    # FLIPPED by M4 W-G COMMIT-1 (MC 12633) — was
+    # test_tern_statement_comma_stays_loud (the M2-era §5 comma wall,
+    # "the census names it separately"). The wall is DEAD: the comma
+    # operator now rides every C `expression` slot (this file's own
+    # §1c middle operand was the one surviving site). MEASURED law
+    # (gcc 11.4 gnu89): `x = 1 ? 2 : 3, 5;` parses (x = (1 ? 2 : 3))
+    # then , 5 — value 5 DISCARDED at statement level, x == 2; the
+    # run-pair pins value = RIGHT, LEFT fully sequenced. Flip, never
+    # deletion (W-F law).
+    both_rc("""
 int main(void){ int x; x = 1 ? 2 : 3, 5; return x; }
-""", "stmtcomma", "parse")
+""", "stmtcomma", 2)
 
 
 def test_tern_nonconst_global_init_loud():

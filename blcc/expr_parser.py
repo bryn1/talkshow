@@ -166,8 +166,14 @@ class ExprParser:
 
     def parse_comma_expression(self) -> ast.Node:
         """C grammar's `expression`: assignment-expressions joined by the
-        comma operator (§1c: admitted at the conditional's MIDDLE operand,
-        where gcc 11.4 gnu89 measures rc0 for `1 ? 2, 3 : 4`)."""
+        comma operator. M4 W-G COMMIT-1 (MC 12633) PROMOTES it from the
+        one §1c site (conditional's MIDDLE operand, MC 12486) to EVERY
+        slot the C grammar names `expression` — parenthesized primary,
+        sizeof/alignof expr forms, subscript, statement, control
+        conditions, for clauses, return. The cast as LEFT operand
+        (spinlock.h:117 `(((void)(lock), 0))`, 492 streams) is the
+        corpus carrier; the law table is .tmp/m4-wg/measure + the
+        test-file docstring (value = RIGHT, LEFT sequenced first)."""
         left = self.parse_expression()
         while self.s.accept_punct(","):
             right = self.parse_expression()
@@ -239,7 +245,9 @@ class ExprParser:
                     # the TYPE's size (§1 row 11) — consume the group.
                     self.parse_init()
                 return ast.Sizeof(t.file, t.line, t.col, typ, None)
-            expr = self.parse_expression()
+            expr = self.parse_comma_expression()
+            # W-G (MC 12633): `sizeof (a, b)` = sizeof of the PARENTHESIZED
+            # PRIMARY (m18: gcc rc0, size of the RIGHT operand's type).
             self.s.expect_punct(")")
             return ast.Sizeof(t.file, t.line, t.col, None, expr)
         if self._starts_type(0):
@@ -266,7 +274,7 @@ class ExprParser:
                     # rides the TYPE (§1 row 11, the sizeof law mirrored).
                     self.parse_init()
                 return ast.Alignof(t.file, t.line, t.col, typ, None)
-            expr = self.parse_expression()
+            expr = self.parse_comma_expression()
             self.s.expect_punct(")")
             return ast.Alignof(t.file, t.line, t.col, None, expr)
         # Bare form: EXPR ONLY. A type word answers the parse wall
@@ -437,7 +445,10 @@ class ExprParser:
                 node = ast.Call(t.file, t.line, t.col, node, args)
             elif t.text == "[":
                 self.s.next()
-                index = self.parse_expression()
+                # W-G (MC 12633): the C grammar's subscript holds a full
+                # `expression` — a bare comma rides (`a[0, 1]` indexes 1;
+                # measured m24-class gcc rc0 both spellings).
+                index = self.parse_comma_expression()
                 self.s.expect_punct("]")
                 node = ast.Index(t.file, t.line, t.col, node, index)
             elif t.text in (".", "->"):
@@ -506,7 +517,11 @@ class ExprParser:
                                 "expected an expression", "{")
             return self.parse_stmt_expr(t)
         if t.kind == "punct" and t.text == "(":
-            expr = self.parse_expression()
+            # W-G (MC 12633): the C grammar's parenthesized primary holds
+            # a full `expression` — the comma rides (`(void)f(), 0`
+            # class); a comma in a CALL ARGUMENT list stays the
+            # separator because _parse_call_args takes assignment level.
+            expr = self.parse_comma_expression()
             self.s.expect_punct(")")
             return expr
         raise DiagError("parse", t.file, t.line, t.col,

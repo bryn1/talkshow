@@ -196,7 +196,10 @@ def test_alignof_values_matrix(tmp_path):
         "int a5[__alignof__(long long) == 8 ? 1 : -1];\n")
     # NOTE: `long double` is NOT exercised — blcc's `sizeof(long double)`
     # TYPE parse is a PRE-EXISTING row-14 wall (measured at tip: `parse:
-    # expected ')', found 'double'`), owned by W-G, not this wave.
+    # expected ')', found 'double'`). It was slated "W-G" under the OLD
+    # float plan row; per AMENDMENT-5 (MC 12614) W-G is the CAST-COMMA
+    # wall and float storage RETIRED to the M5 ladder (plan §5.3) — so
+    # this row is neither W-G nor this wave, it is the §1 row-14 defer.
     twin(tmp_path, "ao_val", src)
 
 

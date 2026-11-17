@@ -2313,7 +2313,10 @@ class Parser(AsmParseMixin):
                 return cls(t.file, t.line, t.col)
             if t.text == "return":
                 self.s.next()
-                value = (None if self.s.at_punct(";") else self.expr.parse_expression())
+                # W-G (MC 12633): `return a, b;` — the grammar's return
+                # takes a full `expression` (m25/m12: value = RIGHT).
+                value = (None if self.s.at_punct(";")
+                         else self.expr.parse_comma_expression())
                 self.s.expect_punct(";")
                 return ast.Return(t.file, t.line, t.col, value)
             if self.starts_decl():
@@ -2332,14 +2335,17 @@ class Parser(AsmParseMixin):
         if self.s.at_punct(";"):
             pos = self.s.next()
             return ast.ExprStmt(pos.file, pos.line, pos.col, None)
-        expr = self.expr.parse_expression()
+        # W-G (MC 12633): expression statements take the comma (m26).
+        expr = self.expr.parse_comma_expression()
         self.s.expect_punct(";")
         return ast.ExprStmt(expr.file, expr.line, expr.col, expr)
 
     def _parse_control_head(self, kw: str):
         t = self._accept(kw)
         self.s.expect_punct("(")
-        cond = self.expr.parse_expression()
+        # W-G (MC 12633): selection/iteration conditions are
+        # `expression` slots — the comma rides (m8/m11).
+        cond = self.expr.parse_comma_expression()
         self.s.expect_punct(")")
         return t, cond
 
@@ -2359,7 +2365,7 @@ class Parser(AsmParseMixin):
         if self._accept("while") is None:
             self._parse_err(self.s.peek(), "expected 'while' after 'do' body")
         self.s.expect_punct("(")
-        cond = self.expr.parse_expression()
+        cond = self.expr.parse_comma_expression()   # W-G (MC 12633)
         self.s.expect_punct(")")
         self.s.expect_punct(";")
         return ast.DoWhile(t.file, t.line, t.col, body, cond)
@@ -2378,12 +2384,18 @@ class Parser(AsmParseMixin):
                                           "declaration (§5)", "declaration")
             init = var_decls[0]
         else:
-            expr = self.expr.parse_expression()
+            expr = self.expr.parse_comma_expression()
             init = ast.ExprStmt(expr.file, expr.line, expr.col, expr)
             self.s.expect_punct(";")
-        cond = None if self.s.at_punct(";") else self.expr.parse_expression()
+        # W-G (MC 12633): ALL THREE for clauses are `expression` slots
+        # (m3/m4/m29) — this also carries the legacy W-D "for-comma
+        # increment" class (276 files): ONE comma mechanism, the wave
+        # re-ranked behind W-G per AMENDMENT-5.
+        cond = None if self.s.at_punct(";") \
+            else self.expr.parse_comma_expression()
         self.s.expect_punct(";")
-        step = None if self.s.at_punct(")") else self.expr.parse_expression()
+        step = None if self.s.at_punct(")") \
+            else self.expr.parse_comma_expression()
         self.s.expect_punct(")")
         return ast.For(t.file, t.line, t.col, init, cond, step, self.parse_statement())
 
@@ -2419,7 +2431,7 @@ class Parser(AsmParseMixin):
     def parse_switch(self) -> ast.Node:
         t = self._accept("switch")
         self.s.expect_punct("(")
-        control = self.expr.parse_expression()
+        control = self.expr.parse_comma_expression()   # W-G (MC 12633)
         self.s.expect_punct(")")
         self.s.expect_punct("{")
         self.switch_depth += 1

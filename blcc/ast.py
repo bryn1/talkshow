@@ -476,10 +476,12 @@ class Cond(Node):
 
 @dataclass(frozen=True)
 class Comma(Node):
-    """§1c (MC 12486): the comma operator AT THE ONE GRAMMAR SITE C
-    grammar admits it in today — the MIDDLE operand of a conditional
-    (`a ? (b, c) : d`, measured gcc rc0 without the parens). The
-    top-level/statement comma operator stays the shipped §5 wall."""
+    """The comma operator. §1c (MC 12486) admitted it ONLY at the
+    conditional's MIDDLE operand; M4 W-G COMMIT-1 (MC 12633) ships the
+    full C `expression` nonterminal — parenthesized primaries, control
+    conditions, for clauses, subscript, statement, return (the
+    spinlock.h:117 `(((void)(lock), 0))` cast-left class, 492 streams).
+    Value = RIGHT operand, LEFT fully evaluated first (sequenced)."""
     left: Node
     right: Node
 

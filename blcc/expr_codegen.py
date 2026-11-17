@@ -1175,10 +1175,13 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
         self._narrow_int(self._ty(n.operand))   # ++/-- result keeps its type
 
     def _ex_comma(self, n) -> None:
-        """§1c (MC 12486): comma operator — evaluate LEFT for its side
-        effects (value dropped), then RIGHT becomes the value. Reached
-        only through the conditional's MIDDLE operand (§5 keeps the
-        top-level comma wall)."""
+        """Comma operator — evaluate LEFT for its side effects (value
+        dropped), then RIGHT becomes the value (type = RIGHT's, types.py
+        _ty). Shipped from §1c (MC 12486, the conditional's MIDDLE
+        operand); M4 W-G COMMIT-1 (MC 12633) rode it UNCHANGED when the
+        C `expression` nonterminal opened every other grammar slot
+        (each _emit_expr completes before the next — the LEFT-fully-
+        BEFORE-RIGHT sequencing law needs no machinery here)."""
         self._emit_expr(n.left)
         self._emit_expr(n.right)
 
