@@ -843,9 +843,16 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
         (never a silent wrong-width window). The same arm gives the
         __int128-unit twin a NAME: tip crashed with a raw
         `KeyError: unsigned __int128` ICE on `{u128 x:4;}` access —
-        now a named LOUD (probe .tmp/m4-wf/probes/i128bf2.c)."""
+        now a named LOUD (probe .tmp/m4-wf/probes/i128bf2.c).
+
+        M4 W-G COMMIT-0 (MC 12633, gate P2-F1/T6): the key is the
+        access-resolved OWNER, not the access base — a packed
+        descriptor hoisted from an ANON nested packed struct into an
+        UNPACKED outer carries the shrunk-unit form too, and the
+        window then silently mis-reads a straddling field
+        (_bf_owner_packed, types.py; measured t6gap2.c at 9c84499)."""
         base = self._struct_of(n)
-        if self._attr_packed(base):
+        if self._attr_packed(base) or self._bf_owner_packed(n):
             self._err(n, "packed bitfield access is not in the subset "
                       "(W-F: the packed LAYOUT law ships, the unit-"
                       "window codegen stays LOUD — gcc's shrunk-unit "

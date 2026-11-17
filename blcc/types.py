@@ -788,6 +788,32 @@ class TypeMap:
             self._struct_layout(base, n)
         return self._bf_cache.get(base.tag, {}).get(n.field)
 
+    # M4 W-G COMMIT-0 (MC 12633, W-F gate finding P2-F1/T6): the ACCESS
+    # guard's question is which struct DECLARED the resolved bitfield —
+    # the descriptor's OWNER — not what the access base is typed as. A
+    # descriptor hoisted from an ANON nested packed struct into an
+    # UNPACKED outer keeps the packed law's shrunk-unit (byte,
+    # bit-in-byte, w) form, and the unit-window codegen then SILENTLY
+    # mis-reads a straddling field (measured at 9c84499: probes
+    # t6gap2.c gcc exit 0, blcc rc 0 exit 1 — the lost top bit of
+    # {p:4; x:29;} read through the outer). One walk, the same ANON
+    # promotion path walk_fields yields; the declaring struct answers
+    # with its own `packed` attribute (packed never leaks INTO an
+    # unpacked nested member, so first-match order is the law).
+    def _bf_owner_packed(self, n: ast.Select) -> bool:
+        def walk(ty) -> bool:
+            for m in self.structs.get(ty.tag) or ():
+                if m.name == n.field:
+                    if getattr(m, "width", None) is not None:
+                        return self._attr_packed(ty)
+                elif m.name is None and \
+                        getattr(m, "width", None) is None and \
+                        isinstance(m.type, ast.StructType):
+                    if walk(m.type):
+                        return True
+            return False
+        return walk(self._struct_of(n))
+
 
     # -- type-of-expression (only what addressing widths need) --------------------
 
