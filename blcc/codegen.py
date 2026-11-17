@@ -645,6 +645,20 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin):
         elif isinstance(n, ast.StructDecl):
             self._err(n, "struct declaration in block scope is not in the "
                       "subset (§4)", "struct")
+        elif isinstance(n, ast.FuncDecl):
+            # M4 W-H (MC 12645): a block-scope function DECLARATION
+            # registers the CALL SIGNATURE and emits nothing — the
+            # parse pass already landed the name in scope; a
+            # declaration defines no body. This is the kernel's `do {
+            # extern void __compiletime_assert_NN(void)
+            # __attribute__((__error__("..."))); ... } while (0)` in
+            # EVERY __cmp/max signedness check (measured at tip:
+            # `cannot emit statement` — the false-LOUD the 406-stream
+            # jiffies class died on second; the call-site lookup rides
+            # the same self.sigs the file-scope prototypes fill, ONE
+            # mechanism). A block-scope DEFINITION never reaches _stmt:
+            # the parse arm rejects it above.
+            self.sigs[n.name] = (n.params, n.ret_type, n.variadic)
         else:
             self._err(n, "cannot emit statement", self._what(n))
 

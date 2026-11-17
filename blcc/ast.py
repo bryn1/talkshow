@@ -288,8 +288,13 @@ class TypeOf(Node):
     # §1 row 6c / §2.6: __typeof__(expr|type) — a TYPE node that stands for
     # its operand's type; resolved by TypeMap._untype (§2A M2-C5 leg 3).
     # Exactly one of expr / typ is set. Operand NOT evaluated (only typed).
+    # M4 W-H (MC 12645): `auto=True` marks the __auto_type FORM — same
+    # node, same materialization, PLUS the MEASURED value-conversion law
+    # (arrays/fns DECAY, TOP-level quals DROP, pointee quals KEEP;
+    # probes .tmp/m4-wh/probes: the measured difference vs plain typeof).
     expr: Optional[Node]
     typ: Optional[Node]
+    auto: bool = False
 
 
 @dataclass(frozen=True)

@@ -38,7 +38,11 @@ _DECL_START_KW = _TYPE_KW + ("const", "struct", "enum", "static", "typedef",
                              "inline", "__inline__", "__inline", "volatile",
                              "__volatile__", "restrict", "__restrict",
                              "__restrict__", "typeof", "__typeof__",
-                             "__typeof", "__extension__")
+                             "__typeof", "__extension__",
+                             # M4 W-H (MC 12645): opens a declaration —
+                             # parse_decl intercepts it BEFORE any base
+                             # type walk (it is NOT a base-type word).
+                             "__auto_type")
 
 
 class Parser(AsmParseMixin):
@@ -1792,6 +1796,14 @@ class Parser(AsmParseMixin):
         while self._accept("register") is not None:
             is_register = True
             self._skip_gnu_attrs(decl_sink)
+        # M4 W-H (MC 12645): __auto_type — the jiffies.h:427 class. It
+        # is a DECLARATION specifier, not a type word: it rides its own
+        # ONE arm here, after the storage-class/inline/typedef/register
+        # specifiers are consumed (so `static __auto_type` measures rc 0
+        # both sides) and BEFORE parse_base_type (which must never see
+        # it). MEASURED law table in tests/test_core_m4wh1.py.
+        if self._at("__auto_type"):
+            return self._parse_auto_type(self.s.next(), is_static, out)
         base = self.parse_base_type(decl_sink)
         out.extend(self._drain_pending())
         if self._bare_type_ok and self.s.accept_punct(";"):
@@ -1943,6 +1955,120 @@ class Parser(AsmParseMixin):
             self.s.expect_punct(";")
             break
         return out
+
+    def _parse_auto_type(self, at_tok, is_static, out):
+        """M4 W-H (MC 12645): `__auto_type ID = init;`.
+
+        THE MEASURED LAW (gcc 11.4 gnu89, probes .tmp/m4-wh/probes/):
+        ID takes the type of `init` after VALUE CONVERSION — arrays and
+        functions DECAY, TOP-level qualifiers DROP, pointed-to
+        qualifiers KEEP. One mechanism: the SAME TypeOf node §2.6/§1 row
+        6c rides, flagged `auto`; TypeMap._untype materializes it with
+        that law (so `_ty`, `_size`, stmt-expr locals, the data layer
+        and every existing consumer resolve it — no second typeer).
+        Equivalence AND the measured differences vs `__typeof__(init)`
+        are pinned in tests/test_core_m4wh1.py (typeof does NOT decay
+        or drop: `__typeof__(ca)` is int[4]; `__typeof__(ci) v; v = 7;`
+        rc 1 while the auto form is rc 0).
+
+        Reject twins (all measured gcc rc 1, sentences mirrored): the
+        declarator must be a PLAIN identifier; the initializer is
+        REQUIRED; a bit-field init; a `void` init (variable or field
+        declared void); a SECOND declarator. ACCEPT: file scope,
+        `static`, statement expressions (the corpus shape).
+        """
+        t = self.s.peek()
+        if t.kind != "id":
+            self._parse_err(
+                t, "'__auto_type' requires a plain identifier as "
+                "declarator (measured gcc rc1: '*v =', 'v[2] =', "
+                "'(v) =' are not pointer/array-of-inferred)")
+        name_tok = self.s.next()
+        # MEASURED sentence split: a `[`/`(` after the name is the
+        # DECLARATOR arm (gcc: "requires a plain identifier as
+        # declarator" — array-decl probe), NOT the missing-init arm;
+        # the pointer form already LOUDed above (peek is `*`, not id).
+        if self.s.at_punct("[") or self.s.at_punct("("):
+            self._parse_err(
+                self.s.peek(), "'__auto_type' requires a plain identifier "
+                "as declarator (measured gcc rc1: the array/function "
+                "declarator forms are not inferred types)")
+        if self.s.accept_punct("=") is None:
+            self._sema(name_tok, "'__auto_type' requires an initialized "
+                       "data declaration (measured gcc rc1: the type "
+                       "comes from the initializer or nowhere)")
+        init = self.expr.parse_expression()
+        if self._auto_bitfield(init):
+            self._sema(name_tok, "'__auto_type' used with a bit-field "
+                       "initializer (measured gcc rc1; typeof(bit-field) "
+                       "is the same refusal — the member has no value "
+                       "form)")
+        self._auto_void(name_tok, init)
+        if self.s.at_punct(","):
+            self._parse_err(
+                self.s.peek(), "'__auto_type' may only be used with a "
+                "single declarator (measured gcc rc1: each variable "
+                "gets its own declaration)")
+        self.s.expect_punct(";")
+        ty = ast.TypeOf(at_tok.file, at_tok.line, at_tok.col, init, None,
+                        auto=True)
+        self.define(name_tok.text, ("var", ty), name_tok)
+        out.append(ast.VarDecl(at_tok.file, at_tok.line, at_tok.col,
+                               name_tok.text, ty, init, is_static,
+                               is_extern=False, asm_bind=None, attrs=()))
+        return out
+
+    def _auto_bitfield(self, init) -> bool:
+        """Light check for the measured bit-field reject: a Select whose
+        declared member carries a bit width (walked through the SAME
+        anon-promotion walk walk_fields mirrors). Coverage: the forms
+        the light mirror types (Ident/Select/arrow bases); a base the
+        mirror cannot type is volume 0 in the corpus and rides the
+        engine's ordinary member read — named limit, never silent
+        WRONG (the read itself ships; only the gcc rc1 twin is
+        light-side)."""
+        if not isinstance(init, ast.Select):
+            return False
+        base = self.expr_type(init.base)
+        if isinstance(base, ast.Qualified):
+            base = self._unqual(base)
+        if isinstance(base, ast.PtrType):
+            base = self._unqual(base.inner)
+        if not isinstance(base, ast.StructType):
+            return False
+
+        def walk(members):
+            for m in members:
+                if m.name is not None:
+                    if m.name == init.field and \
+                            getattr(m, "width", None) is not None:
+                        return True
+                    continue
+                if getattr(m, "width", None) is None:
+                    nested = self.struct_tags.get(m.type.tag)
+                    if nested and walk(nested):
+                        return True
+            return False
+        return walk(self.struct_tags.get(base.tag, ()))
+
+    def _auto_void(self, name_tok, init) -> None:
+        """Measured `void` twin (gcc: `variable or field 'v' declared
+        void`). Light side: a Cast to void, or a call to a KNOWN
+        void-returning function; everything else the engine can only
+        see at materialization — TypeMap._untype's auto arm keeps the
+        matching sentence for the forms the mirror cannot type."""
+        ty = self.expr_type(init)
+        void = isinstance(ty, ast.BuiltinType) and ty.name == "void"
+        if not void and isinstance(init, ast.Call) and \
+                isinstance(init.callee, ast.Ident):
+            sym = self.lookup(init.callee.name)
+            if sym is not None and sym[0] == "fn":
+                ret = self._unqual(sym[1])
+                void = isinstance(ret, ast.BuiltinType) and ret.name == "void"
+        if void:
+            self._sema(name_tok, "variable or field '%s' declared void "
+                       "(measured gcc rc1: there is no type to infer "
+                       "from a void expression)" % name_tok.text)
 
     def _parse_typedef(self) -> List[ast.Node]:
         out: List[ast.Node] = []

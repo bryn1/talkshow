@@ -169,8 +169,18 @@ class TypeMap:
         concrete type node it stands for — `__typeof__(expr)` is the type
         of the expression (TYPED, never evaluated: `__typeof__(called=1)`
         leaves `called` untouched, §2.6 measured), `__typeof__(type)` the
-        type itself. Recursive through Ptr/Array wrappers."""
+        type itself. Recursive through Ptr/Array wrappers.
+
+        M4 W-H (MC 12645): the `auto` flag marks the __auto_type FORM —
+        same walk PLUS the MEASURED value-conversion law: the declared
+        type is the INITIALIZER'S type after value conversion (arrays/
+        functions DECAY, TOP-level qualifiers DROP, pointed-to quals
+        survive inside). That is exactly where the two forms differ
+        (typeof(ca) is int[4]; typeof(ci) keeps const — measured
+        difference table in tests/test_core_m4wh1.py)."""
         if isinstance(ty, ast.TypeOf):
+            if ty.auto:
+                return self._auto_value_ty(ty)
             if ty.typ is not None:
                 return self._untype(ty.typ)
             return self._ty(ty.expr)
@@ -187,6 +197,24 @@ class TypeMap:
                                  self._untype(ty.inner), ty.size,
                                  getattr(ty, "fam", False))
         return ty
+
+    def _auto_value_ty(self, ty: ast.Node) -> ast.Node:
+        """M4 W-H (MC 12645): the MEASURED __auto_type value law —
+        type of the initializer after VALUE CONVERSION: top-level
+        qualifiers drop (`__auto_type v = ci; v = 7;` rc 0, the typeof
+        twin rc 1), arrays and functions DECAY (`ca` -> int*, `foo` ->
+        fn ptr; sizeof 8 both, probes at_probe.py), pointed-to quals
+        stay where they are (inside the spine — NOT re-wrapped, the
+        law only strips the TOP). A `void` init has no value type: the
+        same measured sentence the parser arm ships for the light
+        forms (`variable or field declared void`, gcc rc1)."""
+        vty = self._untype(self._ty(ty.expr))
+        _qs, spine = self._split_q(vty)
+        if isinstance(spine, ast.BuiltinType) and spine.name == "void":
+            self._err(ty, "variable or field declared void (measured gcc "
+                      "rc1: there is no type to infer from a void "
+                      "expression)", "__auto_type")
+        return self._decay(spine)
 
     def _ty_stmtexpr(self, n: ast.Node) -> ast.Node:
         """§2.4(c): type of `({...; e;})` = type of the final expression —

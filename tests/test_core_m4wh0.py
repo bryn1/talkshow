@@ -77,18 +77,15 @@ def _pair(tmp_path, tag, src, e):
 # carries it (init_main.c.i line 14433, 808 bytes, fixture
 # fixtures/m4wh/jiffies427_verbatim.i; gcc -std=gnu89 RC0 on the same
 # file — measured this session). 406/706 streams' first-blocker.
-def test_wh0_jiffies427_verbatim_wall(tmp_path):
-    # RED-at-tip pin (FLIPS at COMMIT-1 to rc 0): the whole 406-stream
-    # class in one file — the parser has NO token class for the GNU
-    # __auto_type specifier, so the pasted identifier rides into a
-    # parse wall. The message is pinned EXACTLY (it is what the kcopy
-    # walk names as the first RED past the comma wall).
+def test_wh0_jiffies427_verbatim_accepted(tmp_path):
+    # FLIPPED by COMMIT-1 (was test_wh0_jiffies427_verbatim_wall, the
+    # RED-at-tip refusal pin `parse: expected ';', found
+    # '__UNIQUE_ID_x_56'`). The whole 406-stream class in one file now
+    # COMPILES: the two auto locals take (0L)/(delta)'s long, the
+    # compiletime-assert and the `>` ternary ride existing legs.
     r = blcc(["-c", FIXTURE, "-o", str(tmp_path / "jf.o")])
-    assert r.returncode != 0, (
-        "tip must refuse the verbatim stream; if this is GREEN the "
-        "COMMIT-1 flip already landed and the leg must be rewritten "
-        "to the acceptance side:\n" + r.stderr[:400])
-    assert "expected ';', found '__UNIQUE_ID_x_56'" in r.stderr, r.stderr
+    assert r.returncode == 0, r.stderr
+    assert r.stderr.strip() == "", r.stderr
 
 
 # The v5.10 macro chain VERBATIM (compiler.h ___PASTE/__PASTE/
@@ -112,16 +109,12 @@ int main(void) { return (int)(f(-5) * 2 + f(7)); }   /* 0*2+7 = 7 */
 """
 
 
-def test_wh0_uniq_macro_chain_wall(tmp_path):
-    # RED-at-tip pin (FLIPS at COMMIT-1 to the run-pair expect 7): the
-    # gate proved blcc's PASTE mechanism is already correct (the same
-    # chain with `long` compiles clean — uniq_notype.c rc 0); the wall
-    # is ONLY the __auto_type specifier.
-    r = _compile(tmp_path, "wh0_chain", UNIQ_CHAIN)
-    assert r.returncode != 0, (
-        "tip must refuse the macro chain (COMMIT-1 flips this leg to "
-        "run-pair 7):\n" + r.stderr[:400])
-    assert "__auto_type" in r.stderr or "__UNIQUE_ID" in r.stderr, r.stderr
+def test_wh0_uniq_macro_chain_run_pair(tmp_path):
+    # FLIPPED by COMMIT-1 (was test_wh0_uniq_macro_chain_wall, the
+    # RED-at-tip refusal pin): the VERBATIM v5.10 chain — paste +
+    # __LINE__ unique names + __auto_type locals — now BUILDS and RUNS
+    # the max() law pair-clean with gcc (f(-5)=0, f(7)=7 → 0*2+7 = 7).
+    _pair(tmp_path, "wh0_chain", UNIQ_CHAIN, 7)
 
 
 # ---------------------------------------- wall 2: struct-assignment

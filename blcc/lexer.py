@@ -27,6 +27,12 @@ KEYWORDS = frozenset({
     # stay identifiers (undeclared-loud both sides, measured).
     "__int128",
     "__inline", "__typeof",
+    # M4 W-H (MC 12645): the GNU auto-typed declaration specifier — the
+    # jiffies.h:427 __UNIQUE_ID class (406 first-blockers) is EXACTLY
+    # this absent token class (gate LEG 7: paste mechanism proven
+    # correct, `__auto_type`->`long` compiles clean). Declaration-level
+    # only: parse_decl arms it; it is NOT a base-type word.
+    "__auto_type",
     "volatile", "__volatile__", "__label__", "typeof", "__typeof__",
     "__extension__", "_Generic", "asm", "__asm__", "__attribute__",
     "__alignof__", "restrict", "__restrict__", "__restrict",
