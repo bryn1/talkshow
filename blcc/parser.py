@@ -1089,6 +1089,15 @@ class Parser(AsmParseMixin):
         sizeof, declarators, §2.6d `_Generic` keys: `int[4]`)."""
         ty = self.parse_base_type()
         while True:
+            # M4 W-I (MC 12650): the abstract-declarator star tail — a
+            # cast/sizeof TYPE has NO entity, so a star-interleaved attr
+            # rides the W2.5 no-SINK posture: markers drop, layout class
+            # stays the LOUD wall (probe r22: gcc rc0 + "does not apply
+            # to types" warning; the named LOUD-DIV twin with volume 0
+            # is pinned in tests/test_core_m4wi1.py).
+            if self._at_attr() or self._at_extension():
+                self._skip_gnu_attrs()
+                continue
             star = self.s.accept_punct("*")
             if star is not None:
                 ty = ast.PtrType(star.file, star.line, star.col, ty)
@@ -1455,6 +1464,17 @@ class Parser(AsmParseMixin):
                     if name in seen:
                         self._sema(pos, "duplicate member '{}'".format(name))
                     seen.add(name)
+                    # M4 W-I (MC 12650): a member has no placement —
+                    # `section` is a measured gcc rc1 twin at BOTH the
+                    # spec position (probe s1: tip silently DROPPED it,
+                    # the W2.5 sink had no judge) and the new star
+                    # position (probe r16). The sentence mirrors gcc.
+                    for _nm, _a in tuple(bsink) + tuple(msink):
+                        if _nm == "section":
+                            self._sema(pos, "section attribute not "
+                                       "allowed for '{}' (§1 row 9, "
+                                       "measured gcc rc1 twin)"
+                                       .format(name), "section")
                 members.append(ast.Member(name, ty,
                                          tuple(bsink) + tuple(msink),
                                          width))
@@ -1565,8 +1585,12 @@ class Parser(AsmParseMixin):
         function, type is its ast.FuncType (parse_decl unpacks ret/params/
         variadic from it; the C 6.7.6.3p7 param-decay arm lives in
         parse_params). Every fn-ptr spelling `(*name)(…)` lands as
-        PtrType(FuncType) with is_fn False — an OBJECT (§1 rows 1a–1f)."""
-        name, ops = self._declarator_walk(ctx)
+        PtrType(FuncType) with is_fn False — an OBJECT (§1 rows 1a–1f).
+
+        M4 W-I (MC 12650): `attr_sink` now reaches the POINTER SECTION of
+        the declarator too (the W2.5 tail skip below always took it; the
+        walk never did) — the attribute-between-* family lands here."""
+        name, ops = self._declarator_walk(ctx, attr_sink)
         dims = [op for op in ops if op[0] == "arr"]
         unsized = [op for op in dims if op[2] is None]
         # §1 row 13 (M46): `int v[];` — a member's SINGLE unsized bracket
@@ -1632,7 +1656,7 @@ class Parser(AsmParseMixin):
                                   variadic, nostd)
         return ty
 
-    def _declarator_walk(self, ctx: str):
+    def _declarator_walk(self, ctx, attr_sink=None):
         """M4 W1: the paren-aware declarator walk. Returns (name, ops), ops
         being the INSIDE-OUT type-operator chain (each entry wraps what the
         previous produced, starting from the base type). The composition
@@ -1651,12 +1675,38 @@ class Parser(AsmParseMixin):
             # — qualifiers may sit on either side of every `*` (kernel
             # style; the §1 row 10 walk exposed the missing arms). They
             # are parsed-and-dropped like every other qualifier here.
+            # M4 W-I (MC 12650): and so do the `__attribute__` runs —
+            # the attribute-between-* family. The MEASURED gcc 11.4 law
+            # (probes .tmp/m4-wi/probes/, table pinned in
+            # tests/test_core_m4wi1.py): an attr run FOLLOWED by another
+            # `*` — or by a group `(` whose interior opens with `*` —
+            # attaches to the POINTER TYPE (markers drop; `section`
+            # warns+emits nothing; `aligned` has no spellable effect →
+            # the no-sink layout wall, the W2.5 cast-position posture).
+            # The FINAL run, before the declarator name / group name /
+            # abstract `)`, attaches to the ENTITY — the witness
+            # position: `extern struct pcpu_alloc_info * __section__(
+            # ".init.text") __cold pcpu_alloc_alloc_info(...)`
+            # (percpu.h:105, the 574-stream first-blocker).
             self._skip_qualifiers()
+            if self._at_attr() or self._at_extension():
+                self._skip_gnu_attrs(None if self._ptr_run_is_type()
+                                     else attr_sink)
+                continue
             if self.s.accept_punct("*") is None:
                 break
             stars += 1
         self._skip_qualifiers()
         nxt = self.s.peek(1)
+        if self.s.at_punct("(") and (nxt.text in self._ATTR_WORDS
+                                     or (nxt.kind == "kw"
+                                         and nxt.text == "__extension__")):
+            # M4 W-I (MC 12650): `int (__attribute__((unused)) * fp)
+            # (void)` — the run rides INSIDE the opening paren (probe
+            # p2d); the group detector sees through it. The walk
+            # recursion then JUDGES the run: its interior opens with
+            # `*` → TYPE position (markers drop, r9).
+            nxt = self.s.peek(self._peek_past_run(1))
         group = (self.s.at_punct("(")
                  and (nxt.kind == "id"
                       or (nxt.kind == "punct"
@@ -1667,7 +1717,10 @@ class Parser(AsmParseMixin):
             if stars and self.s.accept_punct(")"):   # abstract `(* )` group
                 name, c_ops = None, []
             else:
-                name, c_ops = self._declarator_walk(ctx)
+                # M4 W-I: the group's interior rides the SAME sink —
+                # `(* __aligned__(16) fp)` raises the declared object
+                # (probe r14), the entity is one and the same.
+                name, c_ops = self._declarator_walk(ctx, attr_sink)
             self.s.expect_punct(")")
         else:
             name = None
@@ -1700,6 +1753,65 @@ class Parser(AsmParseMixin):
         return name, ([("ptr", pos0)] * stars
                       + list(reversed(postfixes)) + c_ops)
 
+    def _peek_past_run(self, k0: int) -> int:
+        """M4 W-I (MC 12650): index of the first token AFTER the
+        `__attribute__`/`__extension__`/qualifier runs starting at
+        peek(k0) — the scan shared by the TYPE/ENTITY judge and the
+        group detector (a group may open with the attr INSIDE the
+        paren: `int (__attribute__((unused)) * fp)(void)`, probe p2d).
+        A malformed attr list returns the EOF-clamped index; the REAL
+        skip (_skip_gnu_attrs) LOUDs at the same token."""
+        k = k0
+        while True:
+            t = self.s.peek(k)
+            if t.text in self._ATTR_WORDS and t.kind in ("id", "kw"):
+                k += 1
+                depth = 0
+                while True:
+                    u = self.s.peek(k)
+                    if u.kind == "eof":
+                        return k
+                    if u.kind == "punct" and u.text == "(":
+                        depth += 1
+                    elif u.kind == "punct" and u.text == ")":
+                        depth -= 1
+                        if depth == 0:
+                            break
+                    k += 1
+                k += 1
+                continue
+            if t.kind == "kw" and (t.text == "__extension__"
+                                   or t.text in _QUAL_WORDS):
+                k += 1
+                continue
+            return k
+
+    def _ptr_run_is_type(self) -> bool:
+        """M4 W-I (MC 12650): does the `__attribute__` run the cursor
+        sits on attach to the POINTER TYPE or to the ENTITY?
+
+        MEASURED gcc 11.4 law (probes .tmp/m4-wi/probes/ r1/r2/r9/r14/
+        r20): TYPE when another `*` follows the run (after any further
+        attrs/quals of the run — stars, attrs and qualifiers all
+        interleave), or when a paren GROUP opens whose interior starts
+        with `*` (the `( __attr * p )` shape — probe r9: `section`
+        warns "does not apply to types" and the object is untouched).
+        ENTITY otherwise: the final run before the declarator name
+        (the percpu witness), before the group of a NAMED interior
+        (`( fp )`), or before the abstract `)` — those land on the
+        declared fn/object exactly as the spec/tail positions do."""
+        k = self._peek_past_run(0)
+        if self.s.at_punct("*", k):
+            return True
+        if self.s.at_punct("(", k):
+            nxt = self.s.peek(k + 1)
+            # `(` opening an IDENTIFIER is the parenthesized NAME — the
+            # entity lives INSIDE, so the run precedes the entity.
+            return not (nxt.kind == "id"
+                        or (nxt.kind == "punct" and nxt.text == "("
+                            and self.s.peek(k + 2).kind == "id"))
+        return False
+
     def parse_params(self) -> Tuple[ast.Param, ...]:
         self.s.expect_punct("(")
         params: List[ast.Param] = []
@@ -1726,8 +1838,22 @@ class Parser(AsmParseMixin):
                 self.s.expect_punct(")")
                 self._params_variadic = True
                 return tuple(params)
+            psink: List[tuple] = []    # M4 W-I: the STAR-position attrs of
+            ppos = self.s.peek()       # THIS parameter declarator
             base = self.parse_base_type()
-            name, ty, is_fn, _ = self.parse_declarator(base, ctx="param")
+            name, ty, is_fn, _ = self.parse_declarator(base, ctx="param",
+                                                       attr_sink=psink)
+            if name is not None:
+                for _nm, _a in psink:
+                    if _nm == "section":
+                        # M4 W-I (MC 12650): measured gcc rc1 twin
+                        # (probe r12): "section attribute not allowed
+                        # for 'q'" — a parameter has no placement. The
+                        # TYPE-position classes the walk already dropped
+                        # (markers) and LOUDed (layout) ride §1 row 9.
+                        self._sema(ppos, "section attribute not allowed "
+                                   "for '{}' (§1 row 9, measured gcc rc1 "
+                                   "twin)".format(name), "section")
             if is_fn:
                 # C 6.7.6.3p7 (M4 W1 row 1b): a parameter of FUNCTION type
                 # is ADJUSTED to pointer-to-function — `void cb(int)` and
@@ -2104,6 +2230,16 @@ class Parser(AsmParseMixin):
                                     "chain (row 1h) is not in the subset "
                                     "(§5 LOUD twin)")
             for _nm, _a in spec_sink + tsink:  # M42 typedef-tail layout
+                if _nm == "section":
+                    # M4 W-I (MC 12650): measured gcc rc1 twin (probe p2
+                    # and s2 — ALSO for a typedef over a struct ptr):
+                    # "section attribute not allowed for 'td'" — a
+                    # typedef names a TYPE, it places nothing. Mirrors
+                    # the member/param sentence; tip had NO judge for
+                    # this sink (silent loss closed here).
+                    self._sema(pos, "section attribute not allowed for "
+                               "'{}' (§1 row 9, measured gcc rc1 twin)"
+                               .format(name), "section")
                 if isinstance(self._unqual(ty), ast.StructType):
                     reg = getattr(self, "struct_tag_attrs", None)
                     if reg is None:
