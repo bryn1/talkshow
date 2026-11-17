@@ -345,8 +345,31 @@ def test_corpus_attr_wall_is_dead(stream, tmp_path):
     # The `expected an identifier, found '__attribute__'` first-blocker
     # (167 files) FALLS: the next wall may honestly answer, but THE
     # ATTR-Identifier WALL must not.
+    #
+    # SCOPE FIXED by M4 W-H (MC 12645) — the blunt message-only guard
+    # was WEAKER than its claim: the same sentence answers for shapes
+    # this wave never touched. W-H measured (out2/analyze-wh.txt sweep +
+    # kcopy walk) that once a stream's EARLIER walls fall — the 406-row
+    # jiffies.h:427 `__auto_type` class and the 91-row struct-assignment
+    # class, both killed in W-H — these three streams move PAST every
+    # shape W2.5b actually fixed (`__u64 __attribute__((aligned(8)))
+    # flags;` members, `extern char __attribute__((__section__(…))
+    # boot_command_line[];`) and honestly answer the POINTER-STAR form
+    # `extern struct X * __init name(...)` at percpu.h:105:33 — the
+    # attribute-between-* family (W-H sweep: 574 first-blockers, NEW #1;
+    # W-G AMENDMENT-5 named it the next wave's owner). The pin now
+    # guards the SHAPE at the reported position: a W2.5b shape answering
+    # again is RED; the star-form is the named, cited next wall.
     clean = _clean_i(os.path.join(STREAMS, stream), tmp_path, "corpw25b")
     r = blcc(["-c", str(clean), "-o", str(tmp_path / "corpw25b.o")])
-    assert "found '__attribute__'" not in r.stderr, \
-        "{} still hits the attr-position wall:\n{}".format(
-            stream, r.stderr[:600])
+    m = re.search(r":(\d+):(\d+): (?:parse|sema): expected an identifier, "
+                  r"found '__attribute__'", r.stderr)
+    if m is None:
+        return                      # silent, or the next honest wall
+    lines = clean.read_text().splitlines()
+    before = lines[int(m.group(1)) - 1][:int(m.group(2)) - 1]
+    assert before.rstrip().endswith("*"), (
+        "the attr-position blocker at the reported site is NOT the "
+        "pointer-star form — a W2.5b shape (member aligned / extern "
+        "section) is BACK:\n  before: {!r}\n  full: {}".format(
+            before[-46:], r.stderr[:400]))
