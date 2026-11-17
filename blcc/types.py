@@ -557,12 +557,17 @@ class TypeMap:
             for m in members:
                 if getattr(m, "width", None) is not None:
                     # §1 row 12 (M45): named bitfields align to their
-                    # unit; anonymous contribute nothing (measured); a
-                    # packed struct containing one DEFERS LOUD.
+                    # unit; anonymous contribute nothing (measured).
+                    # W-F (MC 12621) REPLACES the packed DEFER: under
+                    # packed a bitfield contributes ONLY its `aligned`
+                    # raise (families measure align 1: desc/idt/tss/
+                    # IO_APIC all /1; E6 char aligned(4) -> 4; tag
+                    # aligned(8) -> E7 8).
                     u = self._bf_unit(m, packed, at)
                     if m.width == 0 or m.name is None:
                         continue
-                    a = max(a, max(u, self._mem_raise(m, at) or 0))
+                    r = self._mem_raise(m, at) or 0
+                    a = max(a, (r if packed else max(u, r)))
                     continue
                 a = max(a, self._malign(m, packed, at))
             ov = self._tag_aligned(ty, at)
@@ -626,7 +631,13 @@ class TypeMap:
                     if w == 0:
                         continue
                     if m.name is not None:
-                        mal = max(u, self._mem_raise(m, at or ty) or 0)
+                        # W-F: packed bitfields add NO alignment
+                        # (measured U4 packed == 4/1; a raise still
+                        # joins — U5 aligned(8) packed == 8/8). A
+                        # raise NEVER repositions a union member (all
+                        # ride bit 0, §2.8).
+                        r = self._mem_raise(m, at or ty) or 0
+                        mal = r if packed else max(u, r)
                         align = max(align, mal)
                         bits[m.name] = (0, 0, w, m.type.name)
                     slots.append((m.name, m.type, 0, 0, (0, 0, w,
@@ -663,6 +674,33 @@ class TypeMap:
                     if bit % ub:
                         bit = (bit // ub + 1) * ub
                     continue
+                # W-F cursor law (MC 12621, measured X1/X2/X4/Y1): an
+                # `aligned(N)` bitfield member POSITIONS at the next
+                # N*8-bit boundary — packed AND unpacked, named AND
+                # anonymous. Tip mis-laid the unpacked raised shapes in
+                # SILENCE (X2 {u32 x:3; y:1 al4; z:3}: gcc 8, tip 4) —
+                # found by the W-F law table, fixed here, pinned by legs.
+                r = self._mem_raise(m, at or ty) or 0
+                if r:
+                    rb = r * 8
+                    if bit % rb:
+                        bit = (bit // rb + 1) * rb
+                if packed:
+                    # THE W-F LAW (gcc 11.4 measured, probes shapes.c/
+                    # fams.c): the packed unit SHRINKS — the cursor runs
+                    # BIT-CONTIGUOUS (fields cross bytes; never relocate
+                    # to the next declared unit), named fields add no
+                    # alignment, and the struct size is ceil(bits/8) at
+                    # align 1 unless `aligned` raises it. Descriptor is
+                    # (first byte, bit-in-byte, w, declared type);
+                    # ACCESS stays LOUD (_bf_access_guard).
+                    if m.name is not None:
+                        align = max(align, r)
+                        bits[m.name] = (bit // 8, bit % 8, w, m.type.name)
+                    slots.append((m.name, m.type, bit // 8, 0,
+                                  (bit // 8, bit % 8, w, m.type.name)))
+                    bit += w
+                    continue
                 base = (bit // ub) * ub
                 if bit + w > base + ub:
                     bit = base + ub
@@ -674,7 +712,7 @@ class TypeMap:
                     base = bit
                 d = (base // 8, bit - base, w, m.type.name)
                 if m.name is not None:
-                    mal = max(u, self._mem_raise(m, at or ty) or 0)
+                    mal = max(u, r)
                     align = max(align, mal)
                     bits[m.name] = d
                 slots.append((m.name, m.type, base // 8, 0, d))
@@ -720,13 +758,18 @@ class TypeMap:
 
     def _bf_unit(self, m, packed, at) -> int:
         """§1 row 12 (M45): the bitfield allocation unit = the SIZE of the
-        declared type. A PACKED struct with a bitfield DEFERS LOUD: gcc
-        shrinks the unit itself (measured sizeof {unsigned int a:3} packed
-        == 1) — a different allocation law blcc does not model (§5)."""
-        if packed:
-            self._err(at, "packed struct with a bitfield member is DEFERRED "
-                      "(§5: gcc shrinks the unit — §1 row 9 x §1 row 12 "
-                      "interaction)", "packed")
+        declared type. M4 W-F COMMIT-1 (MC 12621) REPLACES the packed
+        DEFER with the gcc-11.4-measured law: under `packed` the unit
+        STILL sizes declared-type-wise (a width-0 member pads to the
+        next DECLARED-unit boundary — measured {u16 x:3;:0;u16 y:3}
+        packed == 3, {u32 x:3;:0;u32 y:3} == 5) but the FIELDS neither
+        relocate to it nor align to it: the cursor runs bit-contiguous
+        (S4 {u16 x:12,y:12} == 3, S6 {u8 a;u16 x:9,y:7} == 3, E3 == 2,
+        E13 == 5, E4 {u64 x:20} == 3, A4 {__int128 x:4} == 1) and named
+        bitfields contribute NO alignment (align stays 1 unless an
+        `aligned(N)` member/tag raises — X3/X4/A1/E6/E7). Witnesses:
+        .tmp/m4-wf/probes/shapes.c + fams.c (gcc 11.4 -std=gnu89).
+        ACCESS codegen stays LOUD (expr_codegen._bf_access_guard)."""
         name = m.type.name if isinstance(m.type, ast.BuiltinType) else None
         if name is None or name not in TYPE_SIZE or name == "void" \
                 or name in ("float", "double"):

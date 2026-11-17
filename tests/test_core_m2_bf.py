@@ -14,9 +14,11 @@ sign-extended FROM BIT WIDTH-1 for signed declarations), the write law
 gcc error legs mirrored LOUD (named zero width, width > the declared type,
 address-of a bitfield, offsetof a bitfield §2.13).
 
-Deferred shapes stay LOUD (§5): a packed struct containing bitfields (gcc
-shrinks the unit — a different allocation law, not supported here) and an
-initializer that SUPPLIES a value for a bitfield slot.
+Deferred shapes stay LOUD (§5): an initializer that SUPPLIES a value
+for a bitfield slot. (A packed struct containing bitfields USED to be
+here too — the M4 W-F layout law (MC 12621) REPLACED that DEFER: the
+shrunk-unit law ships in layout, and only packed bitfield ACCESS stays
+LOUD; see tests/test_core_m4wf0.py.)
 """
 import os
 import subprocess
@@ -438,14 +440,18 @@ int main(void) { return __builtin_offsetof(struct S, f) == 4; }
 """, "bf-offof", "parse")
 
 
-def test_packed_struct_with_bitfields_is_loud():
-    # gcc 11.4 SHRINKS the unit for packed bitfields (measured sizeof
-    # {u:3} packed = 1) — a different allocation law; §5 defers it LOUD,
-    # never a silently-wrong layout.
-    blcc_loud("""
+def test_packed_struct_with_bitfields_is_laid():
+    # FLIPPED by M4 W-F (MC 12621) — was test_packed_struct_with_bitfields_
+    # is_loud: it pinned the §5 DEFER posture (packed+bitfield LOUD). The
+    # W-F layout LAW (gcc 11.4 measured) REPLACES the DEFER: the unit
+    # SHRINKS — {u:3,b:5} packed is ONE byte (8 bits), both compilers.
+    # A flip, never a deletion: same shape, opposite truth, history named.
+    # The CODEGEN for packed bitfields stays LOUD (test_wf_packed_bitfield_
+    # access_loud, tests/test_core_m4wf0.py).
+    both_run("""
 struct S { unsigned int a: 3; unsigned int b: 5; } __attribute__((packed));
 int main(void) { return sizeof(struct S); }
-""", "bf-packed", "sema")
+""", "bf-packed")
 
 
 def test_bitfield_value_initializer_is_loud():

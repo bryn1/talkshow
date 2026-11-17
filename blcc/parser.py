@@ -264,8 +264,12 @@ class Parser(AsmParseMixin):
                     # §1 row 12 (M45): a NAMED bitfield contributes its
                     # unit's alignment; ANONYMOUS ones contribute nothing
                     # (measured __alignof__ {int :3; char x;} == 1).
-                    if packed:
-                        return None     # packed+bitfield §5 DEFERRED
+                    # W-F COMMIT-1 (MC 12621) REPLACES the packed DEFER:
+                    # _malign_f(m, packed, u, ty) == max(1, raise), the
+                    # measured packed contribution (families align 1;
+                    # E6 aligned(4) -> 4; E7 tag aligned(8) -> 8) — the
+                    # same answer TypeMap._align computes as `r if packed
+                    # else max(u, r)`.
                     if m.width == 0 or m.name is None:
                         continue
                     u = TYPE_SIZE.get(m.type.name if isinstance(
@@ -291,10 +295,14 @@ class Parser(AsmParseMixin):
 
     def _why_unsizable(self, ty) -> str:
         """Name WHY a member type has no compile-time size, as deep as
-        the fold mirror can see: incomplete tag / packed+bitfield DEFER
-        (§5) / first unsizable member inside a defined tag. W-F gate F2:
-        the §2.13 LOUD must name the REAL blocker, never mis-attribute
-        it to the struct that happens to report first."""
+        the fold mirror can see: incomplete tag / first unsizable member
+        inside a defined tag / bitfield unit that is not a scalar.
+        W-F gate F2: the §2.13 LOUD must name the REAL blocker, never
+        mis-attribute it to the struct that happens to report first.
+        (COMMIT-0 listed "packed+bitfield DEFER (§5)" as a reason;
+        COMMIT-1's layout law REPLACED that refusal, so the reason is
+        gone with it — a real unsizable packed struct now names its
+        MEMBER.)"""
         from blcc.types import TYPE_SIZE
         if ty is None:
             return "type not known to the fold"
@@ -312,10 +320,12 @@ class Parser(AsmParseMixin):
             if members is None:
                 return "'{}' is an incomplete type (no definition " \
                     "here)".format(ty.tag)
-            if self._attr_packed(ty) and any(
-                    getattr(m, "width", None) is not None for m in members):
-                return "'{}' is a packed struct with a bitfield member " \
-                    "(DEFERRED §5: gcc shrinks the unit)".format(ty.tag)
+            # W-F COMMIT-1: the packed+bitfield §5 DEFER is DEAD — the
+            # law (measured gcc 11.4) SIZES those shapes, so a packed
+            # struct no longer gets a DEFER excuse here; if the fold
+            # cannot size one NOW the reason is a MEMBER (never re-add a
+            # packed+bitfield excuse — that was the mis-attribution
+            # this wave exists to bury).
             for m in members:
                 if getattr(m, "width", None) is not None:
                     if not TYPE_SIZE.get(m.type.name if isinstance(
@@ -360,13 +370,12 @@ class Parser(AsmParseMixin):
                         self._why_unsizable(m.type)))
                     return None
                 if getattr(m, "width", None) is not None:
-                    if packed:
-                        self._ff("'{}' is a packed struct with a bitfield "
-                                 "member (DEFERRED §5: gcc shrinks the "
-                                 "unit)".format(ty.tag))
-                        return None     # packed+bitfield §5 DEFERRED
                     continue        # §1 row 12: a bitfield is a gcc ERROR
                     #                  for offsetof (loudly absent, §2.13)
+                    #                  W-F: under packed it STILL never
+                    #                  lands in the byte map — unions
+                    #                  restart every member at bit 0 (§2.8),
+                    #                  so the packed cursor never applies.
                 if m.name is None:
                     inner = self._offsetof_flat(m.type)
                     if inner is None:
@@ -375,19 +384,28 @@ class Parser(AsmParseMixin):
                 else:
                     out.append((m.name, 0, m.type))
             return out
-        o = 0
+        # W-F COMMIT-1 (MC 12621): ONE bit cursor with no mid-walk byte
+        # rounding. The old arm rounded to a byte after EVERY bitfield
+        # (`o = (ob + 7) // 8`, next bitfield starting `ob = o * 8`) and
+        # LOST the bit position — measured SILENT mis-fold at tip:
+        # __builtin_offsetof({u16 x:9,y:7;char z;}, z) folded 3, gcc says
+        # 2 (probes/misfold2.c; the S-matrix never paired a byte member
+        # after a bitfield, so no leg could see it). The bug predates the
+        # wave; the W-F law table found it; pinned by the fold-pair leg.
+        bit = 0
         for m in members:
             w = getattr(m, "width", None)
             if w is not None:
                 # §1 row 12 (M45): a bitfield NEVER lands in the flat byte
                 # map — offsetof(bitfield) is a gcc ERROR and the §2.13
                 # "no member" LOUD is its shipped mirror. The bits still
-                # occupy their allocation unit for members that FOLLOW.
-                if packed:
-                    self._ff("'{}' is a packed struct with a bitfield "
-                             "member (DEFERRED §5: gcc shrinks the "
-                             "unit)".format(ty.tag))
-                    return None             # packed+bitfield §5 DEFERRED
+                # occupy the cursor for members that FOLLOW, under the
+                # W-F law (gcc 11.4 measured, .tmp/m4-wf/probes/):
+                # packed = BIT-CONTIGUOUS (the unit shrank — never
+                # relocate to the next declared unit, never self-align),
+                # unpacked = §1 row 12 unit moves, and an `aligned(N)`
+                # member POSITIONS the cursor first in BOTH modes
+                # (X1/X2/X4/Y1 — packed AND unpacked, named AND anon).
                 u = TYPE_SIZE.get(m.type.name if isinstance(
                     m.type, ast.BuiltinType) else "", 0)
                 if not u:
@@ -395,25 +413,36 @@ class Parser(AsmParseMixin):
                              "a known scalar".format(ty.tag))
                     return None
                 ub = u * 8
-                ob = o * 8
                 if w == 0:
-                    if ob % ub:
-                        ob = (ob // ub + 1) * ub
-                    o = ob // 8
+                    if bit % ub:
+                        bit = (bit // ub + 1) * ub
                     continue
-                base = (ob // ub) * ub
-                if ob + w > base + ub:
-                    ob = base + ub
-                ob += w
-                o = (ob + 7) // 8
+                r = self._mem_raise(m, ty)
+                if r:
+                    rb = r * 8
+                    if bit % rb:
+                        bit = (bit // rb + 1) * rb
+                if not packed:
+                    base = (bit // ub) * ub
+                    if bit + w > base + ub:
+                        bit = base + ub
+                bit += w
                 continue
             if isinstance(m.type, ast.ArrayType) and m.type.fam:
                 # §1 row 13 (M46): offsetof(S, fam) is legal and equals
                 # the header end aligned to the element (§1 row 13 fold
-                # mirror; the FAM is last, so o does not advance).
+                # mirror; the FAM is last, so the cursor does not
+                # advance). W-F: the element align rides _malign_f (the
+                # TypeMap._malign mirror — packed LOWERS it to 1; the old
+                # arm used the RAW align, a mirror drift the packed
+                # DEFER used to mask).
                 mal = self._calign(m.type)
                 if mal is None:
+                    self._ff("flexible array member '{}' of '{}' has an "
+                             "unsizable element".format(m.name, ty.tag))
                     return None
+                mal = self._malign_f(m, packed, mal, ty)
+                o = (bit + 7) // 8
                 o = (o + mal - 1) // mal * mal
                 out.append((m.name, o, m.type))
                 continue
@@ -425,6 +454,7 @@ class Parser(AsmParseMixin):
                     self._why_unsizable(m.type)))
                 return None
             mal = self._malign_f(m, packed, mal, ty)
+            o = (bit + 7) // 8
             o = (o + mal - 1) // mal * mal
             if m.name is None:
                 inner = self._offsetof_flat(m.type)
@@ -433,7 +463,7 @@ class Parser(AsmParseMixin):
                 out += [(n, o + io, t) for (n, io, t) in inner]
             else:
                 out.append((m.name, o, m.type))
-            o += msz
+            bit = (o + msz) * 8
         return out
 
     def resolve_objsize(self, e) -> int:
@@ -577,8 +607,9 @@ class Parser(AsmParseMixin):
                 mss = []
                 for m in members:
                     if getattr(m, "width", None) is not None:
-                        if packed:
-                            return None     # packed+bitfield: §5 DEFERRED
+                        # W-F: NO packed DEFER here either — a union
+                        # member's extent is ceil(w/8) at bit 0 in BOTH
+                        # modes (measured U4 packed == 4/1, A2u 4/4).
                         if m.width == 0:
                             continue        # padding consumes nothing
                         mss.append((m.width + 7) // 8)
@@ -614,9 +645,13 @@ class Parser(AsmParseMixin):
             for m in members:
                 w = getattr(m, "width", None)
                 if w is not None:
-                    # §1 row 12 (M45) fold mirror of TypeMap._struct_layout
-                    if packed:
-                        return None         # packed+bitfield §5 DEFERRED
+                    # §1 row 12 (M45) fold mirror of TypeMap._struct_layout.
+                    # W-F COMMIT-1 (MC 12621): the packed DEFER is GONE —
+                    # packed cursor BIT-CONTIGUOUS (unit shrunk, no
+                    # relocate, no self-align); `aligned(N)` POSITIONS
+                    # the cursor first in both modes (X1/X2/X4/Y1; tip
+                    # silently MIS-SIZED the unpacked raised shape X2:
+                    # fold 4 vs gcc 8 — law-table find, pinned by leg).
                     u = TYPE_SIZE.get(m.type.name if isinstance(
                         m.type, ast.BuiltinType) else "", 0)
                     if not u:
@@ -626,9 +661,15 @@ class Parser(AsmParseMixin):
                         if off_bit % ub:
                             off_bit = (off_bit // ub + 1) * ub
                         continue
-                    base = (off_bit // ub) * ub
-                    if off_bit + w > base + ub:
-                        off_bit = base + ub
+                    r = self._mem_raise(m, ty)
+                    if r:
+                        rb = r * 8
+                        if off_bit % rb:
+                            off_bit = (off_bit // rb + 1) * rb
+                    if not packed:
+                        base = (off_bit // ub) * ub
+                        if off_bit + w > base + ub:
+                            off_bit = base + ub
                     if m.name is not None:
                         align = max(align, self._malign_f(m, packed, u, ty))
                     off_bit += w

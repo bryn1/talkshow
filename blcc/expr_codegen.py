@@ -833,6 +833,28 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
         shift sites ride it."""
         return un != "_Bool" and self._BF_UNS[un] != un
 
+    def _bf_access_guard(self, n: ast.Select, d) -> None:
+        """M4 W-F COMMIT-1 (MC 12621): the LAYOUT law for packed
+        bitfields ships; their CODEGEN does not. The extraction/RMW
+        below loads/stores the DECLARED unit — under packed the unit
+        has shrunk (measured law table, .tmp/m4-wf/probes/shapes.c),
+        so the unit-window law would read/write PAST the shrunk extent
+        and clobber neighbours: a packed bitfield SELECT LOUDs by name
+        (never a silent wrong-width window). The same arm gives the
+        __int128-unit twin a NAME: tip crashed with a raw
+        `KeyError: unsigned __int128` ICE on `{u128 x:4;}` access —
+        now a named LOUD (probe .tmp/m4-wf/probes/i128bf2.c)."""
+        base = self._struct_of(n)
+        if self._attr_packed(base):
+            self._err(n, "packed bitfield access is not in the subset "
+                      "(W-F: the packed LAYOUT law ships, the unit-"
+                      "window codegen stays LOUD — gcc's shrunk-unit "
+                      "extraction is not modelled)", "packed")
+        if d[3] not in self._BF_UNS:
+            self._err(n, "bitfield unit type '{}' has no extraction "
+                      "model (§1 row 12 LOUD twin)".format(d[3]),
+                      "bitfield")
+
     def _bf_addr(self, n: ast.Select) -> None:
         """Struct base ADDRESS in %rax for a member select."""
         if n.arrow:
@@ -844,6 +866,7 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
         return ("{}(%rdx)".format(d[0]) if d[0] else "(%rdx)")
 
     def _ex_bitfield(self, n, d: Tuple) -> None:
+        self._bf_access_guard(n, d)         # W-F: packed/int128 LOUD
         boff, bit, w, un = d
         self._bf_addr(n)
         if boff:
@@ -877,6 +900,7 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
         BASE ADDRESS is stashed in that slot (E1 evaluated exactly once,
         shared by the read and the RMW); both default to the plain-assign
         behaviour, untouched."""
+        self._bf_access_guard(n.target, d)  # W-F: packed/int128 LOUD
         boff, bit, w, un = d
         left = 64 - w
         unit_bt = ast.BuiltinType(n.file, n.line, n.col, un)
@@ -929,6 +953,7 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
         the expression value is the converted STORED value (gcc: 3 += 1
         in int:3 reads back -4). Base evaluated EXACTLY once: t1 holds
         the unit base for both the read and the merge."""
+        self._bf_access_guard(n.target, d)  # W-F: packed/int128 LOUD
         boff, bit, w, un = d
         op = n.op[:-1]
         vt = self._decay(self._ty(n.value))
