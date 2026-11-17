@@ -171,14 +171,18 @@ int main(void) {
 """, "c-se")
 
 
-def test_literal_struct_copy_stays_struct_assignment_wall():
-    # §1 row 11 witness shape `head->rb_root = (struct rb_root_cached){…}`
-    # — compound literal + struct assignment. The copy itself is the
-    # SHIPPED §5 'struct assignment' wall; the literal must not smuggle
-    # it through. Pinned so the wall cannot silently widen.
-    loud("struct P { int a; int b; };\n"
-         "int main(void){ struct P s = {0,0}; s = (struct P){1,2}; "
-         "return s.a; }\n", "c-copy", "struct assignment")
+def test_literal_struct_copy_copies():
+    # FLIPPED by M4 W-H COMMIT-2 (MC 12645; was
+    # test_literal_struct_copy_stays_struct_assignment_wall, the §5
+    # refusal pin). The §1 row 11 witness shape
+    # `head->rb_root = (struct rb_root_cached){…}` — compound literal
+    # + struct assignment — is now the MEASURED BLOCK COPY (gcc rc 0;
+    # the literal's address feeds the copy, tests/test_core_m4wh2.py
+    # owns the law table). Pinned here as ACCEPTANCE so the flip
+    # cannot silently regress.
+    both_run("struct P { int a; int b; };\n"
+             "int main(void){ struct P s = {0,0}; s = (struct P){1,2}; "
+             "return s.a; }\n", "c-copy")
 
 
 def test_cast_vs_literal_disambiguation_run_pair():

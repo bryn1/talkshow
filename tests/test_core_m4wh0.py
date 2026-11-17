@@ -122,22 +122,25 @@ def test_wh0_uniq_macro_chain_run_pair(tmp_path):
 STRUCTS = ("struct S { int a, b; };\n"
            "struct S gs;\n")
 
-def test_wh0_struct_assign_wall(tmp_path):
-    # RED-at-tip pin (FLIPS at COMMIT-2 to a run-pair): same-tag whole-
-    # struct assignment is C — the §5 refusal is the wall the 88 header
-    # first-blockers AND 392/406 of the auto_type crowd hit second.
+def test_wh0_struct_assign_copy(tmp_path):
+    # FLIPPED by COMMIT-2 (was test_wh0_struct_assign_wall, the
+    # RED-at-tip refusal pin): same-tag whole-struct assignment is the
+    # MEASURED BLOCK COPY (the §5 refusal was the wall the 88 header
+    # first-blockers AND 392/406 of the auto_type crowd hit second —
+    # both families now move; law table tests/test_core_m4wh2.py).
     r = _compile(tmp_path, "wh0_asg", STRUCTS +
                  "int f(void){ struct S w; w = gs; return w.b; }\n")
-    assert r.returncode != 0, "tip must refuse struct assignment"
-    assert "struct assignment" in r.stderr, r.stderr
+    assert r.returncode == 0, r.stderr
+    assert r.stderr.strip() == "", r.stderr
 
 
-def test_wh0_path_h_class_wall(tmp_path):
-    # The VERBATIM path.h:24 class (76 first-blockers), stream text:
+def test_wh0_path_h_class(tmp_path):
+    # FLIPPED by COMMIT-2 (was test_wh0_path_h_class_wall, the
+    # RED-at-tip pin). The VERBATIM path.h:24 class (76 first-
+    # blockers), stream text:
     #     path_put(path);  *path = (struct path) { };
     # — compound-literal RHS, empty braces (the RB_ROOT_CACHED witness
-    # shape test_core_m2_clit pins as a wall; FLIPS at COMMIT-2 together
-    # with that pin).
+    # shape test_core_m2_clit flipped with this commit) — COMPILES.
     r = _compile(tmp_path, "wh0_path",
                  "struct vfsmount; struct dentry;\n"
                  "struct path { struct vfsmount *mnt; struct dentry *dentry; };\n"
@@ -147,8 +150,8 @@ def test_wh0_path_h_class_wall(tmp_path):
                  " path_put(path);\n"
                  " *path = (struct path) { };\n"
                  "}\n")
-    assert r.returncode != 0, "tip must refuse the path.h shape"
-    assert "struct assignment" in r.stderr, r.stderr
+    assert r.returncode == 0, r.stderr
+    assert r.stderr.strip() == "", r.stderr
 
 
 # ------------------------------------------------------ controls

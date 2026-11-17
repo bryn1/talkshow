@@ -129,7 +129,15 @@ class ExprParser:
                 self.s.next()
                 value = self.parse_expression()
                 self._check_lvalue(left, t, "assignment")
-                if self._struct_type(left) is not None:
+                if t.text != "=" and self._struct_type(left) is not None:
+                    # M4 W-H COMMIT-2 (MC 12645): the plain `=` moved to
+                    # the MEASURED block-copy law, decided by FULL types
+                    # in _ex_assign (the light mirror cannot tell same-tag
+                    # from mismatch — the false ACCEPT side of that
+                    # bluntness was `int n = w` running garbage at tip).
+                    # The COMPOUND ops keep the shipped §5 sentence:
+                    # `s += t` is gcc rc1 (invalid types for binary +=),
+                    # a wall this wave does not touch.
                     raise DiagError(
                         "sema", t.file, t.line, t.col,
                         "'struct assignment' is not in the subset (§5) — "

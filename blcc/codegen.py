@@ -742,6 +742,26 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin):
         if isinstance(ty, ast.ArrayType):
             self._err(vd, "array initializer must be a brace list or string "
                       "literal (§4)", self._what(vd.init))
+        if isinstance(ty, ast.StructType):
+            # M4 W-H COMMIT-2 (MC 12645): copy INIT `struct S w = gs;`
+            # is the SAME measured block copy as `w = gs;` — the tip's
+            # 8-byte case worked by ACCIDENT (one movq through _store)
+            # and 12 bytes died `cannot load a 12-byte value (§4)`;
+            # both shapes are gone, ONE mechanism with the assignment
+            # (source-ADDRESS law in, shipped size law through the
+            # slot). The data layer never reaches this arm for
+            # file-scope/static objects: a non-constant static
+            # initializer is LOUD there FIRST (the constant law; a
+            # `static struct S w = gs;` is gcc rc1 too, measured).
+            self._emit_addr(vd.init)
+            t = self._t()
+            self._e("movq %rax, {}".format(t))
+            self._e("leaq {}(%rbp), %rax".format(off))
+            self._e("movq %rax, %rdi")
+            self._e("movq {}, %rsi".format(t))
+            self._copy_block(self._size(ty, vd), vd)
+            self._unt()
+            return
         self._fp_guard(self._ty(vd.init), ty, vd)
         if is_i128(self._decay(ty)):
             # W-B value law: the initializer rides the PAIR law (a scalar

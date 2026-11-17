@@ -1030,6 +1030,20 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
         self._load(self._ty(n), "(%rax)", at=n)
 
     def _ex_assign(self, n) -> None:
+        # M4 W-H COMMIT-2 (MC 12645): when either side is an AGGREGATE
+        # type the MEASURED copy law decides, BEFORE the bitfield/asm/
+        # i128 arms (none is meaningful for a struct-valued store) and
+        # for the ARRAY-typed LHS too — `a2 = b2` was a FALSE ACCEPT at
+        # tip (the decayed generic store wrote the RHS address into the
+        # array's first 8 bytes; the compound-assign guard at §1406 was
+        # the fixg2b sibling this closes).
+        rty = self._untype(self._ty(n.value))
+        lraw0 = self._untype(self._ty(n.target))
+        if (isinstance(rty, ast.StructType)
+                or isinstance(lraw0, ast.ArrayType)
+                or isinstance(self._decay(lraw0), ast.StructType)):
+            self._assign_copy(n, rty)
+            return
         if isinstance(n.target, ast.Select):
             d = self._bitfield(n.target)     # §1 row 12 (M45)
             if d is not None:
@@ -1047,8 +1061,10 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
                 return
         ty = self._decay(self._ty(n.target))
         self._fp_guard(self._ty(n.value), ty, n)
-        if isinstance(ty, ast.StructType):
-            self._err(n, "'struct assignment' is not in the subset (§5)", "=")
+        # (M4 W-H COMMIT-2: the old `isinstance(ty, ast.StructType) →
+        # §5 wall` line is GONE — struct stores were routed to the
+        # measured copy/mismatch law by `_assign_copy` above; scalar
+        # LHS × struct RHS cannot reach here either.)
         if is_i128(ty):
             # W-B value law: assign = PAIR COPY (RHS 128-address, or a
             # scalar widened through the measured pair); the assignment
@@ -1091,6 +1107,87 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
         self._e("movq {}, %rax".format(t))  # result = value
         self._reintern_stored(ty)           # converted, not the raw source
         self._unt()
+
+    # -- M4 W-H COMMIT-2: the measured struct-copy law (MC 12645) ----------
+
+    def _assign_copy(self, n, rty) -> None:
+        """SAME TYPE copies the sizeof-bytes BLOCK (measured gcc -Os:
+        inline at EVERY size to 100B, zero libcall — the shape-deviation
+        rows against gcc's movaps/rep-movsb choices are named, both
+        inline, in tests/test_core_m4wh2.py's header). Every other
+        pairing LOUDs with gcc's own sentence naming BOTH types — the
+        sentence the tip's blunt §5 wall never reached, and the one the
+        tip's false ACCEPTs (`n = w`, `a2 = b2`) never ran at all.
+        The assignment VALUE is the TARGET address (the i128 PAIR COPY
+        law: the object IS the value — `(w = gs).a`, `v2 = w = gs`)."""
+        lraw = self._untype(self._ty(n.target))
+        if isinstance(lraw, ast.ArrayType):
+            self._err(n, "assignment to expression with array type", "=")
+        lty = self._decay(lraw)
+        same = (isinstance(lty, ast.StructType)
+                and (rty is lty
+                     or (isinstance(rty, ast.StructType)
+                         and rty.tag is not None
+                         and rty.tag == lty.tag
+                         and bool(rty.is_union) == bool(lty.is_union))))
+        if not same:
+            # An ANONYMOUS struct is identity ONLY through the node
+            # itself (`rty is lty`): two same-spelled anon types are
+            # DIFFERENT types (measured gcc rc1); a union is never its
+            # same-named struct (the is_union arm, measured rc1).
+            self._err(n, "incompatible types when assigning to type "
+                      "'{}' from type '{}'".format(
+                          self._tyof_name(lraw), self._tyof_name(rty)),
+                      "=")
+        sz = self._size(lty, n)
+        # SOURCE-ADDRESS law: ident/member/deref/index/compound-literal
+        # ride `_emit_addr` (aggregates answer address there); an
+        # assignment feeds its target through the SAME door (the new
+        # Assign arm — value-as-address); everything else evaluates, so
+        # a struct-returning CALL hits the shipped §5 return wall
+        # instead of faking a hidden return (the named defer).
+        self._emit_addr(n.value)
+        t1 = self._t()
+        self._e("movq %rax, {}".format(t1))
+        self._emit_addr(n.target)
+        t2 = self._t()
+        self._e("movq %rax, {}".format(t2))
+        self._e("movq %rax, %rdi")
+        self._e("movq {}, %rsi".format(t1))
+        self._copy_block(sz, n)
+        self._e("movq {}, %rax".format(t2))   # value = target address
+        self._unt(2)
+
+    def _copy_block(self, sz, at) -> None:
+        """%rdi dst / %rsi src — the SHIPPED memcpy size law (memfold):
+        chunked GPR moves ≤16 (the `_chunks` movq/movl/movw/movb
+        classes — the same GPR-tail shape gcc -Os emits at 9-15),
+        `rep movsb` beyond, ZERO libcalls either side."""
+        if sz <= 16:
+            self._copy_pairs(sz)
+            return
+        self._e("movl ${}, %ecx".format(sz))
+        self._e("rep movsb")
+
+    def _tyof_name(self, ty) -> str:
+        # gcc's diagnostic spelling for the incompatible-assignment
+        # sentence (struct/union + tag, scalars by name, pointers
+        # spelled off the pointee — the forms the sentence sees).
+        ty = self._untype(ty)
+        if isinstance(ty, ast.StructType):
+            return "{} {}".format(
+                "union" if ty.is_union else "struct",
+                "<anonymous>" if ty.tag is not None
+                and ty.tag.startswith("<anon@")
+                else (ty.tag if ty.tag is not None else "<anonymous>"))
+        if isinstance(ty, ast.BuiltinType):
+            return ty.name
+        if isinstance(ty, ast.PtrType):
+            return "{} *".format(self._tyof_name(ty.inner))
+        if isinstance(ty, ast.ArrayType):
+            return "{} [{}]".format(self._tyof_name(ty.inner),
+                                    self._size(ty, ty))
+        return "‘{}’".format(self._what(ty))
 
     def _ex_assignop(self, n) -> None:
         self._asm_c_rmw_blocked(n, "'op=' compound assignment")
@@ -1568,6 +1665,14 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
                 return
             self._err(n, "no addressable object '{}': enum constants have "
                      "no address (§4)".format(n.name), n.name)
+        if isinstance(n, ast.Assign):
+            # M4 W-H COMMIT-2 (MC 12645): the VALUE-AS-ADDRESS law —
+            # the assignment's value IS its target (the i128 PAIR COPY
+            # precedent), so `(w = gs).a` and `v2 = w = gs` read the
+            # object the copy just filled. Emit it: %rax lands on the
+            # target already.
+            self._ex_assign(n)
+            return
         if isinstance(n, ast.Unary) and n.op == "*":
             self._emit_expr(n.operand)                 # pointer value IS it
             return

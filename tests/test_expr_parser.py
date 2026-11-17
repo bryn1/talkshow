@@ -1,7 +1,12 @@
 """Expression parser tests: precedence, associativity, casts, sizeof, §5."""
+import os
 import re
+import subprocess
+import sys
 
 import pytest
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from blcc import ast
 from blcc.lexer import DiagError, Lexer, SourceLine, TokenStream
@@ -215,11 +220,34 @@ def test_assign_to_conditional_is_diagnostic():
     assert d.found == "conditional expression"
 
 
-def test_struct_assignment_is_diagnostic():
-    d = diag("struct P { int x; };\nstruct P a, b;\n"
-             "int main(void){ a = b; return 0; }")
-    assert "'struct assignment'" in d.message
-    assert (d.line, d.col) == (3, 19)
+def test_struct_assignment_is_diagnostic(tmp_path):
+    # FLIPPED by M4 W-H COMMIT-2 (MC 12645): SAME-type struct `=` is
+    # the MEASURED BLOCK COPY now (tests/test_core_m4wh2.py owns the
+    # law); the diagnostic that REMAINS — and the one the tip's blunt
+    # §5 sentence used to swallow — is the TYPE MISMATCH, with gcc's
+    # own sentence naming both types (measured rc 1 twin). The law now
+    # lives in the CODEGEN sema layer (full types), so the leg drives
+    # the full CLI instead of the parse-only `diag` helper. ANCHOR
+    # NOTE: the codegen law carries the Assign node — position of the
+    # TARGET `a` (col 17); the `=` token pos lives only in the parse
+    # layer.
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    src = tmp_path / "mism.c"
+    src.write_text("struct P { int x; };\nstruct Q { int x; };\n"
+                   "struct P a;\nstruct Q b;\n"
+                   "int main(void){ a = b; return 0; }")
+    r = subprocess.run([sys.executable, "-m", "blcc", "-c", str(src),
+                        "-o", str(tmp_path / "mism.o")],
+                       cwd=str(tmp_path), capture_output=True, text=True,
+                       env={"PYTHONPATH": root, "PATH": "/usr/bin:/bin"})
+    assert r.returncode != 0, r.stderr
+    line = r.stderr.strip().splitlines()[0]
+    m = re.match(r"^(.*?):(\d+):(\d+): (parse|sema): (.+, found '.+')$",
+                 line)
+    assert m, line
+    assert (int(m.group(2)), int(m.group(3))) == (5, 17), line
+    assert "incompatible types when assigning to type 'struct P' " \
+        "from type 'struct Q'" in line, line
 
 
 def test_struct_comparison_is_diagnostic():

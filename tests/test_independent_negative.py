@@ -206,9 +206,20 @@ def test_variadic_call_site():
 
 
 def test_struct_assignment():
-    assert_loud("struct S{ int a; int b; };\nstruct S x;\nstruct S y;\n"
-                "int main(void){ x = y; return 0; }\n",
-                "structasg", "struct assignment")
+    # FLIPPED by M4 W-H COMMIT-2 (MC 12645; was the §5 refusal pin):
+    # same-type `x = y` is the MEASURED BLOCK COPY (gcc rc 0 —
+    # law table in tests/test_core_m4wh2.py). The NEGATIVE twins the
+    # wall used to cover blindly now have their own named diagnostics
+    # (m4wh2: diff-tag / struct<->scalar / array-LHS), each with the
+    # gcc sentence; the mismatch family stays loud, the copy is legal.
+    r, src, out = blcc_compile(
+        "struct S{ int a; int b; };\nstruct S x;\nstruct S y;\n"
+        "int main(void){ x = y; return 0; }\n", "structasg")
+    if os.path.exists(out):
+        os.remove(out)
+    assert r.returncode == 0, \
+        "same-type struct copy must ACCEPT (W-H COMMIT-2 law): " \
+        + r.stderr
 
 
 def test_struct_comparison():
