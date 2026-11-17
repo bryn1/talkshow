@@ -1953,6 +1953,19 @@ class Parser(AsmParseMixin):
                     reg[self._unqual(ty).tag] = tuple(
                         list(reg.get(self._unqual(ty).tag, ())) + [(_nm, _a)])
             oattr = tuple(x for x in sink if x[0] in ("aligned", "section"))
+            _secs = {v for _k, v in oattr if _k == "section"}
+            if len(_secs) > 1:
+                # M4 W-I (MC 12650): probe r19 — TWO DIFFERENT sections
+                # on one declarator (in ANY two positions of the one
+                # sink: spec+star, star+tail, …) are the gcc ERROR
+                # "section of 'f19' conflicts with previous
+                # declaration" rc1. Picking one silently would be
+                # SECTION LOSS; the SAME name twice is rc0 (probe dq) —
+                # the judge is conflict-shaped, not count-shaped.
+                self._sema(pos, "section of '{}' conflicts with previous"
+                           " declaration (two '__section__' names on one"
+                           " declarator, §1 row 9 measured gcc rc1 twin)"
+                           .format(name), "section")
             for _nm, _a in oattr:      # M4 W2.5: the OBJECT-position
                 if _nm == "aligned":   # aligned argument law (measured gcc
                     v = 16 if _a is None else self.fold_truthy(_a)

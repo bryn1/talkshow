@@ -348,28 +348,31 @@ def test_corpus_attr_wall_is_dead(stream, tmp_path):
     #
     # SCOPE FIXED by M4 W-H (MC 12645) — the blunt message-only guard
     # was WEAKER than its claim: the same sentence answers for shapes
-    # this wave never touched. W-H measured (out2/analyze-wh.txt sweep +
-    # kcopy walk) that once a stream's EARLIER walls fall — the 406-row
-    # jiffies.h:427 `__auto_type` class and the 91-row struct-assignment
-    # class, both killed in W-H — these three streams move PAST every
-    # shape W2.5b actually fixed (`__u64 __attribute__((aligned(8)))
-    # flags;` members, `extern char __attribute__((__section__(…))
-    # boot_command_line[];`) and honestly answer the POINTER-STAR form
-    # `extern struct X * __init name(...)` at percpu.h:105:33 — the
-    # attribute-between-* family (W-H sweep: 574 first-blockers, NEW #1;
-    # W-G AMENDMENT-5 named it the next wave's owner). The pin now
-    # guards the SHAPE at the reported position: a W2.5b shape answering
-    # again is RED; the star-form is the named, cited next wall.
+    # this wave never touched. W-H pinned the SHAPE at the reported
+    # position and NAMED the POINTER-STAR form — `extern struct X *
+    # __init name(...)` at percpu.h:105:33, 574 first-blockers — as the
+    # next wave's wall (W-G AMENDMENT-5 named its owner).
+    #
+    # M4 W-I (MC 12650) KILLED that family: every position of the
+    # attribute-between-* wave now parses (measured law table in
+    # tests/test_core_m4wi1.py; RED capture .tmp/m4-wi/out/
+    # wall-tip.jsonl — 574 rows at tip 1aaa558). The pin therefore
+    # FLIPS to the FULL claim: NO shape may answer this sentence
+    # ANYWHERE — the star form included; a W2.5b shape (member aligned /
+    # extern section) coming back is RED by the same law. RED-
+    # reachability: at every pre-W-I tree the star form answers this
+    # sentence in these streams (wall-tip.jsonl; c1-red.txt) — the
+    # flipped assert fired.
     clean = _clean_i(os.path.join(STREAMS, stream), tmp_path, "corpw25b")
     r = blcc(["-c", str(clean), "-o", str(tmp_path / "corpw25b.o")])
     m = re.search(r":(\d+):(\d+): (?:parse|sema): expected an identifier, "
                   r"found '__attribute__'", r.stderr)
-    if m is None:
-        return                      # silent, or the next honest wall
-    lines = clean.read_text().splitlines()
-    before = lines[int(m.group(1)) - 1][:int(m.group(2)) - 1]
-    assert before.rstrip().endswith("*"), (
-        "the attr-position blocker at the reported site is NOT the "
-        "pointer-star form — a W2.5b shape (member aligned / extern "
-        "section) is BACK:\n  before: {!r}\n  full: {}".format(
-            before[-46:], r.stderr[:400]))
+    assert m is None, (
+        "an attr-position blocker is ALIVE — at the reported position "
+        "the attribute sits in a place the ONE declarator mechanism now "
+        "answers (W2.5b spec/tail shapes OR the W-I attribute-between-* "
+        "family):\n  site {}:{}: {}\n  full: {}".format(
+            m.group(1), m.group(2),
+            clean.read_text().splitlines()[int(m.group(1)) - 1][
+                max(0, int(m.group(2)) - 24):int(m.group(2)) + 24],
+            r.stderr[:400]))
