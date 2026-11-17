@@ -282,6 +282,60 @@ class Parser(AsmParseMixin):
             return max(a, ov or 0)
         return None
 
+    def _ff(self, reason) -> None:
+        """Record the FIRST unsizable leaf seen by an offsetof walk
+        (set-once: the depth-first walk reaches the real blocker before
+        the outer arms report). M4 W-F COMMIT-0 (MC 12621, gate F2)."""
+        if getattr(self, "_ff_why", None) is None:
+            self._ff_why = reason
+
+    def _why_unsizable(self, ty) -> str:
+        """Name WHY a member type has no compile-time size, as deep as
+        the fold mirror can see: incomplete tag / packed+bitfield DEFER
+        (§5) / first unsizable member inside a defined tag. W-F gate F2:
+        the §2.13 LOUD must name the REAL blocker, never mis-attribute
+        it to the struct that happens to report first."""
+        from blcc.types import TYPE_SIZE
+        if ty is None:
+            return "type not known to the fold"
+        while isinstance(ty, ast.Qualified):
+            ty = ty.inner
+        if isinstance(ty, ast.ArrayType):
+            if ty.size is None:
+                return "incomplete array of " + self._why_unsizable(ty.inner)
+            if self.fold_truthy(ty.size) is None:
+                return "array with a non-constant size of " \
+                    + self._why_unsizable(ty.inner)
+            return "array of " + self._why_unsizable(ty.inner)
+        if isinstance(ty, ast.StructType):
+            members = self.struct_tags.get(ty.tag)
+            if members is None:
+                return "'{}' is an incomplete type (no definition " \
+                    "here)".format(ty.tag)
+            if self._attr_packed(ty) and any(
+                    getattr(m, "width", None) is not None for m in members):
+                return "'{}' is a packed struct with a bitfield member " \
+                    "(DEFERRED §5: gcc shrinks the unit)".format(ty.tag)
+            for m in members:
+                if getattr(m, "width", None) is not None:
+                    if not TYPE_SIZE.get(m.type.name if isinstance(
+                            m.type, ast.BuiltinType) else "", 0):
+                        return "'{}' has a bitfield whose unit type is " \
+                            "not a known scalar".format(ty.tag)
+                    continue
+                if self._csize(m.type) is None:
+                    return "'{}' member '{}' unsizable: {}".format(
+                        ty.tag, m.name or "(anonymous)",
+                        self._why_unsizable(m.type))
+            return "'{}' layout needs info the fold cannot " \
+                "compute".format(ty.tag)
+        if isinstance(ty, ast.FuncType):
+            return "a function type has no size"
+        if isinstance(ty, ast.BuiltinType) and not \
+                TYPE_SIZE.get(ty.name, 1):
+            return "'{}' has no size".format(ty.name)
+        return "the fold cannot size this type"
+
     def _offsetof_flat(self, ty):
         """Flat [(name, byte-offset, type)] walk for the §2.13 fold:
         anonymous nested members are PROMOTED (T+7), and every union
@@ -292,6 +346,8 @@ class Parser(AsmParseMixin):
         from blcc.types import TYPE_SIZE
         members = self.struct_tags.get(ty.tag)
         if members is None:
+            self._ff("'{}' is an incomplete type (no definition "
+                     "here)".format(ty.tag))
             return None
         out = []
         packed = self._attr_packed(ty)
@@ -299,9 +355,15 @@ class Parser(AsmParseMixin):
             for m in members:
                 if (self._csize(m.type) is None
                         or self._calign(m.type) is None):
+                    self._ff("member '{}' of '{}' unsizable: {}".format(
+                        m.name or "(anonymous)", ty.tag,
+                        self._why_unsizable(m.type)))
                     return None
                 if getattr(m, "width", None) is not None:
                     if packed:
+                        self._ff("'{}' is a packed struct with a bitfield "
+                                 "member (DEFERRED §5: gcc shrinks the "
+                                 "unit)".format(ty.tag))
                         return None     # packed+bitfield §5 DEFERRED
                     continue        # §1 row 12: a bitfield is a gcc ERROR
                     #                  for offsetof (loudly absent, §2.13)
@@ -322,10 +384,15 @@ class Parser(AsmParseMixin):
                 # "no member" LOUD is its shipped mirror. The bits still
                 # occupy their allocation unit for members that FOLLOW.
                 if packed:
+                    self._ff("'{}' is a packed struct with a bitfield "
+                             "member (DEFERRED §5: gcc shrinks the "
+                             "unit)".format(ty.tag))
                     return None             # packed+bitfield §5 DEFERRED
                 u = TYPE_SIZE.get(m.type.name if isinstance(
                     m.type, ast.BuiltinType) else "", 0)
                 if not u:
+                    self._ff("'{}' has a bitfield whose unit type is not "
+                             "a known scalar".format(ty.tag))
                     return None
                 ub = u * 8
                 ob = o * 8
@@ -353,6 +420,9 @@ class Parser(AsmParseMixin):
             msz = self._csize(m.type)
             mal = self._calign(m.type)
             if msz is None or mal is None:
+                self._ff("member '{}' of '{}' unsizable: {}".format(
+                    m.name or "(anonymous)", ty.tag,
+                    self._why_unsizable(m.type)))
                 return None
             mal = self._malign_f(m, packed, mal, ty)
             o = (o + mal - 1) // mal * mal
@@ -414,6 +484,17 @@ class Parser(AsmParseMixin):
         # struct_tags (its declaration is itself LOUD), mirroring gcc's
         # ERROR "attempt to take address of bit-field structure member":
         # never a silent number.
+        # M4 W-F COMMIT-0 (MC 12621, W-B gate F2 P3): a None answer from
+        # the walk USED to be reported as a flat "incomplete member
+        # layout" — which MIS-ATTRIBUTED the blocker whenever the refusal
+        # lived deeper than the outermost struct (the measured 613-stream
+        # wall: the REAL refusal is the packed+bitfield §5 DEFER inside
+        # `struct desc_struct`, reached via member 'tls_array' of
+        # 'struct thread_struct' at processor.h:546; it took a resolver
+        # WRAP to see it). The walk now records the FIRST unsizable leaf
+        # — set-once, so the depth-first walk keeps the real blocker —
+        # and the LOUD names it.
+        self._ff_why = None
         cur = ty
         off = 0
         for step in chain:
@@ -438,8 +519,11 @@ class Parser(AsmParseMixin):
                                     "(§2.13)".format(cur.tag))
             flat = self._offsetof_flat(cur)
             if flat is None:
+                why = getattr(self, "_ff_why", None)
                 self._parse_err(at, "__builtin_offsetof: incomplete "
-                                    "member layout (§2.13)")
+                                    "member layout (§2.13)" +
+                                    (": REAL BLOCKER " + why
+                                     if why else ""))
             found = None
             for n, o, t in flat:
                 if n == step:

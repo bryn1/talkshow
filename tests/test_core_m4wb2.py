@@ -249,6 +249,29 @@ def test_mul_terms(tmp_path):
     _pair(tmp_path, "i128-mul", src, e)
 
 
+def test_mul_cross_term(tmp_path):
+    # M4 W-F COMMIT-0 F1 (MC 12621, W-B gate F1 P2): BOTH limbs nonzero
+    # in BOTH operands. Every pre-F1 mul product had hi==0 on one operand
+    # or hi==lo on both — the cross term a_hi*b_lo + a_lo*b_hi then
+    # collapses to the single imulq that survives, and mutant M10 (drop
+    # the first `imulq (%rdx), %rcx`, blcc/i128.py) stayed GREEN over the
+    # whole W-B battery. These three products split the two cross halves:
+    #   (2^64+3)(2^64+5):   cross 5+3 = 8, M10 leaves 1+3 = 4
+    #   (2^64+7)(3*2^64+11):cross 11+21 = 32, M10 leaves 1+21 = 22
+    #   (2^64+2^63)^2:      cross 2^63+2^63 ≡ 0 carry-in, M10 leaves 1+2^63
+    # RED capture (M10 applied, worktree at the shipped tree):
+    # .tmp/m4-wf/out/red-m10-f1.txt — blcc runs exit wrong, pair assert.
+    p1 = ((1 << 64) + 3) * ((1 << 64) + 5)
+    p2 = ((1 << 64) + 7) * (3 * (1 << 64) + 11)
+    p3 = ((1 << 64) + (1 << 63)) ** 2
+    e = (fold(p1) ^ fold(p2) ^ fold(p3)) & 0xFF
+    src = (PRE + "int main(void){\n"
+           "  u128 a = (u128)1<<64, b = (u128)1<<63;\n"
+           "  return (int)(fold((a+3)*(a+5)) ^ fold((a+7)*(3*a+11))\n"
+           "                    ^ fold((a+b)*(a+b))); }\n")
+    _pair(tmp_path, "i128-mulx", src, e)
+
+
 def test_mul_no_libcall(tmp_path):
     # globals + (u64) trunc: the §6 byval wall (loud, corpus volume 0)
     # keeps function signatures OUT of these shape legs.
