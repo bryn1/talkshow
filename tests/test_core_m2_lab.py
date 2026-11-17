@@ -228,8 +228,19 @@ def test_label_addr_run_pair():
 
 
 def test_label_addr_distinct_sites_run_pair():
+    # MC 12622 flake fix: the program's `goto c` SKIPPED `y = (long)&&b;`,
+    # so `if (y == 0)` read y NEVER ASSIGNED — UB whose pair verdict rode
+    # stack garbage (runner-dependent; ~1-in-3 spurious RED, MC 12620 F-1).
+    # `goto a` lands ON the assignment, so y is assigned on every path;
+    # the leg's intent is UNWEAKENED: x,y still taken at two distinct
+    # label sites, both non-zero, and x != y (exit 0 demands all three).
+    # Measured 2026-11-17: stacked labels (a: ; b: ; c: ;) let gcc -O0
+    # COALESCE the label addresses (x==y, exit 3) and other reorderings
+    # broke the pair (gcc=3 blcc=0) — this shape is pair-clean exit 0
+    # on gcc 11.4 AND blcc, and -O1 -Wall -Wextra emits no
+    # -Wuninitialized warning where the old program emits one.
     both_run("int main(void){ __label__ a, b; long x, y; "
-             "x = (long)&&a; goto c; a: ; y = (long)&&b; b: ; c: ; "
+             "x = (long)&&a; goto a; a: ; y = (long)&&b; b: ; "
              "if (x == 0) return 1; if (y == 0) return 2; "
              "if (x == y) return 3; return 0; }\n", "laddr2")
 
