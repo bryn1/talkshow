@@ -1,0 +1,66 @@
+# M4 CI pilot — MC 12620 (card 12404.2.65), owner-ratified 2026-11-16:
+# pilot on this repo, then template fleet-wide; repo stays PRIVATE.
+#
+# Doctrine (ratified, LEDGER row "M4 CI pilot"): pushed-sha CI green is a
+# close precondition on this repo's cards; red CI routes a fix round like a
+# red gate.
+#
+# Trigger: push, path-filtered (blcc/**, tests/**, .github/**) — deliberately
+# NOT branch-pinned: the push must fire on ANY branch carrying this workflow
+# so the ratified red-proof branch (ci-red-proof) can execute and go RED
+# (a gate that never went RED is not a gate). `kernel` is the branch that
+# matters; concurrency is keyed per-ref so a throwaway branch never cancels
+# a kernel run.
+#
+# Oracle law (grep-proven, not assumed): every gcc leg in tests/ shells out
+# to the BARE name `gcc` (subprocess ["gcc", ...]); no CC/CC_ORACLE env
+# exists in the suite. The lane oracle is gcc 11.4.0 — the Ubuntu 22.04
+# system gcc — so the job pins runs-on: ubuntu-22.04 and needs NO apt gcc-11
+# install; a fast version gate fails the job if the runner image ever drifts
+# off 11.4.x.
+#
+# Skip laws on the runner (measured against the lane baseline 1173 passed /
+# 72 skipped at 1afc918): the 72 kernel-tier rows SKIP (never FAIL) via the
+# KERNEL_510 env skipif; 24 SMATRIX probe legs SKIP because their corpus
+# (REPO/../.tmp/m4-plan/probes) is host scratch, not repo content. ONE leg
+# is DESELECTED: test_cc_wrapper_m4.py::test_w16_missing_target_is_loud_and_-
+# malformed imports the plan-v4 scratch module creep_check_v4 from an
+# absolute host path (/home/claudecode/Blaha/.tmp/m4-plan-v4/out, untracked)
+# — on the runner that import is the plain tier's only FAIL. Excluding it is
+# the honest CI-side delta; vendoring creep_check_v4 into the repo is the
+# named follow-up (then drop the --deselect).
+
+name: ci-plain-tier
+
+on:
+  push:
+    paths:
+      - 'blcc/**'
+      - 'tests/**'
+      - '.github/**'
+
+concurrency:
+  group: ci-plain-tier-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  plain-tier:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: oracle gcc must be the 11.4 lane oracle
+        run: |
+          gcc --version
+          gcc --version | head -1 | grep -q '11\.4\.' \
+            || { echo "::error::runner gcc is not the 11.4 oracle"; exit 1; }
+
+      - name: test deps (lane parity — pytest 9.0.3, python 3.10)
+        run: python3 -m pip install --quiet pytest==9.0.3
+
+      - name: plain-tier suite (kernel tier SKIPS via unset KERNEL_510)
+        run: >
+          python3 -m pytest tests -q -m "not kernel_tier"
+          --deselect
+          tests/test_cc_wrapper_m4.py::test_w16_missing_target_is_loud_and_malformed
