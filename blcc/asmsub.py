@@ -44,83 +44,198 @@ class AsmSubMixin:
         except DiagError:
             return None
 
-    def _asm_sym(self, e):
-        """&global / global (decayed array|fn) / sym+off → ('sym', name, off)
-        or None."""
+    def _asm_ctype(self, e):
+        """C type of the expression, unqualified and DECAYED, or None when
+        the typer refuses (the caller's wall answers). M4 W-N (MC 12687):
+        the fold's ONE type check — called once per recursion at the fold
+        ENTRY, never re-peeked from the shape."""
+        try:
+            return self._untype(self._decay(self._ty(e)))
+        except DiagError:
+            return None
+
+    def _asm_esz(self, ty, at):
+        """Element size a pointer-typed fold scales by. `void*` arithmetic
+        is the GNU esz-1 extension (measured `(void*)&g+4 -> $g+4`);
+        anything unsizable refuses (None)."""
+        if isinstance(ty, ast.PtrType):
+            inner = self._untype(ty.inner)
+            if isinstance(inner, ast.BuiltinType) and inner.name == "void":
+                return 1
+            try:
+                n = self._size(inner, at)
+            except DiagError:
+                return None
+            return n if n else None
+        return None
+
+    def _asm_sym(self, e, narrow=False):
+        """CONSTANT closure {int, symbol, symbol+off} (S5/L4) read through
+        the C TYPE of every arm — M4 W-N (MC 12687) replaced the W-M
+        shape-reading. One type check per recursion at the ENTRY decides
+        which arms are OPEN: an ADDRESS-typed spelling (or the `&` form)
+        opens the symbol/Index arms and Scales pointer arithmetic by the
+        element size; an integer-typed spelling opens the VALUE arm for a
+        const global and closes the address rvalue in; a TRUNCATING
+        (<8-byte) integer cast of an address refuses (gcc LOUD). Returns
+        ('sym', name, off) | int | None — None is the honest 'i' wall.
+        THE LAW (measured, .tmp/m4-wn/out/measure-wn*.txt):
+          F-1  bare pointer difference = ELEMENT count (esz divides);
+               (long)-cast difference = BYTES; the compound difference
+               COMPOSES as int arithmetic (no ICE);
+          F-2  a bare element rvalue `gs[3]` is NOT a constant (the
+               Index arm is an ADDRESS arm — it needs the address);
+          F-3  `&c` answers the ADDRESS ($c), the value arm never fires
+               through the `&`; bare `c` keeps the VALUE ($5);
+          F-4  `&gs[3]+1` adds ONE ELEMENT; casts scale by THEIR pointee;
+          +    a non-const scalar global under "i" refuses — the folder
+               may not answer `$sym` (the address) where gcc is LOUD."""
+        ty = self._asm_ctype(e)
+        addr = isinstance(ty, ast.PtrType)       # this expression IS an address
         node = e
         while isinstance(node, ast.Cast):
+            cty = self._asm_ctype(node)
+            if isinstance(cty, ast.BuiltinType):
+                try:
+                    if self._size(cty, node) < 8 and not narrow:
+                        # truncating cast: gcc LOUD — EXCEPT as one side
+                        # of a same-symbol difference, the only place
+                        # gcc tolerates it (measured; the '-' arm asks
+                        # for `narrow` explicitly).
+                        return None
+                except DiagError:
+                    return None
             node = node.operand
         if isinstance(node, ast.Unary) and node.op == "&":
             node = node.operand
+            addr = True
         if isinstance(node, ast.Binary) and node.op in ("+", "-"):
-            a, b = self._asm_sym(node.left), self._asm_const(node.right)
-            if a is not None and b is not None:
-                return ("sym", a[1], a[2] + (b if node.op == "+" else -b))
-            a, b = self._asm_sym(node.right), self._asm_const(node.left)
-            if a is not None and b is not None and node.op == "+":
-                return ("sym", a[1], a[2] + b)
-            # M4 W-M (MC 12670) fold family arm 2 — the SAME-SYMBOL
-            # difference (measured: `&garr[8] - &garr[0]` → `$64`): the
-            # linker folds an offset inside ONE object, so gcc -Os
-            # const-folds it to a pure int and the asm prints `$N`.
-            # A difference ACROSS objects stays gcc's own LOUD
-            # (`impossible constraint in 'asm'`, rc1 — the twin pin in
-            # tests/test_core_m4wm1.py).
-            a, b = self._asm_sym(node.left), self._asm_sym(node.right)
-            if node.op == "-" and a is not None and b is not None \
-                    and a[1] == b[1] and a[0] == "sym" and b[0] == "sym":
-                return a[2] - b[2]
-            return None
+            return self._asm_sym_bin(node)
         if isinstance(node, ast.Index):
-            # M4 W-M fold family arm 1 — ARRAY-ELEMENT addresses of a
-            # global/static array fold at `sym + k*esz` (measured:
-            # `(long)&gs[8] + 3 → $gs+11`, `(long)&gx[9] → $gx+72`;
-            # the kernel's ABS/alternative arithmetic idiom). The
-            # element size is the ARRAY's OWN _size law; a non-constant
-            # index returns None (the honest 'i' wall stands).
+            # ARRAY-ELEMENT addresses of a global/static array fold at
+            # `sym + k*esz` (W-M family arm 1, now type-gated). The
+            # element size is the pointee's OWN _size law; a non-constant
+            # index or a non-address spelling refuses (F-2; the 2-D
+            # `&mm[1][2]` honest wall rides the nested spelling).
+            if not addr:
+                return None
             k = self._asm_const(node.index)
             if k is None:
                 return None
             bsym = self._asm_sym(node.base)
-            if bsym is None or bsym[0] != "sym":
+            if not (isinstance(bsym, tuple) and bsym[0] == "sym"):
                 return None
-            nb = node.base
-            while isinstance(nb, ast.Cast):
-                nb = nb.operand
-            bt = None
-            if isinstance(nb, ast.Ident):
-                if nb.name in self.globals:
-                    bt = self.globals[nb.name].type
-                elif nb.name in self.fn.statics:
-                    bt = self.fn.statics[nb.name][1]
-            bt = self._untype(bt) if bt is not None else None
-            if not isinstance(bt, ast.ArrayType):
+            bty = self._asm_ctype(node.base)
+            esz = self._asm_esz(bty, node)
+            if esz is None:
                 return None
-            esz = self._size(self._untype(bt.inner), node)
             return ("sym", bsym[1], bsym[2] + k * esz)
         if isinstance(node, ast.Ident):
+            # Ident arms read the DECLARED type, not the name table alone.
             nm = node.name
             g = self.globals.get(nm)
+            stc = self.fn.statics.get(nm) if self.fn else None
+            if addr:
+                # address-of ANY object/function with a symbol answers
+                # the symbol — scalar or not (`&gi` -> `$gi`, `&c` -> `$c`).
+                if g is not None or nm in self.sigs:
+                    return ("sym", nm, 0)
+                if stc is not None:
+                    return ("sym", stc[0], 0)
+                return None
             if g is not None:
-                # M4 W-M fold family arm 3 — a CONST int global answers
-                # with its VALUE (measured: `const int c = 5; "i"(c)` →
-                # `$5`; gcc const-propagates). The old arm returned the
-                # SYMBOL — materialising the ADDRESS as an immediate,
-                # a silent value divergence, now pinned by run-pair.
-                # Non-integer/float/no-foldable-init keeps the symbol
-                # form (the S5/L4 closure unchanged).
                 qt, spine = self._split_q(g.type)
                 spine = self._untype(spine)
-                if "const" in qt and g.init is not None and \
-                        isinstance(spine, ast.BuiltinType) and \
-                        spine.name not in ("float", "double"):
-                    v = self._asm_const(g.init)
+                if isinstance(spine, ast.ArrayType):
+                    return ("sym", nm, 0)        # decayed array address
+                if ("const" in qt and g.init is not None
+                        and isinstance(spine, ast.BuiltinType)
+                        and spine.name not in ("void", "float", "double")):
+                    v = self._asm_const(g.init)  # F-3 VALUE arm (bare spelling)
                     if v is not None:
                         return v
-            if nm in self.globals or nm in self.sigs:
-                return ("sym", nm, 0)
-            if nm in self.fn.statics:
-                return ("sym", self.fn.statics[nm][0], 0)
+                return None                      # non-const scalar: gcc LOUD
+            if nm in self.sigs:
+                return ("sym", nm, 0)            # function address
+            if stc is not None:
+                # file- or fn-scope static: the value fold has no init in
+                # the statics table — the address still folds (the `&`
+                # arm answered it above); a bare fn-static const int
+                # answers the symbol (honest wall, named in the card).
+                return ("sym", stc[0], 0)
+            return None
+        return None
+
+    def _asm_sym_bin(self, node):
+        """`+`/`-` arms of the fold closure, type-read (M4 W-N): a
+        pointer-typed side SCALES the constant by its element size; a
+        same-symbol difference divides by it when the difference is
+        pointer-typed (ELEMENTS, F-1) and keeps the byte answer when an
+        integer cast rode it; folded ints COMPOSE (no ICE on
+        `&gs[4]-&gs[0]-1`); a difference ACROSS objects stays gcc's own
+        LOUD (`impossible constraint in \'asm\'`, rc1 — the twin pin in
+        tests/test_core_m4wm1.py)."""
+        op = node.op
+        lt = self._asm_ctype(node.left)
+        rt = self._asm_ctype(node.right)
+        lptr = isinstance(lt, ast.PtrType)
+        rptr = isinstance(rt, ast.PtrType)
+        lv = self._asm_sym(node.left)
+        if lv is None:
+            lv = self._asm_const(node.left)      # pure-int trees fold
+        rv = self._asm_sym(node.right)
+        if rv is None:
+            rv = self._asm_const(node.right)
+        lsym = isinstance(lv, tuple) and lv[0] == "sym"
+        rsym = isinstance(rv, tuple) and rv[0] == "sym"
+        lint = isinstance(lv, int)
+        rint = isinstance(rv, int)
+        if op == "-":
+            if lsym and rsym:
+                if lv[1] != rv[1]:
+                    return None                  # cross-symbol: gcc LOUD
+                d = lv[2] - rv[2]
+                if lptr:
+                    esz = self._asm_esz(lt, node)
+                    return d // esz if esz else None
+                return d                         # cast form: BYTES
+            if lsym and rint:
+                if lptr:
+                    esz = self._asm_esz(lt, node)
+                    if esz is None:
+                        return None
+                    return ("sym", lv[1], lv[2] - rv * esz)
+                return ("sym", lv[1], lv[2] - rv)
+            if lint and rint:
+                return lv - rv                   # COMPOSES (was an ICE)
+            if not (lsym or rsym or lint or rint):
+                # The truncating-cast PAIR — `(int)&gs[4] - (int)&gs[0]`
+                # is the ONE placement gcc folds (measured $16; every
+                # other narrow spelling is LOUD, pinned by the pair legs).
+                a = self._asm_sym(node.left, narrow=True)
+                b = self._asm_sym(node.right, narrow=True)
+                if (isinstance(a, tuple) and isinstance(b, tuple)
+                        and a[0] == "sym" and b[0] == "sym"
+                        and a[1] == b[1]):
+                    return a[2] - b[2]
+            return None
+        # '+'
+        if lsym and rint:
+            if lptr:
+                esz = self._asm_esz(lt, node)
+                if esz is None:
+                    return None
+                return ("sym", lv[1], lv[2] + rv * esz)
+            return ("sym", lv[1], lv[2] + rv)
+        if rsym and lint:
+            if rptr:
+                esz = self._asm_esz(rt, node)
+                if esz is None:
+                    return None
+                return ("sym", rv[1], rv[2] + lv * esz)
+            return ("sym", rv[1], rv[2] + lv)
+        if lint and rint:
+            return lv + rv
         return None
 
     def _asm_const(self, e):
@@ -241,7 +356,7 @@ class AsmSubMixin:
         if isinstance(ty, ast.ArrayType):
             return self._decay(ty.inner)
         if isinstance(ty, ast.PtrType):
-            return self._decay(ty.pointee)
+            return self._decay(ty.inner)
         return None
 
     # ---------------------------------------------------- substitution --
