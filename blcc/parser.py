@@ -2033,7 +2033,19 @@ class Parser(AsmParseMixin, CompatLawMixin):
                 pass
             elif not (ctx == "param" and (self.s.at_punct(")")
                                           or self.s.at_punct(","))):
-                name = self.s.expect_id("parse").text
+                _idt = self.s.expect_id("parse")
+                name = _idt.text
+                if name == "__func__":
+                    # M4 W-N (MC 12687): gcc's gnu89 KEYWORD law — the
+                    # function-name object is not declarable AT ANY
+                    # position (param/local/file/static-const/member all
+                    # measured rc1 'expected identifier or ( before
+                    # __func__'); the implicit binding below is the only
+                    # way the name exists.
+                    self._parse_err(
+                        _idt, "expected identifier or '(' before "
+                        "'__func__' — the implicit function-name object "
+                        "is not declarable (gcc keyword law, MC 12687)")
             c_ops = []
         postfixes = []
         while True:
@@ -2356,7 +2368,8 @@ class Parser(AsmParseMixin, CompatLawMixin):
                 # the name lands in the scope table.
                 self._fn_redecl_law(name, fty, is_static, pos)
                 self.define(name, ("fn", ret), pos)
-                body = self.parse_function_body(params) if self.s.at_punct("{") else None
+                body = (self.parse_function_body(params, name)
+                        if self.s.at_punct("{") else None)
                 if alias is not None and body is not None:
                     # gcc rc1 "alias definition is not allowed here" —
                     # the twin refuses to pick one of the two bodies.
@@ -2885,7 +2898,8 @@ class Parser(AsmParseMixin, CompatLawMixin):
                        for z in out)
         return ast.InitList(pos.file, pos.line, pos.col, filled)
 
-    def parse_function_body(self, params: Tuple[ast.Param, ...]) -> ast.Node:
+    def parse_function_body(self, params: Tuple[ast.Param, ...],
+                            fn_name: Optional[str] = None) -> ast.Node:
         opening = self.s.expect_punct("{")
         self.scopes.append({})
         for p in params:
@@ -2893,6 +2907,28 @@ class Parser(AsmParseMixin, CompatLawMixin):
                 self.scopes[-1][p.name] = ("var", p.type)
         stmts = self._block_stmts_until_brace()
         self.scopes.pop()
+        # M4 W-N (MC 12687): gnu89 binds an implicit
+        # `char __func__[len+1] = "<name>"` in EVERY function body
+        # (measured law: sizeof len+1, indexable, decays). The ONE
+        # binding point injects a REAL local string-array declaration —
+        # the shipped §1c local-array law carries sizeof/index/decay/
+        # frame, no second vocabulary; the declarator gate above makes
+        # a user spelling of the name impossible, so the injection can
+        # never collide. Injected ONLY when the body mentions the name
+        # (an unused function pays no frame slot — the shipped frame
+        # pins stay untouched).
+        if fn_name is not None and _uses_funcname(stmts):
+            vd = ast.VarDecl(
+                opening.file, opening.line, opening.col, "__func__",
+                ast.ArrayType(
+                    opening.file, opening.line, opening.col,
+                    ast.BuiltinType(opening.file, opening.line,
+                                    opening.col, "char"),
+                    ast.IntLit(opening.file, opening.line, opening.col,
+                               len(fn_name) + 1)),
+                ast.StrLit(opening.file, opening.line, opening.col,
+                           fn_name))
+            stmts = (vd,) + tuple(stmts)
         return ast.Compound(opening.file, opening.line, opening.col, stmts)
 
     def _block_stmts_until_brace(self) -> Tuple[ast.Node, ...]:
@@ -3259,3 +3295,23 @@ def parse_text(text: str, filename: str = "<input>",
         raise DiagError("sema", eof.file, eof.line, eof.col,
                         "no 'main' function defined (§8)", "<eof>")
     return tu
+
+
+def _uses_funcname(nodes) -> bool:
+    """Any Ident named `__func__` anywhere under the given AST nodes
+    (M4 W-N, MC 12687) — the ONE scan that decides the implicit
+    binding's injection; frozen-dataclass children ride __dict__."""
+    stack = list(nodes)
+    while stack:
+        n = stack.pop()
+        if n is None or type(n) in (int, str, float, bytes, bool):
+            continue
+        if isinstance(n, (tuple, list)):
+            stack.extend(n)
+            continue
+        if type(n).__name__ == "Ident" and getattr(n, "name", None) == \
+                "__func__":
+            return True
+        stack.extend(getattr(n, "__dict__", {}).values())
+    return False
+
