@@ -31,6 +31,10 @@ _DECL_START_KW = _TYPE_KW + ("const", "struct", "enum", "static", "typedef",
                              # M4 W2 COMMIT-0 (MC 12545): `_Bool` opens a
                              # declaration like any other type keyword.
                              "_Bool",
+                             # M4 W-J (MC 12655): the C11 static-assertion
+                             # IS a declaration — parse_decl intercepts it
+                             # BEFORE any base-type walk.
+                             "_Static_assert",
                              # M4 W-B (MC 12596): so does `__int128`.
                              "__int128",
                              # M2: the extended specifier vocabulary (§4.1a)
@@ -172,6 +176,13 @@ class Parser(AsmParseMixin):
         if isinstance(node, ast.Sizeof):
             if node.typ is not None:
                 return self._csize(node.typ)
+            if isinstance(node.arg, ast.StrLit):
+                # M4 W-J (MC 12655): sizeof("abcd") == 5 — the corpus's
+                # 22-stream SA string-size law (`sizeof("softdep_update")
+                # - 1 <= (64 - sizeof(unsigned long))`). StrLit.value is
+                # DECODED (§4: bytes are rodata's concern); sizeof sees
+                # the char[N] type WITHOUT decay — N = bytes + NUL.
+                return len(node.arg.value.encode("utf-8")) + 1
             ty = self.expr_type(node.arg)
             return self._csize(ty) if ty is not None else None
         if isinstance(node, ast.Alignof):
@@ -672,8 +683,17 @@ class Parser(AsmParseMixin):
                         align = max(align, self._malign_f(m, packed, u, ty))
                         continue
                     ms = self._csize(m.type)
-                    align = max(align, self._malign_f(m, packed,
-                                                      min(ms, 8), ty))
+                    # M4 W-J mirror fix: member alignment is the type's
+                    # align, NOT min(size,8) — the shipped SOURCE OF
+                    # TRUTH TypeMap._align aligns ARRAYS BY ELEMENT, so
+                    # `{int a[3];}` aligns 4 and sizes 12 (codegen and
+                    # gcc agree); the old proxy said 8/16 and made every
+                    # `sizeof(struct …array…) == N` static assertion
+                    # (44 corpus sites) fold FALSE.
+                    base = self._calign(m.type)
+                    if base is None:
+                        return None
+                    align = max(align, self._malign_f(m, packed, base, ty))
                 ov = self._tag_aligned(ty, ty)
                 align = max(align, ov or 0)
                 total = max(mss + [0])
@@ -723,7 +743,18 @@ class Parser(AsmParseMixin):
                 ms = self._csize(m.type)
                 if ms is None:
                     return None
-                mal = self._malign_f(m, packed, min(ms, 8), ty)
+                # M4 W-J mirror fix (MC 12655): the member's alignment is
+                # its TYPE's align per the source of truth TypeMap._align
+                # ("arrays by element") — the old min(size,8) proxy
+                # aligned an array member by its BYTES ({int a[3];} -> 8),
+                # so the fold sized `{int a[3];}` at 16 while codegen and
+                # gcc both say 12: every
+                # `sizeof(struct …array…) == N` static assertion (44
+                # corpus sites) folded FALSE. Bitfields keep the unit law
+                # above; this is the byte-member arm the §1c fix already
+                # adopted for the struct loop via _calign.
+                mal = self._malign_f(m, packed, self._calign(m.type) or ms,
+                                      ty)
                 align = max(align, mal)
                 off = (off_bit + 7) // 8
                 off = (off + mal - 1) // mal * mal if mal > 1 else off
@@ -1146,6 +1177,51 @@ class Parser(AsmParseMixin):
                 any(nm == "fallthrough" for nm, _a in sink):
             self._sema(pos, "invalid use of attribute 'fallthrough'"
                        " (§1 row 9, measured gcc rc1 twin)", "fallthrough")
+
+    def _parse_static_assert(self, out):
+        """M4 W-J (MC 12655): the C11 `_Static_assert` declaration (file
+        scope AND block scope — both gcc rc0, sa_l/sa_n measured; the
+        label-preceded unbraced form is gnu89-accepted, wj1_und). The
+        condition rides the SHIPPED fold_truthy — that is the whole point
+        of this wave: EVERY corpus condition (461-site
+        `offsetof(struct filename, iname) % sizeof(long) == 0`, 60-site
+        string-size `<= 64 - sizeof(unsigned long)`, 11-site enum-count,
+        `sizeof(struct printf_spec) == 8`, `16 == ('0' - ' ')`) is an
+        expression the existing fold already answers — no new evaluator.
+        Measured sentences (gcc 11.4 gnu89 -Os, out-gcc.txt): fold None →
+        "expression in static assertion is not constant" (SAME sentence
+        with OR without the message, sa_j/sa_s — the pin pair); folds to
+        0 → "static assertion failed: MSG" / bare "static assertion
+        failed" (sa_a/sa_f); message not a string literal → "expected
+        string literal" (sa_t); the C23 ONE-ARG form is rc0 even in
+        gnu89 (sa_k). Div-by-zero conditions fold None → the "not
+        constant" sentence, same verdict (sa_q). Emits NOTHING: both
+        compilers generate no code for an assertion."""
+        t = self.s.next()                       # the _Static_assert kw
+        self.s.expect_punct("(")
+        cond = self.expr.parse_expression()
+        msg = None
+        if self.s.accept_punct(","):
+            mt = self.s.peek()
+            if mt.kind != "str":
+                self._parse_err(mt, "expected string literal before the"
+                                " _Static_assert message argument")
+            msg = self.s.next().text
+        self.s.expect_punct(")")
+        self.s.expect_punct(";")
+        v = self.fold_truthy(cond)
+        if v is None:
+            self._sema(t, "expression in static assertion is not constant"
+                       " (measured gcc twin, sa_j/sa_s)")
+            return out
+        if v == 0:
+            if msg is not None:
+                self._sema(t, "static assertion failed: {} (measured gcc"
+                           " twin, sa_a)".format(msg))
+            else:
+                self._sema(t, "static assertion failed (measured gcc"
+                           " twin, sa_f)")
+        return out
 
     # -- types ------------------------------------------------------------------
 
@@ -1976,6 +2052,11 @@ class Parser(AsmParseMixin):
             self._attr_decl_law(decl_sink, at_file, self.s.peek())
             self.s.next()
             return out
+        if self._at("_Static_assert"):
+            # M4 W-J (MC 12655): the C11 static-assertion DECLARATION —
+            # it OPENS the declaration (in _DECL_START_KW), so this is
+            # the single door at file scope AND in blocks.
+            return self._parse_static_assert(out)
         is_static = False
         static_tok = self._accept("static")
         if static_tok is not None:
@@ -2716,6 +2797,13 @@ class Parser(AsmParseMixin):
                          else self.expr.parse_comma_expression())
                 self.s.expect_punct(";")
                 return ast.Return(t.file, t.line, t.col, value)
+            if t.text == "_Static_assert":
+                # M4 W-J (MC 12655): gnu89 ACCEPTS the static-assertion
+                # declaration after a label (label+decl rc0, wj1_und
+                # measured) — the same law through _parse_static_assert;
+                # the assertion emits nothing.
+                self._parse_static_assert([])
+                return ast.ExprStmt(t.file, t.line, t.col, None)
             if self.starts_decl():
                 # M4 W-J (MC 12655): the GNU/C23 attribute-DECLARATION in
                 # STATEMENT position — `case 1: r+=1; fallthrough;` (the

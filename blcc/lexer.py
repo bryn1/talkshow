@@ -27,6 +27,11 @@ KEYWORDS = frozenset({
     # stay identifiers (undeclared-loud both sides, measured).
     "__int128",
     "__inline", "__typeof",
+    # M4 W-J (MC 12655): the C11 static assertion — keyword so the
+    # top-level loop and diagnostics NAME it exactly (the corpus wall
+    # sentence "found '_Static_assert'"), and so the parser's
+    # declaration-opener law (§_DECL_START_KW) sees it.
+    "_Static_assert",
     # M4 W-H (MC 12645): the GNU auto-typed declaration specifier — the
     # jiffies.h:427 __UNIQUE_ID class (406 first-blockers) is EXACTLY
     # this absent token class (gate LEG 7: paste mechanism proven
