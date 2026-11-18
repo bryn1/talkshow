@@ -479,9 +479,15 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin):
         # through THIS map (self.fn_labels), by C identifier text.
         self.fn_labels = self._collect_labels(fd)
         self._se_depth = 0        # statement-expression nesting (§2.4d)
-        if len(fd.params) > 6:
-            self._err(fd, "more than 6 parameters is beyond the §6 call ABI",
-                      fd.name, "asm")
+        if fd.variadic and len(fd.params) > 6:
+            # M4 W-L (MC 12665): >6 params SHIP through the stack block —
+            # EXCEPT the variadic form: the kernel's va_start is the
+            # `&last + sizeof(last)` ADJACENCY law, which with >6 named
+            # needs the INCOMING area to BE the params (measured gcc rc0
+            # accepts; volume 0 in the 706 — a NAMED LOUD-DIV twin, pinned
+            # in tests/test_core_m4wl1.py, retires with the va law).
+            self._err(fd, "a variadic function with more than 6 NAMED "
+                      "parameters is beyond the §6 call ABI", fd.name, "asm")
         if isinstance(self._decay(fd.ret_type), ast.StructType):
             self._err(fd, "'struct' returned by value is 'struct assignment' "
                       "(§5) — return a pointer", fd.name, "asm")
@@ -522,7 +528,22 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin):
             off = self._slot(p.type, fd)
             if p.name:
                 fn.locals[p.name] = (off, pty)
-            fn.lines.append("    movq {}, {}(%rbp)".format(REG_ARGS[i], off))
+            # M4 W-L (MC 12665): params 7+ arrive in 8-byte STACK slots —
+            # the incoming area is 16(%rbp), 24(%rbp), … ascending (the
+            # measured -Os read-back law; blcc's rbp-frame form of the
+            # leaf `8(%rsp)` answer). ONE spill loop, only the SOURCE
+            # differs — blcc keeps its uniform spill-to-slot (probe m14:
+            # the oracle reads the incoming slot in place; value-equal,
+            # run-pair pinned).
+            if i < 6:
+                fn.lines.append("    movq {}, {}(%rbp)".format(
+                    REG_ARGS[i], off))
+            else:
+                # mem→mem is illegal — the read-back rides %rax, blcc's
+                # scratch (nothing lives in it in a prologue).
+                fn.lines.append("    movq {}(%rbp), %rax".format(
+                    16 + 8 * (i - 6)))
+                fn.lines.append("    movq %rax, {}(%rbp)".format(off))
         self.loops = []
         self._case_lbl = {}
         self._stmt(fd.body)

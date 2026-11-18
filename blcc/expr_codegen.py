@@ -599,11 +599,9 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
                 self._err(n, "call to '{}' has {} argument(s), the "
                           "declaration takes {} (§4)".format(
                               name, len(n.args), want), name)
-            if want > 6:
-                # §2.14: FIXED-arity `want > 6` KEEPS this LOUD (M48
-                # residual: not measured in the tiny universe).
-                self._err(n, "more than 6 arguments is beyond the §6 call "
-                          "ABI", name, "asm")
+            # M4 W-L (MC 12665): FIXED-arity >6 SHIPS — the M48 residual
+            # died with the measured stack-passing law (gate table in
+            # tests/test_core_m4wl0.py); args 7+ ride _stage_call's block.
         # M4 W3 COMMIT-0: the WINNER law — a re-declared builtin stages
         # and converts through the USER prototype (same precedence).
         decl_params = (self.sigs[name][0]
@@ -616,8 +614,9 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
     def _stage_call(self, args, want, decl_params, variadic, call_arm,
                     target=None) -> None:
         """§2.14 caller sequence, the single home of: args → temps →
-        rdi/rsi/rdx/rcx/r8/r9, the >6-variadic push block, `%al = 0` on a
-        variadic call, and the `call` itself. `call_arm` is the operand
+        rdi/rsi/rdx/rcx/r8/r9, the args-7+ stack block (M4 W-L: fixed
+        arity AND variadic), `%al = 0` on a variadic call, and the `call`
+        itself. `call_arm` is the operand
         text ("add" for the direct arm — the shipped R_X86_64_PLT32
         shape; "*%r10" / "*%rax" for the indirect arms of M4 W3).
 
@@ -666,20 +665,33 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
             t = self._t()
             self._e("movq %rax, {}".format(t))
             slots.append(t)
-        if variadic and len(slots) > 6:
-            # §2.14 VERBATIM caller sequence: args 1..named+4 ride
-            # rdi..r9; the rest go into 8-byte stack slots — `subq
-            # $16,%rsp` for the 16-byte alignment BEFORE the pushes, the
-            # extras pushed in REVERSE order (last arg lowest-addressed:
-            # the callee's overflow_arg_area then reads forward from
-            # rbp+16, matching the §2.7 va_arg switch), `%al = 0` (the
-            # kernel is GP-only — v4: true under BOTH flag sets), and the
-            # frame restored with one addq after the call.
+        if len(slots) > 6:
+            # M4 W-L (MC 12665): the §2.14 push block IS the block for
+            # EVERY >6 call, fixed arity AND variadic (gate MC 12664 F-7:
+            # a wall-flip alone ICEd 90/90 — the 335 print_hex_dump_debug
+            # first-blockers need this real law). MEASURED (gcc -Os kernel
+            # recipe, two-TU table in tests/test_core_m4wl0.py): args 1..6
+            # ride rdi..r9; args 7+ go into 8-byte stack slots pushed in
+            # REVERSE order (arg 7 LOWEST, right at the return address,
+            # where the rbp-frame callee reads it at 16(%rbp)+8i and the
+            # §2.7 va_arg switch reads forward from rbp+16); rsp must be
+            # 16-aligned AT the call instruction — with blcc's phase
+            # (rsp ≡ 0 after pushq %rbp + a 16-multiple frame) the pad is
+            # 16 bytes for an EVEN number of stack args — the shipped §2.14
+            # sequence, byte-identical, M2 pins intact — and 8 for an ODD
+            # one (the old fixed $16 left rsp ≡ 8 at odd-K calls: invisible
+            # to GP-only kernel callees, WRONG to any SSE one — the
+            # alignment law now holds at every call site, pinned by
+            # test_wl1_alignment_invariant_leg). `%al = 0` stays EXCLUSIVE
+            # to the variadic arm (the §2.14 pin); one addq restores
+            # pad + slots after the call.
+            k = len(slots) - 6
+            pad = 8 if k & 1 else 16
             for i in range(6):
                 self._e("movq {}, {}".format(slots[i], REG_ARGS[i]))
-            self._e("subq $16, %rsp")
+            self._e("subq ${}, %rsp".format(pad))
             for m, idx in enumerate(reversed(range(6, len(slots)))):
-                off = 8 * (slot_base + idx + 1) + 16 + 8 * m
+                off = 8 * (slot_base + idx + 1) + pad + 8 * m
                 # push-from-memory: a scratch register would clobber a
                 # live arg slot (rdi..r9 still hold args 1..6 here).
                 self._e("pushq {}(%rsp)".format(off))
@@ -689,10 +701,11 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
                 # (same shift law as the pushes above), and no nested
                 # call can run between this mov and the call.
                 self._e("movq {}(%rsp), {}".format(
-                    8 * slot_base + 16 + 8 * (len(slots) - 6), tgt_reg))
-            self._e("xorl %eax, %eax")
+                    8 * slot_base + pad + 8 * k, tgt_reg))
+            if variadic:
+                self._e("xorl %eax, %eax")
             self._e("call {}".format(call_arm))
-            self._e("addq ${}, %rsp".format(16 + 8 * (len(slots) - 6)))
+            self._e("addq ${}, %rsp".format(pad + 8 * k))
             self._unt(len(slots) + (1 if tgt_slot is not None else 0))
             return
         for i, t in enumerate(slots):
@@ -763,11 +776,10 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
                 self._err(n, "'function pointer' call has {} argument(s), "
                           "the target takes {} (§4)".format(
                               len(n.args), want), "function pointer")
-            if want > 6:
-                # §2.14: FIXED-arity >6 KEEPS the shipped LOUD sentence —
-                # on the indirect arm too (M48 residual law, target-form).
-                self._err(n, "more than 6 arguments is beyond the §6 call "
-                          "ABI", "function pointer", "asm")
+            # M4 W-L (MC 12665): >6 FIXED arity ships on the indirect arm
+            # too — the ONE _stage_call block serves both (the gate's C1/
+            # C2 target law untouched: the target is still evaluated into
+            # its pool temp before any staging).
         if ft.variadic:
             # §2 R5: the variadic target rides %r10 — the TARGET LAW in
             # _stage_call materializes it into a pool temp BEFORE the

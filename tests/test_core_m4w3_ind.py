@@ -351,22 +351,17 @@ def test_indirect_arity_is_loud(tmp_path):
     assert br.returncode == 2, br.stderr
 
 
-def test_more_than_six_named_stays_loud(tmp_path):
-    # R9 (plan §2): >6 NAMED args on an indirect target KEEPS the shipped
-    # §6-ABI sentence — the gcc twin ACCEPTS (rc0): NAMED LOUD-DIV row.
+def test_more_than_six_named_on_indirect_target_SHIPS_FLIPPED(tmp_path):
+    # M4 W-L FLIP (MC 12665): R9 pinned >6 NAMED args on an indirect
+    # target LOUD (NAMED LOUD-DIV vs the accepting gcc twin). W-L shipped
+    # the real stack-passing law — the leg now pins ACCEPT + VALUE (28).
     src = ("typedef unsigned long size_t;\n"
            "static long g7(long a, long b, long c, long d, long e, long f,"
            " long g){ return a+b+c+d+e+f+g; }\n"
            "static long via(long (*h)(long,long,long,long,long,long,long))"
            "{ return h(1,2,3,4,5,6,7); }\n"
            "int main(void){ return (int)via(g7); }\n")
-    s = tmp_path / "lv3.c"
-    s.write_text(src)
-    gr = gcc(["-c", str(s), "-o", str(tmp_path / "lv3.gcc.o")])
-    assert gr.returncode == 0, gr.stderr           # gcc accepts (div row)
-    br = blcc(["-c", str(s), "-o", str(tmp_path / "lv3.o")])
-    assert br.returncode == 2
-    assert "beyond the \u00a76 call ABI" in br.stderr    # sentence survives
+    _pair(tmp_path, "lv3", src, 28)
 
 
 def test_fnptr_call_wall_sentence_is_dead(tmp_path):

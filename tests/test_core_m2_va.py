@@ -295,9 +295,13 @@ def test_fixed_arity_mismatch_stays_loud():
           "int main(void){ return g3(1,2); }\n", "fix-arity", "takes")
 
 
-def test_fixed_gt6_stays_loud():
-    # §2.14: "want > 6 for FIXED-arity decls KEEPS its current LOUD"
-    # (M48 residual: not measured in the tiny universe).
-    _loud(VA_HDR + "int g7(int a,int b,int c,int d,int e,int f,int g)"
-          "{ return a; }\nint main(void){ return g7(1,2,3,4,5,6,7); }\n",
-          "fix7", "beyond the §6 call ABI")
+def test_fixed_gt6_ships_FLIPPED():
+    # M4 W-L FLIP (MC 12665, never deletion): this leg pinned "want > 6
+    # for FIXED-arity decls KEEPS its current LOUD" (M48 residual, tiny
+    # universe). W-L shipped REAL stack passing (args 7+ push block +
+    # callee read-back at 16(%rbp)+8i, measured gcc -Os law) — the wall
+    # is GONE; the leg now pins the ACCEPT with the same shape as a
+    # value-observable run-pair (7th arg = a → exit 1 on both sides).
+    both_run(VA_HDR + "int g7(int a,int b,int c,int d,int e,int f,int g)"
+             "{ return a; }\nint main(void){ return g7(1,2,3,4,5,6,7); }\n",
+             "fix7")

@@ -197,21 +197,17 @@ def test_arity_ladder_div_target_2_to_6(tmp_path):
     _ladder(tmp_path, "div")
 
 
-def test_arity_7_named_stays_loud_through_slot(tmp_path):
-    # ladder rung 7, fixed arity: the shipped §6-ABI LOUD sentence rides
-    # the INDIRECT arm too (W3 commit-1 twin) — computed slot target form.
+def test_arity_7_named_through_slot_SHIPS_FLIPPED(tmp_path):
+    # M4 W-L FLIP (MC 12665, never deletion): rung 7 pinned the >6-arity
+    # §6-ABI LOUD on the computed-slot indirect arm. W-L shipped real
+    # stack passing (measured gcc -Os law) — the leg now pins the ACCEPT
+    # and the VALUE through the same computed-slot target form.
     src = ("long g7(long a, long b, long c, long d, long e, long f,"
            " long g){ return a+b+c+d+e+f+g; }\n"
            "long (*tbl[2])(long,long,long,long,long,long,long);\n"
            "int main(void){ tbl[1] = g7; "
            "return (int)tbl[1](1,2,3,4,5,6,7); }\n")
-    s = tmp_path / "wfix-lad-7.c"
-    s.write_text(src)
-    gr = gcc(["-c", str(s), "-o", str(tmp_path / "wfix-lad-7.gcc.o")])
-    assert gr.returncode == 0, gr.stderr            # gcc ACCEPTS: LOUD-DIV
-    br = blcc(["-c", str(s), "-o", str(tmp_path / "wfix-lad-7.o")])
-    assert br.returncode == 2
-    assert "beyond the \u00a76 call ABI" in br.stderr   # sentence survives
+    _pair(tmp_path, "wfix-lad-7", src, 28)
 
 
 def test_variadic_9args_through_computed_slot_runs(tmp_path):
