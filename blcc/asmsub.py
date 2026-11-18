@@ -59,9 +59,64 @@ class AsmSubMixin:
             a, b = self._asm_sym(node.right), self._asm_const(node.left)
             if a is not None and b is not None and node.op == "+":
                 return ("sym", a[1], a[2] + b)
+            # M4 W-M (MC 12670) fold family arm 2 — the SAME-SYMBOL
+            # difference (measured: `&garr[8] - &garr[0]` → `$64`): the
+            # linker folds an offset inside ONE object, so gcc -Os
+            # const-folds it to a pure int and the asm prints `$N`.
+            # A difference ACROSS objects stays gcc's own LOUD
+            # (`impossible constraint in 'asm'`, rc1 — the twin pin in
+            # tests/test_core_m4wm1.py).
+            a, b = self._asm_sym(node.left), self._asm_sym(node.right)
+            if node.op == "-" and a is not None and b is not None \
+                    and a[1] == b[1] and a[0] == "sym" and b[0] == "sym":
+                return a[2] - b[2]
             return None
+        if isinstance(node, ast.Index):
+            # M4 W-M fold family arm 1 — ARRAY-ELEMENT addresses of a
+            # global/static array fold at `sym + k*esz` (measured:
+            # `(long)&gs[8] + 3 → $gs+11`, `(long)&gx[9] → $gx+72`;
+            # the kernel's ABS/alternative arithmetic idiom). The
+            # element size is the ARRAY's OWN _size law; a non-constant
+            # index returns None (the honest 'i' wall stands).
+            k = self._asm_const(node.index)
+            if k is None:
+                return None
+            bsym = self._asm_sym(node.base)
+            if bsym is None or bsym[0] != "sym":
+                return None
+            nb = node.base
+            while isinstance(nb, ast.Cast):
+                nb = nb.operand
+            bt = None
+            if isinstance(nb, ast.Ident):
+                if nb.name in self.globals:
+                    bt = self.globals[nb.name].type
+                elif nb.name in self.fn.statics:
+                    bt = self.fn.statics[nb.name][1]
+            bt = self._untype(bt) if bt is not None else None
+            if not isinstance(bt, ast.ArrayType):
+                return None
+            esz = self._size(self._untype(bt.inner), node)
+            return ("sym", bsym[1], bsym[2] + k * esz)
         if isinstance(node, ast.Ident):
             nm = node.name
+            g = self.globals.get(nm)
+            if g is not None:
+                # M4 W-M fold family arm 3 — a CONST int global answers
+                # with its VALUE (measured: `const int c = 5; "i"(c)` →
+                # `$5`; gcc const-propagates). The old arm returned the
+                # SYMBOL — materialising the ADDRESS as an immediate,
+                # a silent value divergence, now pinned by run-pair.
+                # Non-integer/float/no-foldable-init keeps the symbol
+                # form (the S5/L4 closure unchanged).
+                qt, spine = self._split_q(g.type)
+                spine = self._untype(spine)
+                if "const" in qt and g.init is not None and \
+                        isinstance(spine, ast.BuiltinType) and \
+                        spine.name not in ("float", "double"):
+                    v = self._asm_const(g.init)
+                    if v is not None:
+                        return v
             if nm in self.globals or nm in self.sigs:
                 return ("sym", nm, 0)
             if nm in self.fn.statics:
