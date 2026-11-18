@@ -258,9 +258,16 @@ def test_wm2_anchor_temp_store_sizes(tmp_path):
 # ------------------------------------------------ LOUD twins (deferred
 # classes keep their walls — the sim-named next levers)
 
-def test_wm2_byval_param_stays_loud():
-    _loud(S16 + "long f(struct S s){return s.a;}\n", "wm2p16",
-          "'struct' passed by value")
+def test_wm2_byval_param_pair_shipped(tmp_path):
+    # COMMIT-2 pinned this LOUD as "the sim-named NEXT lever"; COMMIT-4
+    # SHIPPED the lever (walk RED moved to the param door of the SAME
+    # time64.h:63 line) — the pin flips to the run-pair its own comment
+    # named, exactly as W-H's capability.h pin flipped before it. The
+    # >16 MEMORY class keeps its wall (test_wm4_memory_param_loud_twin).
+    _pair(tmp_path, "wm2p16", S16 +
+          "long f(struct S s){ return (int)(s.a + s.b) & 255; }\n"
+          "int main(void){ struct S k = {40, 41}; return (int)f(k); }",
+          (40 + 41) & 255)
 
 
 def test_wm2_i128_return_still_loud():

@@ -544,15 +544,34 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin):
             self._hidden = -fn.frame
             fn.lines.append("    movq %rdi, {}(%rbp)".format(self._hidden))
         hs = 1 if self._hidden is not None else 0
+        # M4 W-M COMMIT-4 (MC 12670): ONE GP ladder for ALL params —
+        # the by-value size law (measure-byval bp2_p* arrivals): a
+        # scalar or an INTEGER ≤8 consumes ONE GP, an INTEGER PAIR
+        # (9..16) consumes TWO (LOW half first, adjacent slots, low at
+        # the base — the bp2 anchor law); the first GP EXHAUSTED moves
+        # every LATER param (and the pair's second word) into the
+        # incoming stack area at 16(%rbp)+8i — the W-L read-back law,
+        # the same ladder scalars ride. MEMORY class (>16), fp-member
+        # structs (SSE class) and unions keep the §5 LOUD wall — the
+        # named twins with the measured gcc behaviour in the leg
+        # docstring (0 corpus volume for the multi-participant stack
+        # law; shipping it blind is the silent-ABI class this wave
+        # exists to kill).
+        gp, ss, stacked = hs, 0, False
         for i, p in enumerate(fd.params):
             pty = self._decay(p.type)
             if _fp(pty):
                 self._err(fd, "'float'/'double' parameter is DEFERRED — "
                           "storage only (§1 row 14; System V passes FP in "
                           "%xmm regs)", p.name or fd.name, "asm")
+            wsz = 1
             if isinstance(pty, ast.StructType):
-                self._err(fd, "'struct' passed by value is 'struct assignment' "
-                          "(§5) — pass a pointer", p.name or fd.name, "asm")
+                psz = self._size(pty, p)
+                if pty.is_union or self._struct_has_fp(pty) or psz > 16:
+                    self._err(fd, "'struct' passed by value is 'struct "
+                              "assignment' (§5) — pass a pointer",
+                              p.name or fd.name, "asm")
+                wsz = 2 if psz > 8 else 1
             off = self._slot(p.type, fd)
             if p.name:
                 fn.locals[p.name] = (off, pty)
@@ -563,20 +582,36 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin):
             # differs — blcc keeps its uniform spill-to-slot (probe m14:
             # the oracle reads the incoming slot in place; value-equal,
             # run-pair pinned).
-            # M4 W-M: with a hidden pointer the GP ladder shifts by one
-            # — param i rides REG_ARGS[i+1] (rsi..r9 = GP slots 1..5)
-            # and the incoming STACK area starts at param 5 (the
-            # measured mem17 K=5 row: arg 6 at 16(%rbp)).
-            gp = i + hs
-            if gp < 6:
+            # M4 W-M: the hidden pointer starts the ladder at GP slot
+            # 1 (rsi..r9); a pair param consumes slots gp and gp+1
+            # (LOW half first, adjacent — the bp2 anchor law). A pair
+            # whose second word would pass the GP door takes BOTH
+            # words on the stack (SysV no-split, W-L §5 measured).
+            # mem→mem is illegal — the read-back rides %rax, blcc's
+            # scratch (nothing lives in it in a prologue).
+            if not stacked and gp + wsz <= 6:
                 fn.lines.append("    movq {}, {}(%rbp)".format(
                     REG_ARGS[gp], off))
+                if wsz == 2:
+                    fn.lines.append("    movq {}, {}(%rbp)".format(
+                        REG_ARGS[gp + 1], off + 8))
             else:
-                # mem→mem is illegal — the read-back rides %rax, blcc's
-                # scratch (nothing lives in it in a prologue).
+                # THE NO-SPLIT LAW, both halves: a pair that would
+                # STRADDLE the GP door takes BOTH words on the stack,
+                # and once ANY param is stacked every LATER one
+                # stacks too (the caller's push block starts at the
+                # same physical slot — symmetric by construction).
+                stacked = True
                 fn.lines.append("    movq {}(%rbp), %rax".format(
-                    16 + 8 * (gp - 6)))
+                    16 + 8 * ss))
                 fn.lines.append("    movq %rax, {}(%rbp)".format(off))
+                if wsz == 2:
+                    fn.lines.append("    movq {}(%rbp), %rax".format(
+                        16 + 8 * (ss + 1)))
+                    fn.lines.append("    movq %rax, {}(%rbp)".format(
+                        off + 8))
+                ss += wsz
+            gp += wsz
         self.loops = []
         self._case_lbl = {}
         self._stmt(fd.body)

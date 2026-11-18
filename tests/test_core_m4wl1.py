@@ -327,12 +327,14 @@ def test_wl1_alignment_invariant_leg(tmp_path):
 # --------------------------------- LOUD twins that MUST survive the flip
 
 def test_wl1_struct_by_value_stays_loud_all_classes(tmp_path):
-    # Struct-by-value passing is DEFERRED (§5) and STAYS loud for every
-    # size class — measured gcc oracle classes 1/2/4/8/12/16/24 (m08
-    # table): blcc never accepts. THREE spellings each: struct as a 6-arg
-    # callee's FIRST param (the shipped wall), as the 7th param across the
-    # NEW push block, and as a 7-arg callee param (the removed >6 wall must
-    # hand the verdict to the struct law, not swallow it).
+    # M4 W-M COMMIT-4 (MC 12670) MOVED the boundary this pin guarded:
+    # the INTEGER classes ≤16 now PASS (bp2 arrivals; the m08 gcc table
+    # was the measured basis of BOTH rows — it puts 1..16 in GP/PAIR
+    # form and 24 in memory form). The pin keeps its full 7×3 matrix
+    # and flips by class: sizes 1..16 build (the 7-arg spellings now
+    # ALSO cover the stack-pair/no-split paths through the W-L push
+    # block), size 24 stays LOUD with the §5 wording — the exact
+    # measured boundary, pinned in both directions.
     for size, decl in ((1, "struct S{char a;}"), (2, "struct S{char a,b;}"),
                        (4, "struct S{int a;}"), (8, "struct S{long a;}"),
                        (12, "struct S{int a,b,c;}"),
@@ -352,6 +354,10 @@ def test_wl1_struct_by_value_stays_loud_all_classes(tmp_path):
             s = tmp_path / ("wl1_sv_%d_%s.c" % (size, tag))
             s.write_text(src)
             b = blcc(["-c", str(s), "-o", str(tmp_path / "wl1_sv.o")])
+            if size <= 16:
+                assert b.returncode == 0, "%s %s must build now:\n%s" % (
+                    size, tag, b.stderr)
+                continue
             assert b.returncode != 0 and \
                 ("passed by value" in b.stderr or "beyond the §6" in b.stderr),\
                 "struct-by-value class {} {} must stay LOUD: {}".format(

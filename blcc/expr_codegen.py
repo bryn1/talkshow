@@ -705,23 +705,73 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
         # push-source formula below counts it in its list position, the
         # SAME law as an argument), consuming %rdi; the GP ladder shifts
         # and the >6 block counts it toward K (pad law unchanged).
+        argw = []          # M4 W-M: GP/stack width per ARGUMENT (1
+        # scalar or ≤8-struct, 2 for an INTEGER PAIR 9..16) — the
+        # symmetric twin of the callee's ladder; the no-split boundary
+        # below walks it.
         if hidden is not None:
             self._e("leaq {}(%rbp), %rax".format(hidden))
             ht = self._t()
             self._e("movq %rax, {}".format(ht))
             slots.append(ht)
+            argw.append(1)
         for idx, a in enumerate(args):
             if is_i128(self._decay(self._ty(a))):
                 self._i128_byval_guard(a, "as a call argument")
-            if decl_params is not None and idx < want:
+            named = decl_params is not None and idx < want
+            if named:
                 self._fp_guard(self._ty(a), decl_params[idx].type, a)
+            aty = self._decay(decl_params[idx].type) if named \
+                else self._decay(self._ty(a))
+            if isinstance(aty, ast.StructType):
+                # M4 W-M COMMIT-4 by-value arg law (bp2 arrival table):
+                # source ADDRESS, load LOW word (one GP for ≤8) and
+                # HIGH word (9..16 → the pair, low staged FIRST).
+                # MEMORY (>16), fp-member, union and NO-named-param
+                # (unprototyped/builtin) cases keep the §5 LOUD wall —
+                # the named twins (multi-participant stack law = 0
+                # corpus volume; shipping it blind is the silent-ABI
+                # class this wave exists to kill).
+                if not named or aty.is_union or \
+                        self._struct_has_fp(aty) or \
+                        self._size(aty, a) > 16:
+                    self._err(a, "'struct' passed by value is 'struct "
+                              "assignment' (§5) — pass a pointer", "call")
+                self._emit_addr(a)
+                # mem→temp rides %rcx (nothing else is live across
+                # these two moves — the staged values live in SLOTS;
+                # %rax KEEPS the address for the high half).
+                t = self._t()
+                self._e("movq (%rax), %rcx")
+                self._e("movq %rcx, {}".format(t))
+                slots.append(t)
+                if self._size(aty, a) > 8:
+                    t2 = self._t()
+                    self._e("movq 8(%rax), %rcx")
+                    self._e("movq %rcx, {}".format(t2))
+                    slots.append(t2)
+                    argw.append(2)
+                else:
+                    argw.append(1)
+                continue
             self._emit_expr(a)
-            if decl_params is not None and idx < want:
+            if named:
                 self._convert(decl_params[idx].type, a)  # §2.2 conversion
             t = self._t()
             self._e("movq %rax, {}".format(t))
             slots.append(t)
-        if len(slots) > 6:
+            argw.append(1)
+        # THE NO-SPLIT BOUNDARY (symmetric with the callee's stacked
+        # flag): walk the arg widths; the first arg that does not FIT
+        # wholly in the GP door stacks — and it plus EVERY later arg
+        # stack, in slot order. nreg = leading slots that ride GP.
+        nreg, stacked = 0, False
+        for w in argw:
+            if stacked or nreg + w > 6:
+                stacked = True
+            else:
+                nreg += w
+        if len(slots) > 6 or stacked:
             # M4 W-L (MC 12665): the §2.14 push block IS the block for
             # EVERY >6 call, fixed arity AND variadic (gate MC 12664 F-7:
             # a wall-flip alone ICEd 90/90 — the 335 print_hex_dump_debug
@@ -741,12 +791,12 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
             # test_wl1_alignment_invariant_leg). `%al = 0` stays EXCLUSIVE
             # to the variadic arm (the §2.14 pin); one addq restores
             # pad + slots after the call.
-            k = len(slots) - 6
+            k = len(slots) - nreg
             pad = 8 if k & 1 else 16
-            for i in range(6):
+            for i in range(nreg):
                 self._e("movq {}, {}".format(slots[i], REG_ARGS[i]))
             self._e("subq ${}, %rsp".format(pad))
-            for m, idx in enumerate(reversed(range(6, len(slots)))):
+            for m, idx in enumerate(reversed(range(nreg, len(slots)))):
                 off = 8 * (slot_base + idx + 1) + pad + 8 * m
                 # push-from-memory: a scratch register would clobber a
                 # live arg slot (rdi..r9 still hold args 1..6 here).

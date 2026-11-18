@@ -61,11 +61,14 @@ def test_call_abi_moves_args_into_the_six_registers():
     assert "call g" in a
 
 
-def test_struct_by_value_is_loud_sema_not_silent_code():
-    with pytest.raises(DiagError) as ei:
-        asm_of("struct S { int a; };\nlong f(struct S s){ return s.a; }")
-    assert "struct assignment" in str(ei.value)
-    assert "§5" in str(ei.value)
+def test_struct_by_value_param_shipped_m4wm4():
+    # M4 W-M COMMIT-4 (MC 12670) SHIPPED the INTEGER param classes
+    # (measure-byval bp2 arrivals): the W-H-era §5 LOUD pin FLIPS to
+    # the shipped arrival law — the §5 wording survives as the
+    # >16/fp/union twins (tests/test_core_m4wm4.py).
+    a = asm_of("struct S { int a; };\nlong f(struct S s){ return s.a; }\n"
+               "int main(void){ return 0; }")
+    assert "movq %rdi," in a, a
 
 
 def test_wrong_argument_count_is_loud():
