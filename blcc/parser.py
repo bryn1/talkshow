@@ -563,6 +563,25 @@ class Parser(AsmParseMixin):
         # and the LOUD names it.
         self._ff_why = None
         cur = ty
+        # M4 W-K (MC 12663): the TYPE slot may spell `typeof(...)` — the
+        # kernel's container_of() family (`offsetof(typeof(*(ptr)), m)`:
+        # 176 stream first-blockers, 88 of them resource_ext.h:74). The
+        # MEASURED oracle (ot_* probes): the builtin resolves the member
+        # path THROUGH the materialized type — pointer targets included
+        # (offsetof(typeof(*p), next) rc0), dot-chains and array members
+        # included; `->` INSIDE a path stays rc1 (the chain parser never
+        # sees that arrow — unchanged law). Materialize ONCE at the walk
+        # ENTRY through the same expr_type mirror the rest of the fold
+        # uses; every step arm below rides untouched.
+        while True:
+            if isinstance(cur, ast.Qualified):
+                cur = cur.inner
+                continue
+            if isinstance(cur, ast.TypeOf):
+                cur = cur.typ if cur.typ is not None else \
+                    self.expr_type(cur.expr)
+                continue
+            break
         off = 0
         dyn = None                     # M4 W-J: runtime term, once built
         for step in chain:
