@@ -283,6 +283,15 @@ def parse_constraint(cstr: str, at) -> CInfo:
     elif lset == {"I", "r"}:
         ci.cls = "I"
         ci.alt = "r"                             # Ir: imm-or-reg (bitops)
+    elif lset == {"i", "r"}:
+        # M4 W-K (MC 12663): the kill-sim-proven letter class — the bitops
+        # LOCK bts/btr/btc arms spell "ir", boot.h:141 spells "ri" (SET-
+        # EQUAL, this model is set-based). EXACT mirror of the {"i","q"}
+        # arm above: foldable -> imm32 through the shipped closure; not
+        # foldable -> alt re-parse -> POOL reg (measured gcc 11.4 gnu89
+        # -Os: $imm wins const, %rdi-class reg takes runtime, lt_* probes).
+        ci.cls = "i"
+        ci.alt = "r"                             # ir/ri: imm-or-any-reg
     else:
         _loud(at, "constraint letter(s) '{}' are not in the M3 SUPPORT set "
                   "(§2 S1-S9 / L1: k,x,t,u,z,s,v,o,Z08,A,f,Q,M,J,w are "
