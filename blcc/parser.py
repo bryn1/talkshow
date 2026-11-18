@@ -1840,20 +1840,14 @@ class Parser(AsmParseMixin):
                 return tuple(params)
             psink: List[tuple] = []    # M4 W-I: the STAR-position attrs of
             ppos = self.s.peek()       # THIS parameter declarator
-            base = self.parse_base_type()
+            # M4 W-J WIG-A (MC 12655): the SPEC position feeds the SAME
+            # sink (was: parse_base_type() with NO sink — the gate's
+            # `param_nonptr_spec` silent section sink; layout class then
+            # rode the blunt §1-row-9 no-sink wall instead of the gcc
+            # sentence). One sink, every position.
+            base = self.parse_base_type(psink)
             name, ty, is_fn, _ = self.parse_declarator(base, ctx="param",
                                                        attr_sink=psink)
-            if name is not None:
-                for _nm, _a in psink:
-                    if _nm == "section":
-                        # M4 W-I (MC 12650): measured gcc rc1 twin
-                        # (probe r12): "section attribute not allowed
-                        # for 'q'" — a parameter has no placement. The
-                        # TYPE-position classes the walk already dropped
-                        # (markers) and LOUDed (layout) ride §1 row 9.
-                        self._sema(ppos, "section attribute not allowed "
-                                   "for '{}' (§1 row 9, measured gcc rc1 "
-                                   "twin)".format(name), "section")
             if is_fn:
                 # C 6.7.6.3p7 (M4 W1 row 1b): a parameter of FUNCTION type
                 # is ADJUSTED to pointer-to-function — `void cb(int)` and
@@ -1861,6 +1855,32 @@ class Parser(AsmParseMixin):
                 # ("parameter with function type is not in the subset")
                 # dies here; the oracle twin is test_core_m4w1 1b-decay.
                 ty = ast.PtrType(ty.file, ty.line, ty.col, ty)
+            # M4 W-J WIG-A (MC 12655): the rc1 judge covers ABSTRACT
+            # declarators too (the gate's WAVE-OPENED `param_fnptr_star`
+            # sink: `name is None` silently rode the old `is not None`
+            # guard; gcc spells the name '({anonymous})'), and the
+            # measured `aligned` law rides the DECLARED TYPE (my matrix
+            # am_1..am_9: scalar/array SPEC or TAIL → rc1 "alignment may
+            # not be specified for 'p'"; POINTER/adj-fn STAR aligned is a
+            # TYPE attribute, gcc rc0 — the shipped silent drop STAYS, a
+            # LOUD there would be the false divergence; packed is "ignored"
+            # rc0 everywhere — pair-clean drop). The ONE shape the sink
+            # cannot see is POSITION: aligned at a POINTER param's TAIL is
+            # gcc rc1 (am_4) and stays a named SILENT-DIV pin, volume 0.
+            _disp = name if name is not None else "({anonymous})"
+            for _nm, _a in psink:
+                if _nm == "section":
+                    # M4 W-I (MC 12650): measured gcc rc1 twin
+                    # (probe r12): "section attribute not allowed
+                    # for 'q'" — a parameter has no placement.
+                    self._sema(ppos, "section attribute not allowed "
+                               "for '{}' (§1 row 9, measured gcc rc1 "
+                               "twin)".format(_disp), "section")
+                if _nm == "aligned" and \
+                        not isinstance(self._unqual(ty), ast.PtrType):
+                    self._sema(ppos, "alignment may not be specified for "
+                               "'{}' (gcc rc1 measured twin, am_1/am_2/"
+                               "am_5/am_6)".format(_disp), "aligned")
             params.append(ast.Param(name, ty))
             if self.s.accept_punct(","):
                 continue
@@ -1911,7 +1931,11 @@ class Parser(AsmParseMixin):
             inline_kind = ("extern-inline" if is_extern
                            else "static-inline" if is_static else "inline")
         if self._accept("typedef"):
-            return self._parse_typedef()
+            # M4 W-J WIG-A (MC 12655): the PRE-KEYWORD attrs the leading
+            # skip captured ride INTO the typedef sinks — the gate's three
+            # `td_pre_kw` spellings were silent because this arm dropped
+            # decl_sink on the floor.
+            return self._parse_typedef(decl_sink)
         # M47 keyword row (T+12): bare `register` is a hint — parses and
         # DROPS (the stack machine has no allocation choice to make).
         # gnu89's address-of-register ERROR side is NOT implemented
@@ -2209,9 +2233,13 @@ class Parser(AsmParseMixin):
                        "(measured gcc rc1: there is no type to infer "
                        "from a void expression)" % name_tok.text)
 
-    def _parse_typedef(self) -> List[ast.Node]:
+    def _parse_typedef(self, pre_sink=()) -> List[ast.Node]:
         out: List[ast.Node] = []
         spec_sink: List[tuple] = []     # M4 W2.5: spec-position attrs
+        # M4 W-J WIG-A: pre_sink = the PRE-KEYWORD run parse_decl skipped
+        # before `typedef` — one law, every position (section rc1, layout
+        # = the shipped LOUD-DIV posture, markers drop).
+        pre_sink = list(pre_sink)
         base = self.parse_base_type(spec_sink)
         out.extend(self._drain_pending())
         while True:
@@ -2242,6 +2270,27 @@ class Parser(AsmParseMixin):
                     self._parse_err(pos, "'function pointer' typedef "
                                     "chain (row 1h) is not in the subset "
                                     "(§5 LOUD twin)")
+            # M4 W-J WIG-A (MC 12655): the PRE-KEYWORD run rides a JUDGE-
+            # ONLY pass — `section` is the gate's rc1 twin (td_pre_kw /
+            # td_struct_pre_kw / td_struct_plain_pre: parse_decl captured
+            # it and the OLD typedef arm discarded the whole sink); layout
+            # attrs on a NON-struct typedef join the shipped LOUD-DIV
+            # posture below. The tag REGISTRATION arm must NOT see it:
+            # gcc 11.4 IGNORES a PRE-KW layout attr outright (probe am_10
+            # measured this session: "packed attribute ignored", sizeof
+            # UNCHANGED, rc0), so registering one on the tag would raise
+            # a layout the oracle never raised.
+            for _nm, _a in pre_sink:
+                if _nm == "section":
+                    self._sema(pos, "section attribute not allowed for "
+                               "'{}' (§1 row 9, measured gcc rc1 twin)"
+                               .format(name), "section")
+                elif _nm in ("aligned", "packed") and \
+                        not isinstance(self._unqual(ty), ast.StructType):
+                    self._sema(pos, "'{}' on a typedef of a non-struct "
+                               "type is LOUD-DIV (gcc raises the NAME's "
+                               "alignment only; corpus volume 0, measured)"
+                               .format(_nm), _nm)
             for _nm, _a in spec_sink + tsink:  # M42 typedef-tail layout
                 if _nm == "section":
                     # M4 W-I (MC 12650): measured gcc rc1 twin (probe p2

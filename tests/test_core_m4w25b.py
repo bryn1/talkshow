@@ -50,7 +50,7 @@ import sys
 
 import pytest
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+REPO = os.environ.get("BLCC_REPO") or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STREAMS = os.path.join(REPO, "..", ".tmp", "m4-plan", "streams")
 
 
