@@ -1362,6 +1362,7 @@ class Parser(AsmParseMixin):
                 else:
                     size = self.expr.parse_expression()
                     self.s.expect_punct("]")
+                self._void_array_judge(lb, ty)
                 ty = ast.ArrayType(lb.file, lb.line, lb.col, ty, size)
                 continue
             if self.s.at_punct("(") and \
@@ -1860,6 +1861,22 @@ class Parser(AsmParseMixin):
             return name, ty, True, ty.params
         return name, ty, False, ()
 
+    def _void_array_judge(self, at, el) -> None:
+        """F-5 LOUD RESTORE (gate MC 12664 F-5, AMENDMENT-13 W-L commit-0,
+        RED-at-tip in tests/test_core_m4wl0.py): `void a[4];` was LOUD rc2
+        until W-K's sizeof(void)=GNU-1 made the ELEMENT size answer 1 and
+        the declaration silently passed (gcc rc1 "declaration of 'a' as
+        array of voids", volume 0 in the 706). The judge rides BOTH array
+        builders — the declarator fold and the sizeof/alignof type suffix —
+        so no void-array spelling slips one arm. The NON-array void decls
+        (`void v;`) were already accepted at the W-K base: a pre-existing
+        divergence pinned with its own leg, NOT silently widened here."""
+        while isinstance(el, ast.Qualified):
+            el = el.inner
+        if isinstance(el, ast.BuiltinType) and el.name == "void":
+            self._sema(at, "declaration as array of 'voids' is a gcc "
+                       "ERROR (§4 twin rc1)")
+
     def _fold_ops(self, base: ast.Node, ops, fam_only: bool,
                   ctx: str) -> ast.Node:
         """The INSIDE-OUT fold of the walk's operator chain onto the base
@@ -1878,6 +1895,7 @@ class Parser(AsmParseMixin):
                     # arrays hold OBJECTS — gcc ERROR (twin agrees rc 1).
                     self._sema(bracket, "'array' of 'function' elements is "
                                "a gcc ERROR (§4)", "array")
+                self._void_array_judge(bracket, ty)
                 ty = ast.ArrayType(bracket.file, bracket.line, bracket.col,
                                    ty, size, fam=(fam_only
                                                   and size is None))
