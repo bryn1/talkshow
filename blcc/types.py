@@ -151,7 +151,89 @@ def stmt_children(s):
     return []
 
 
-class TypeMap:
+class CompatLawMixin:
+    """§2.12/§2.6d THE ONE type-identity law text (M4 W-L, MC 12665).
+    Two hosts run it: TypeMap (codegen — the §2.12 call fold, _Generic)
+    and the Parser fold host (bitfield-width/enum/SA folding through
+    fold_truthy's compat arm). Each host supplies the
+    `_tyof_materialize(expr)` hook — TypeMap._ty on the codegen side,
+    the parser's shipped expr_type mirror on the fold side (the SAME
+    peel _csize/_calign already ride) — and a `_fold_const(size, at)`
+    constant law for the ArrayType arm."""
+
+    # -- §2.12 / §2.6d: the two type-identity predicates ----------------------
+
+    def _resolve_tyof(self, ty):
+        """Resolve __typeof__ wrappers WITHOUT dropping qualifiers — the
+        compatibility predicates need the pointee-level markers that
+        _untype erases for layout (§2.12: `(int*, const int*)` = 0)."""
+        while isinstance(ty, ast.TypeOf):
+            ty = (ty.typ if ty.typ is not None
+                  else self._tyof_materialize(ty.expr))
+        return ty
+
+    @staticmethod
+    def _split_q(ty):
+        """Top-level qualifier set + the unqualified spine."""
+        qs = []
+        while isinstance(ty, ast.Qualified):
+            qs.append(ty.qual)
+            ty = ty.inner
+        return frozenset(qs), ty
+
+    def _ty_eq_strict(self, a, b) -> bool:
+        """C 'compatible types' as the oracle applies it to _Generic keys
+        and to POINTER POINTERS (§2.6d: key qualifiers ARE significant;
+        §2.12: `(int*, const int*)` = 0 — pointee qual is NOT top-level).
+        Nominal struct identity by TAG; arrays by (element, size)."""
+        qa, a = self._split_q(a)
+        qb, b = self._split_q(b)
+        if qa != qb:
+            return False
+        a = self._resolve_tyof(a)      # may expose a new Qualified layer
+        b = self._resolve_tyof(b)
+        qa, a = self._split_q(a)
+        qb, b = self._split_q(b)
+        if qa != qb:
+            return False
+        if isinstance(a, ast.BuiltinType) and isinstance(b, ast.BuiltinType):
+            return a.name == b.name    # char vs signed char: distinct names
+        if isinstance(a, ast.PtrType) and isinstance(b, ast.PtrType):
+            return self._ty_eq_strict(a.inner, b.inner)
+        if isinstance(a, ast.ArrayType) and isinstance(b, ast.ArrayType):
+            if a.size is None or b.size is None:
+                return False
+            return (self._fold_const(a.size, a) ==
+                    self._fold_const(b.size, b) and
+                    self._ty_eq_strict(a.inner, b.inner))
+        if isinstance(a, ast.StructType) and isinstance(b, ast.StructType):
+            return a.tag == b.tag      # nominal: same-shape, new tag ⇒ 0
+        if isinstance(a, ast.FuncType) and isinstance(b, ast.FuncType):
+            # M4 W1: fn-ptr TYPE equality (reached through PtrType recursion
+            # — `__builtin_types_compatible_p(hnd_t, hnd_t)` spells the TYPE
+            # with a typedef NAME, no abstract declarator).
+            return (a.variadic == b.variadic
+                    and len(a.params) == len(b.params)
+                    and self._ty_eq_strict(a.ret, b.ret)
+                    and all(self._ty_eq_strict(x.type, y.type)
+                            for x, y in zip(a.params, b.params)))
+        return False
+
+    def _types_compatible(self, a, b) -> bool:
+        """__builtin_types_compatible_p (§2.12 MEASURED): TOP-LEVEL quals
+        are IGNORED on both sides (`(int, const int)` = 1), everything
+        below stays strict (`(int*, const int*)` = 0)."""
+        _, a = self._split_q(self._resolve_tyof(a))
+        _, b = self._split_q(self._resolve_tyof(b))
+        return self._ty_eq_strict(a, b)
+
+
+class TypeMap(CompatLawMixin):
+
+    # -- compat-law host hook: codegen-side materializer ----
+
+    def _tyof_materialize(self, expr):
+        return self._ty(expr)
 
     # -- diagnostics ---------------------------------------------------------
 
@@ -896,71 +978,6 @@ class TypeMap:
         un, ur = (ln, lr) if lu else (rn, rr)
         sn, sr = (rn, rr) if lu else (ln, lr)
         return self._bt(n, un if ur >= sr else sn)
-
-    # -- §2.12 / §2.6d: the two type-identity predicates ----------------------
-
-    def _resolve_tyof(self, ty):
-        """Resolve __typeof__ wrappers WITHOUT dropping qualifiers — the
-        compatibility predicates need the pointee-level markers that
-        _untype erases for layout (§2.12: `(int*, const int*)` = 0)."""
-        while isinstance(ty, ast.TypeOf):
-            ty = ty.typ if ty.typ is not None else self._ty(ty.expr)
-        return ty
-
-    @staticmethod
-    def _split_q(ty):
-        """Top-level qualifier set + the unqualified spine."""
-        qs = []
-        while isinstance(ty, ast.Qualified):
-            qs.append(ty.qual)
-            ty = ty.inner
-        return frozenset(qs), ty
-
-    def _ty_eq_strict(self, a, b) -> bool:
-        """C 'compatible types' as the oracle applies it to _Generic keys
-        and to POINTER POINTERS (§2.6d: key qualifiers ARE significant;
-        §2.12: `(int*, const int*)` = 0 — pointee qual is NOT top-level).
-        Nominal struct identity by TAG; arrays by (element, size)."""
-        qa, a = self._split_q(a)
-        qb, b = self._split_q(b)
-        if qa != qb:
-            return False
-        a = self._resolve_tyof(a)      # may expose a new Qualified layer
-        b = self._resolve_tyof(b)
-        qa, a = self._split_q(a)
-        qb, b = self._split_q(b)
-        if qa != qb:
-            return False
-        if isinstance(a, ast.BuiltinType) and isinstance(b, ast.BuiltinType):
-            return a.name == b.name    # char vs signed char: distinct names
-        if isinstance(a, ast.PtrType) and isinstance(b, ast.PtrType):
-            return self._ty_eq_strict(a.inner, b.inner)
-        if isinstance(a, ast.ArrayType) and isinstance(b, ast.ArrayType):
-            if a.size is None or b.size is None:
-                return False
-            return (self._fold_const(a.size, a) ==
-                    self._fold_const(b.size, b) and
-                    self._ty_eq_strict(a.inner, b.inner))
-        if isinstance(a, ast.StructType) and isinstance(b, ast.StructType):
-            return a.tag == b.tag      # nominal: same-shape, new tag ⇒ 0
-        if isinstance(a, ast.FuncType) and isinstance(b, ast.FuncType):
-            # M4 W1: fn-ptr TYPE equality (reached through PtrType recursion
-            # — `__builtin_types_compatible_p(hnd_t, hnd_t)` spells the TYPE
-            # with a typedef NAME, no abstract declarator).
-            return (a.variadic == b.variadic
-                    and len(a.params) == len(b.params)
-                    and self._ty_eq_strict(a.ret, b.ret)
-                    and all(self._ty_eq_strict(x.type, y.type)
-                            for x, y in zip(a.params, b.params)))
-        return False
-
-    def _types_compatible(self, a, b) -> bool:
-        """__builtin_types_compatible_p (§2.12 MEASURED): TOP-LEVEL quals
-        are IGNORED on both sides (`(int, const int)` = 1), everything
-        below stays strict (`(int*, const int*)` = 0)."""
-        _, a = self._split_q(self._resolve_tyof(a))
-        _, b = self._split_q(self._resolve_tyof(b))
-        return self._ty_eq_strict(a, b)
 
     def _lvalue_convert(self, ty):
         """§2.6d arm of the selection rule: the control loses top-level

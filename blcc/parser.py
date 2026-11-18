@@ -15,6 +15,7 @@ from blcc import ast, predef
 from blcc.lexer import DiagError, Lexer, SourceLine, Token, TokenStream
 from blcc.expr_parser import ExprParser
 from blcc.asmstmt import AsmParseMixin
+from blcc.types import CompatLawMixin
 from blcc.runtime import BUILTINS as _RUNTIME_BUILTINS
 
 # §6 implicit builtins: always callable, never re-declarable. The NAME set is
@@ -49,7 +50,7 @@ _DECL_START_KW = _TYPE_KW + ("const", "struct", "enum", "static", "typedef",
                              "__auto_type")
 
 
-class Parser(AsmParseMixin):
+class Parser(AsmParseMixin, CompatLawMixin):
     _STMT_HANDLERS = {"if": "parse_if", "while": "parse_while",
                       "do": "parse_do_while", "for": "parse_for",
                       "switch": "parse_switch", "case": "parse_nested_label",
@@ -142,6 +143,24 @@ class Parser(AsmParseMixin):
 
     # -- §2.6 __builtin_choose_expr control folding (M2-C5 leg 4) ------------
 
+    # -- CompatLawMixin host hooks (M4 W-L, MC 12665) ----------------------
+
+    def _tyof_materialize(self, expr):
+        # the fold-side materializer: the SHIPPED expr_type mirror — the
+        # same peel _csize/_calign ride. None flows through the law's
+        # isinstance chain as "not compatible": the SAFE direction
+        # (the const_p no-lie doctrine), never a crash, never a false 1.
+        return self.expr_type(expr)
+
+    def _fold_const(self, n, at) -> int:
+        # the fold-side constant law IS fold_truthy; None = the caller's
+        # LOUD (a non-constant size can never have been compatible).
+        v = self.fold_truthy(n)
+        if v is None:
+            self._sema(at, "array size in a type-identity comparison is "
+                       "not an integer constant (§4)")
+        return v
+
     def fold_truthy(self, node: ast.Node) -> Optional[int]:
         """The arithmetic/sizeof/comparison kernel needed by the kernel's
         `__inttype`/`__typefits` controls (`sizeof(x) <= sizeof(type)` and
@@ -201,6 +220,19 @@ class Parser(AsmParseMixin):
                 return self._calign(node.typ)
             ty = self.expr_type(node.arg)
             return self._calign(ty) if ty is not None else None
+        if (isinstance(node, ast.Call)
+                and isinstance(node.callee, ast.Ident)
+                and node.callee.name == "__builtin_types_compatible_p"):
+            # M4 W-L (MC 12665): BUILD_BUG_ON_ZERO feeds the bitfield
+            # width from the §2.12 identity law — the SAME
+            # `_types_compatible` text codegen folds (CompatLawMixin),
+            # now answering at PARSE. A TYPE that cannot materialize
+            # folds NOT-compatible (0): the safe direction, pinned by
+            # the truth-table leg.
+            if len(node.args) != 2:
+                return None
+            return 1 if self._types_compatible(node.args[0],
+                                               node.args[1]) else 0
         if isinstance(node, ast.Binary):
             op = node.op
             if op in ("&&", "||"):                      # short-circuit
@@ -2881,6 +2913,14 @@ class Parser(AsmParseMixin):
                 decls.extend(self.parse_decl(at_file=True))
             else:
                 self._parse_err(self.s.peek(), "expected a top-level declaration")
+        # M4 W-L (MC 12665): the LAST declaration's body can mint anon
+        # struct/enum definitions whose StructDecls sat in _pending —
+        # the loop only drained at the NEXT top-level decl, so the
+        # trailing ones were DROPPED (sizeof(struct{...}) in the final
+        # function LOUD "undefined struct" at codegen). Same mechanism,
+        # now complete at TU end; collect's first pass registers them
+        # wherever they land in the list.
+        decls.extend(self._drain_pending())
         eof = self.s.peek()
         return ast.TranslationUnit(eof.file, eof.line, eof.col, tuple(decls))
 
