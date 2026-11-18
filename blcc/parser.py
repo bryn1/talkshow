@@ -87,6 +87,15 @@ class Parser(AsmParseMixin):
         self._pending: List[ast.Node] = []  # Struct/EnumDecls made by types
         self._bare_type_ok = False          # a tag/enum definition just read
         self.switch_depth = 0
+        self._sizing = set()   # M4 W-K (MC 12663, gate F-5): tags whose
+        #                              fold-mirror layout is IN PROGRESS;
+        #                              re-entry IS the circular aligned/
+        #                              sizeof dependency (never legal C).
+        self._ft_run = False   # M4 W-K (MC 12663, gate F-1): the last
+        #                              EFFECTIVE item was an FT attribute-
+        #                              declaration (empty stmts/empty attr
+        #                              decls do NOT reset; real items and
+        #                              labels do — measured grid).
         self.expr = ExprParser(self.s, self.is_typename, self.parse_type,
                                self.callable_known, self.expr_type,
                                self.parse_stmt_expr, self.fold_truthy,
@@ -249,6 +258,17 @@ class Parser(AsmParseMixin):
         return None
 
     def _calign(self, ty) -> Optional[int]:
+        """§2.13 alignof mirror entry: same W-K cycle guard (ONE set) as
+        `_csize`; the law is `_calign_impl`."""
+        key = self._layout_enter(ty)
+        if key is None:
+            return self._calign_impl(ty)
+        try:
+            return self._calign_impl(ty)
+        finally:
+            self._sizing.discard(key)
+
+    def _calign_impl(self, ty) -> Optional[int]:
         """alignof mirror of TypeMap._align (scalars by size, arrays by
         element, structs by widest member) for the §2.13 fold."""
         from blcc.types import TYPE_SIZE
@@ -616,7 +636,45 @@ class Parser(AsmParseMixin):
                                          "int"), dyn)
         return off
 
+    def _layout_enter(self, ty):
+        """M4 W-K (MC 12663, gate F-5): ONE layout-in-progress guard for
+        BOTH fold mirrors (`_csize`, `_calign`). The measured cycle
+        `_csize(T) -> _tag_aligned(T) -> fold_truthy(sizeof(struct T2))
+        -> _csize(T2) -> _tag_aligned(T2) -> ... -> _csize(T)` has no
+        legitimate C shape: re-entry while T's layout is in progress means
+        T's size depends on T's own attribute argument — the error gcc
+        11.4 answers rc1 (incomplete-type sizeof). Tip posture died with
+        a raw RecursionError (the gate: raising the limit SEGFAULTS), an
+        ICE that DESTROYS the actionable diagnostic; the guard LOUDs
+        NAMING THE tag. Returns the key to discard, or None (unguarded
+        type)."""
+        t = ty
+        while isinstance(t, ast.Qualified):
+            t = t.inner
+        if not isinstance(t, ast.StructType):
+            return None
+        key = (t.tag, t.is_union)
+        if key in self._sizing:
+            self._sema(t, "circular layout dependency: '{}{}' is being "
+                       "sized while its 'aligned' attribute argument "
+                       "sizes it (§2.13 cycle guard)"
+                       .format("union " if t.is_union else "struct ",
+                               t.tag))
+        self._sizing.add(key)
+        return key
+
     def _csize(self, ty) -> Optional[int]:
+        """§2.13 fold mirror entry: the W-K cycle guard rides the shared
+        `_layout_enter` set; the layout law itself is `_csize_impl`."""
+        key = self._layout_enter(ty)
+        if key is None:
+            return self._csize_impl(ty)
+        try:
+            return self._csize_impl(ty)
+        finally:
+            self._sizing.discard(key)
+
+    def _csize_impl(self, ty) -> Optional[int]:
         """Compile-time size for fold_truthy's sizeof arms (mirrors the
         TypeMap layout rules on the subsets that reach here; None = can't
         say → caller LOUDs)."""
@@ -1155,7 +1213,7 @@ class Parser(AsmParseMixin):
             self.s.expect_punct(")")
             self.s.expect_punct(")")
 
-    def _attr_decl_law(self, sink, at_file, pos) -> None:
+    def _attr_decl_law(self, sink, at_file, pos, prev_ft=False) -> bool:
         """M4 W-J (MC 12655): the GNU/C23 attribute-DECLARATION —
         `__attribute__((...));` with NO declarator (the kernel
         `fallthrough;` macro after pp). Measured law (gcc 11.4 gnu89
@@ -1172,11 +1230,33 @@ class Parser(AsmParseMixin):
         emits NOTHING: blcc's switch already falls through; the attr is
         a -Wimplicit-fallthrough marker and that flag is NOT in the
         kernel recipe (the level-3 end-of-compound and not-preceding
-        warnings, ft_e/ft_t, are rc0 noise)."""
-        if not at_file and self.switch_depth == 0 and \
-                any(nm == "fallthrough" for nm, _a in sink):
+        warnings, ft_e/ft_t, are rc0 noise).
+        M4 W-K (MC 12663, gate F-1) GROWS the law — the CONSECUTIVE
+        shape: two FT attribute-declarations in a row are gcc rc1
+        "invalid use of attribute 'fallthrough'" AT THE SECOND (measured
+        grid .tmp/m4-wk/probes/ ftc1-10, b1-b9: empty statements and
+        empty attr-decls do NOT break the adjacency (ftc6/ftc9), real
+        items, real declarations and labels DO (ftc3/ftc10/b2); file
+        scope is exempt (ftc4); a compound with a REAL item resets, an
+        all-empty/FT-only compound is TRANSPARENT (b5/b7 vs b8, oracle-
+        decided). ONE flag `self._ft_run` carries the adjacency; this
+        law is the ONLY decider and RETURNS the new value — both doors
+        store it, no second tracker."""
+        ft = any(nm == "fallthrough" for nm, _a in sink)
+        if not at_file and self.switch_depth == 0 and ft:
             self._sema(pos, "invalid use of attribute 'fallthrough'"
                        " (§1 row 9, measured gcc rc1 twin)", "fallthrough")
+        if at_file:
+            return False
+        if not ft:
+            return prev_ft          # empty NON-FT attr-decl: transparent
+        if prev_ft:
+            self._sema(pos, "invalid use of attribute 'fallthrough' — a "
+                       "second consecutive fallthrough attribute-"
+                       "declaration has no preceding statement (gate "
+                       "F-1 law, gcc rc1 at the second, ftc1/b1 grid)",
+                       "fallthrough")
+        return True
 
     def _parse_static_assert(self, out):
         """M4 W-J (MC 12655): the C11 `_Static_assert` declaration (file
@@ -2034,6 +2114,10 @@ class Parser(AsmParseMixin):
 
     def parse_decl(self, at_file: bool) -> List[ast.Node]:
         out: List[ast.Node] = []
+        # W-K F-1: a REAL declaration item resets the FT adjacency; the
+        # attr-declaration door below restores or sets it via the law.
+        _ft_prev = self._ft_run
+        self._ft_run = False
         # §1 row 9: attributes may lead a declaration (`__attribute__((x))
         # static int f(...)`) — skip BEFORE the storage-class keywords.
         # M4 W2.5 (MC 12557): every skip position in THIS declarant owner
@@ -2049,7 +2133,8 @@ class Parser(AsmParseMixin):
             # runs are consumed, the declarator list is EMPTY: a no-op.
             # Blocks and file scope take this ONE door (statement
             # position has its own arm applying the SAME law).
-            self._attr_decl_law(decl_sink, at_file, self.s.peek())
+            self._ft_run = self._attr_decl_law(decl_sink, at_file,
+                                               self.s.peek(), _ft_prev)
             self.s.next()
             return out
         if self._at("_Static_assert"):
@@ -2766,10 +2851,17 @@ class Parser(AsmParseMixin):
 
     def parse_statement(self) -> ast.Node:
         t = self.s.peek()
+        # W-K F-1: capture the FT adjacency; every REAL item path resets,
+        # the empty `;` arm and the empty attr-declaration arm restore
+        # (measured: they do NOT break adjacency), the law decides FT.
+        _ft_prev = self._ft_run
+        self._ft_run = False
         if t.kind == "kw":
             handler = self._STMT_HANDLERS.get(t.text)
             if handler is not None:
-                return getattr(self, handler)()
+                _st = getattr(self, handler)()
+                self._ft_run = False         # a real statement resets
+                return _st
             if t.text == "goto":
                 # M2 §1 row 4: real goto. `goto *p` stays a LOUD parse wall
                 # (§1 row 4c / M56 — the new grammar must not eat the '*').
@@ -2820,7 +2912,8 @@ class Parser(AsmParseMixin):
                     stmt_sink: List[tuple] = []
                     self._skip_gnu_attrs(stmt_sink)
                     if self.s.at_punct(";"):
-                        self._attr_decl_law(stmt_sink, False, t)
+                        self._ft_run = self._attr_decl_law(
+                            stmt_sink, False, t, _ft_prev)
                         pos = self.s.next()
                         return ast.ExprStmt(pos.file, pos.line, pos.col,
                                             None)
@@ -2833,12 +2926,26 @@ class Parser(AsmParseMixin):
             # the same spelling COEXIST — the label namespace is separate.
             self.s.next()                      # the identifier
             self.s.next()                      # ':'
+            self._ft_run = False               # a label resets (ftc10)
             stmt = self.parse_statement()
             return ast.Label(t.file, t.line, t.col, t.text, stmt)
         if t.kind == "punct" and t.text == "{":
-            return self.parse_compound()
+            self._ft_run = _ft_prev    # compound ENTRY is transparent:
+            #                              b7 rc1 — the FT outside stays
+            #                              the last thing seen INSIDE
+            _cmp = self.parse_compound()
+            if any(not (isinstance(sx, ast.ExprStmt) and sx.expr is None)
+                   for sx in _cmp.body):
+                self._ft_run = False   # a compound with a REAL item IS a
+            #                              statement (b8 rc0); an all-
+            #                              empty/FT-only compound is
+            #                              TRANSPARENT — the FT inside
+            #                              stays the last thing seen
+            #                              (b5/b7 rc1, oracle-decided)
+            return _cmp
         if self.s.at_punct(";"):
             pos = self.s.next()
+            self._ft_run = _ft_prev    # empty statement: NO reset (ftc9)
             return ast.ExprStmt(pos.file, pos.line, pos.col, None)
         # W-G (MC 12633): expression statements take the comma (m26).
         expr = self.expr.parse_comma_expression()
@@ -2946,11 +3053,13 @@ class Parser(AsmParseMixin):
             if self._at("case"):
                 kind, value, ct = self.parse_case_arm()
                 labels.append((kind, value, ct))
-                continue
+                self._ft_run = False   # W-K F-1: a case label resets
+                continue               #   the FT adjacency (ftc10/b4)
             if self._at("default"):
                 dt = self.s.next()
                 self.s.expect_punct(":")
                 labels.append(("default", None, dt))
+                self._ft_run = False
                 continue
             stmt = self.parse_statement()
             for kind, value, ltok in reversed(labels):

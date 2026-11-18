@@ -241,9 +241,18 @@ def test_wj2_dyn_arm_asm_shipped_arith_no_libcall(tmp_path):
                  " return __builtin_offsetof(struct L, node[i]); }\n")
     r = blcc(["--emit-asm", "-c", str(s), "-o", str(tmp_path / "wj2_da.o")])
     assert r.returncode == 0, r.stderr
+    # M4 W-K (MC 12663, gate F-6): a POSITIVE anchor, like the
+    # constant-arm twin has — rc0 + no-call alone stayed GREEN under
+    # the gate PLANT-B (dyn values wrong); the shipped arithmetic must
+    # actually be visible: imulq of the index by the element size.
     assert "call" not in r.stdout, \
         "dyn arm must ride the shipped arithmetic (no libcall):\n" + \
         r.stdout
+    assert "imulq" in r.stdout, \
+        "positive anchor (gate F-6): the shipped multiply must be VISIBLE " \
+        "(gate PLANT-B dropped the index term and this leg stayed GREEN " \
+        "on rc/no-call alone); measured blcc -Os arm: imulq %rcx, %rax\n" \
+        + r.stdout
 
 
 # ------------------------------------------------ LOUD-consistency arms

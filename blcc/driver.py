@@ -244,8 +244,13 @@ def main(argv: List[str]) -> int:
                 out.close()
         return 0
 
+    phase = "lex"                # M4 W-K (MC 12663, gate F-5 honesty row):
+    # the §8 catch-all below must name the stage that ACTUALLY faulted —
+    # it hardcoded `asm:` for every internal fault and mislabelled a
+    # parse-stage runaway as an asm crash.
     try:
         toks = Lexer(lines).tokenize()
+        phase = "parse"
         tu = parse_tokens(toks)
         if not compile_only:
             # M4 W3 COMMIT-0 (MC 12563): the DEF arm of the re-declaration
@@ -271,6 +276,7 @@ def main(argv: List[str]) -> int:
         # object must carry the TU and NOTHING else — the blob in a .o is
         # `U main` poison ×669 TUs and a _start redefinition wall at any
         # link (§6 nm-parity: blcc_U(TU) − gcc_U(TU) must stay ∅).
+        phase = "asm"
         asm_text = compile_tu(tu) if compile_only \
             else RUNTIME_ASM + compile_tu(tu)
     except DiagError as exc:
@@ -279,8 +285,9 @@ def main(argv: List[str]) -> int:
     except Exception as exc:            # §2/§8 belt: a raw traceback is NEVER
         # a permitted compiler behaviour — every internal fault becomes a
         # §8-format diagnostic, exit 2, and NOTHING is emitted.
-        sys.stderr.write("{}:0:0: asm: internal compiler error, found "
-                         "'{}: {}'\n".format(in_path, type(exc).__name__,
+        sys.stderr.write("{}:0:0: {}: internal compiler error, found "
+                         "'{}: {}'\n".format(in_path, phase,
+                                             type(exc).__name__,
                                              str(exc).replace("'", "")))
         return _fail(2)
 
