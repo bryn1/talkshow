@@ -304,9 +304,14 @@ class AsmSubMixin:
                 if nm in self.fn.locals:
                     return ("frame", self.fn.locals[nm][0], off)
                 if nm in self.fn.statics:
-                    return ("sym", self.fn.statics[nm][0], -off)
+                    # M4 W-N (MC 12687): the delta sign was FLIPPED here
+                    # (M3-A seed): `gs[3]` materialized `gs-12` — a SILENT
+                    # wrong address the %P table flushed out. The chain
+                    # accumulates `off` positively for .field and [k];
+                    # sym and frame answer the SAME sign.
+                    return ("sym", self.fn.statics[nm][0], off)
                 if nm in self.globals:
-                    return ("sym", nm, -off)
+                    return ("sym", nm, off)
                 return (None, None, None)
             if isinstance(cur, ast.Select) and not cur.arrow:
                 bty = self._asm_obj_base_ty(cur.base)
@@ -460,6 +465,23 @@ class AsmSubMixin:
                       "invalid 'asm': invalid use of asm flag output)",
                       "@cc", "asm")
         if o.form == "mem":
+            if mod == "P":
+                # M4 W-N (MC 12687): `%P` PRINTS THE ADDRESS — the text
+                # the plain operand already prints, with no `$` (measured
+                # gcc law: `g`, `12+gs`, the frame `-8(%rsp)`; the SAME
+                # answer the §3 L3 materializer owns — one printer, one
+                # text). Guarded by gcc's OWN refusals: a `"p"` operand
+                # whose text is a FRAME address (gcc rc1 'invalid
+                # expression as operand' — a runtime address is not a
+                # constant) and any COMPUTED operand (no text exists;
+                # the named honest wall for computed "m", volume 0).
+                if o.mem is not None and \
+                        not (o.ci.cls == "p" and "%rbp" in o.mem):
+                    return o.mem
+                self._err(n, "'%P' needs a CONSTANT address operand — no"
+                          " address text here (gcc law MC 12687: frame/"
+                          "computed addresses are rc1 or unprintable)",
+                          "%P", "asm")
             if mod is not None:
                 self._err(n, "size/const modifier '%{}' on a MEMORY operand "
                           "(§3 L3 silent-size guard)"
@@ -488,7 +510,11 @@ class AsmSubMixin:
                 return str(v)
             return "${}".format(v)
         # reg / bind operand:
-        if mod in ("c", "P", "s", "l"):
+        if mod == "P":
+            # M4 W-N: `%P` on a REGISTER operand prints the register —
+            # measured gcc (`"r"(x)` under %P → `%rax`), NOT loud.
+            return reg_name(o.reg, o.w, None, at=o.node)
+        if mod in ("c", "s", "l"):
             self._err(n, "'%{}' needs a constant/symbol/label operand, not "
                       "a register (§3.5)".format(mod), "%{}".format(mod),
                       "asm")
