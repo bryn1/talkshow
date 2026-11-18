@@ -586,11 +586,15 @@ class ExprParser:
                 self.s.expect_punct("]")
                 v = self.fold_truthy(idx) if self.fold_truthy else None
                 if v is None:
-                    raise DiagError(
-                        "sema", t.file, t.line, t.col,
-                        "__builtin_offsetof index is not a compile-time "
-                        "constant (§2.13)", "__builtin_offsetof")
-                chain.append(v)
+                    # M4 W-J (MC 12655): a NON-constant index no longer
+                    # LOUDs (the rbtree_latch.h:72 `node[idx]` class).
+                    # The walk folds the CONSTANT prefix and builds
+                    # `off + idx * esize` through the shipped machinery;
+                    # the LOUD arms (non-array, unsizable) ride the SAME
+                    # sentences the constant arm has always had.
+                    chain.append(("dyn", idx))
+                else:
+                    chain.append(v)
             if self.s.accept_punct("."):
                 continue
             break
@@ -599,8 +603,10 @@ class ExprParser:
             raise DiagError("sema", t.file, t.line, t.col,
                             "__builtin_offsetof is unavailable (§2.13)",
                             "__builtin_offsetof")
-        return ast.IntLit(t.file, t.line, t.col,
-                          self.fold_offset(ty, chain, t), "int")
+        off = self.fold_offset(ty, chain, t)
+        if isinstance(off, ast.Node):
+            return off          # runtime arm: already the expression
+        return ast.IntLit(t.file, t.line, t.col, off, "int")
 
     def _fold_gnu_builtin(self, t, name: str, args):
         # §2A M2-C5 legs 2+4 (VERBATIM rows): __builtin_expect(a,b) folds

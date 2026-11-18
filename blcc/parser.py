@@ -531,6 +531,7 @@ class Parser(AsmParseMixin):
         self._ff_why = None
         cur = ty
         off = 0
+        dyn = None                     # M4 W-J: runtime term, once built
         for step in chain:
             if isinstance(step, int):
                 if not isinstance(cur, ast.ArrayType):
@@ -541,6 +542,32 @@ class Parser(AsmParseMixin):
                     self._parse_err(at, "__builtin_offsetof: element "
                                         "size unknown (§2.13)")
                 off += step * esz
+                cur = cur.inner
+                continue
+            if isinstance(step, tuple) and step[0] == "dyn":
+                # M4 W-J (MC 12655): the RUNTIME INDEX arm (the rbtree_
+                # latch.h:72 `node[idx]` family, 118 first-blockers). The
+                # gcc law measured at my hands (probes of_a..of_n): the
+                # builtin becomes `off + idx * esize` — the SAME walk,
+                # the SAME §2.13 mirrors (flat layout for the constant
+                # prefix, _csize for the element, packed/bitfield shrink
+                # included), the arithmetic built as ordinary shipped
+                # nodes (of_l runs `/8` on the result; no libcall, see
+                # the asm legs). Both LOUD arms ride the existing
+                # sentences (not-an-array, element size).
+                node = step[1]
+                if not isinstance(cur, ast.ArrayType):
+                    self._parse_err(at, "__builtin_offsetof: indexed "
+                                        "member is not an array (§2.13)")
+                esz = self._csize(cur.inner)
+                if esz is None:
+                    self._parse_err(at, "__builtin_offsetof: element "
+                                        "size unknown (§2.13)")
+                term = ast.Binary(node.file, node.line, node.col, "*",
+                                  node, ast.IntLit(at.file, at.line,
+                                                   at.col, esz, "int"))
+                dyn = term if dyn is None else ast.Binary(
+                    node.file, node.line, node.col, "+", dyn, term)
                 cur = cur.inner
                 continue
             if not isinstance(cur, ast.StructType):
@@ -569,6 +596,13 @@ class Parser(AsmParseMixin):
                                     "stays LOUD)".format(step, cur.tag))
             off += found[0]
             cur = found[1]
+        if dyn is not None:
+            # M4 W-J: constant prefix + runtime terms, shipped arithmetic
+            # (the int-typing law rides the shipped fold, divergence row
+            # pinned in tests/test_core_m4wj2.py).
+            return ast.Binary(at.file, at.line, at.col, "+",
+                              ast.IntLit(at.file, at.line, at.col, off,
+                                         "int"), dyn)
         return off
 
     def _csize(self, ty) -> Optional[int]:
