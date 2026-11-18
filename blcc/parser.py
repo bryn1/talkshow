@@ -279,6 +279,8 @@ class Parser(AsmParseMixin):
             #                              §1 row 10 walk hit the missing
             #                              arm (pre-existing mirror gap)
         if isinstance(ty, ast.BuiltinType):
+            if ty.name == "void":
+                return 1        # W-K mirror: __alignof__(void) MEASURED 1
             return TYPE_SIZE.get(ty.name)
         if isinstance(ty, ast.PtrType):
             return 8
@@ -686,6 +688,16 @@ class Parser(AsmParseMixin):
             #                              §1 row 10 walk hit the missing
             #                              arm (pre-existing mirror gap)
         if isinstance(ty, ast.BuiltinType):
+            if ty.name == "void":
+                # M4 W-K (MC 12663): GNU sizeof(void) is 1 — MEASURED rc0
+                # at EVERY std flag (gnu89/c89/c99/c11/c2x), no warning
+                # under -Wall -Werror; it is what makes `void *p + k` a
+                # byte-unit walk — the bitops CONST_MASK_ADDR law. The
+                # old fold answered 0 (TYPE_SIZE["void"] documents that
+                # void has no OBJECT — the table stays; THIS arm carries
+                # the GNU law, the codegen mirror TypeMap._size mirrors
+                # it, alignof(void)=1 already rode the shipped fold).
+                return 1
             return TYPE_SIZE.get(ty.name)
         if isinstance(ty, ast.PtrType):
             return 8

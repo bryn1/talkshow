@@ -240,7 +240,16 @@ class TypeMap:
             ty = self._untype(ty)
         if isinstance(ty, ast.BuiltinType):
             if ty.name == "void":
-                self._err(ty, "'sizeof(void)' is not in the subset (§4)", "void")
+                # M4 W-K (MC 12663): the §4 wall is DEAD — GNU sizeof(void)
+                # is 1 (gcc 11.4 MEASURED rc0 at every std flag, no
+                # warning; sv_* probes) and the SAME 1 is the scale of
+                # `void *p + k` / the byte-unit answer of `void *p - void
+                # *q` — the bitops CONST_MASK_ADDR `(void *)(addr) +
+                # ((nr)>>3)` carriers (236 first-blockers at the close
+                # sweep). The fold mirror (`parser._csize_impl`) mirrors
+                # this arm; the old law LOUDed here while the fold said
+                # 0 — one compiler, two answers, neither gcc's.
+                return 1
             return TYPE_SIZE[ty.name]
         if isinstance(ty, ast.PtrType):
             return 8
