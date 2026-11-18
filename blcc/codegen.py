@@ -488,9 +488,18 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin):
             # in tests/test_core_m4wl1.py, retires with the va law).
             self._err(fd, "a variadic function with more than 6 NAMED "
                       "parameters is beyond the §6 call ABI", fd.name, "asm")
+        # M4 W-M (MC 12670): the §5 RETURN wall is the measured size-class
+        # law now (≤8 RAX / 9-16 RAX:RDX / >16 hidden pointer — the table
+        # in tests/test_core_m4wm2.py); an fp-bearing struct is the
+        # SSE-class LOUD-DIV (kernel -mno-sse: MEMORY-by-class anyway,
+        # 706-stream volume 0, twin pinned).
+        self._sret = None
+        self._hidden = None
         if isinstance(self._decay(fd.ret_type), ast.StructType):
-            self._err(fd, "'struct' returned by value is 'struct assignment' "
-                      "(§5) — return a pointer", fd.name, "asm")
+            if self._struct_has_fp(self._decay(fd.ret_type)):
+                self._err(fd, "an SSE-class 'struct' returned by value "
+                          "(float/double member) is not in the GP-only "
+                          "subset (§1 row 14)", fd.name, "asm")
         # M4 W-B (MC 12596): 128-bit BY-VALUE params/returns are the
         # System V GPR-PAIR ABI (rdi:rsi, rax:rdx) — measured gcc rc 0,
         # blcc LOUD §6 twin (staging is one 8-byte value per arg slot);
@@ -507,6 +516,15 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin):
         fn.epilogue = self._label("ep_" + fd.name)
         self._fn_ret = self._untype(fd.ret_type)
         self._fn_variadic = fd.variadic
+        # M4 W-M (MC 12670): struct-by-value RETURN state — the size
+        # class decides whether %rdi is a HIDDEN POINTER slot consumed
+        # BEFORE the named params (the measured mem17 law: the GP ladder
+        # shifts by one — args 1..5 ride rsi..r9, arg 6+ hit the stack
+        # one slot earlier). Set AFTER untype: the ret type may ride a
+        # TypeRef.
+        self._sret = (self._fn_ret if isinstance(
+            self._decay(self._fn_ret), ast.StructType) else None)
+        self._sret_sz = self._size(self._sret, fd) if self._sret else 0
         fn.var_save = None
         if fd.variadic:
             # §2.7: the register-save area — six 8-byte slots at the TOP
@@ -516,6 +534,16 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin):
             fn.var_save = -fn.frame
         else:
             fn.var_save = None
+        self._hidden = None
+        if self._sret is not None and self._sret_sz > 16:
+            # MEMORY class: an 8-byte slot for the hidden pointer,
+            # reserved FIRST (lowest slot) and spilled at the head of
+            # fn.lines — before any param spill or body statement can
+            # clobber %rdi (measured: `movq %rdi,%r12` at the door).
+            fn.frame += 8
+            self._hidden = -fn.frame
+            fn.lines.append("    movq %rdi, {}(%rbp)".format(self._hidden))
+        hs = 1 if self._hidden is not None else 0
         for i, p in enumerate(fd.params):
             pty = self._decay(p.type)
             if _fp(pty):
@@ -535,14 +563,19 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin):
             # differs — blcc keeps its uniform spill-to-slot (probe m14:
             # the oracle reads the incoming slot in place; value-equal,
             # run-pair pinned).
-            if i < 6:
+            # M4 W-M: with a hidden pointer the GP ladder shifts by one
+            # — param i rides REG_ARGS[i+1] (rsi..r9 = GP slots 1..5)
+            # and the incoming STACK area starts at param 5 (the
+            # measured mem17 K=5 row: arg 6 at 16(%rbp)).
+            gp = i + hs
+            if gp < 6:
                 fn.lines.append("    movq {}, {}(%rbp)".format(
-                    REG_ARGS[i], off))
+                    REG_ARGS[gp], off))
             else:
                 # mem→mem is illegal — the read-back rides %rax, blcc's
                 # scratch (nothing lives in it in a prologue).
                 fn.lines.append("    movq {}(%rbp), %rax".format(
-                    16 + 8 * (i - 6)))
+                    16 + 8 * (gp - 6)))
                 fn.lines.append("    movq %rax, {}(%rbp)".format(off))
         self.loops = []
         self._case_lbl = {}
@@ -624,7 +657,33 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin):
         elif isinstance(n, ast.For):
             self._stmt_for(n)
         elif isinstance(n, ast.Return):
-            if n.value is not None:
+            if self._sret is not None:
+                # M4 W-M (MC 12670): THE RETURN DOOR — one place, the
+                # measured size class. Source-address law (W-H): the
+                # value expression answers with its ADDRESS, the door
+                # moves bytes per class: ≤8 → %rax; 9-16 → %rax (bytes
+                # 0..7) + %rdx (8..15); >16 → block copy onto the
+                # hidden pointer, %rax = that pointer (the measured
+                # `movq %rdi,%rax` tail — callers may read it).
+                if n.value is None:
+                    self._err(n, "return with no value in a "
+                              "struct-returning function (§4)", "return")
+                self._emit_addr(n.value)
+                sz = self._sret_sz
+                if sz <= 8:
+                    self._e("movq (%rax), %rax")
+                elif sz <= 16:
+                    self._e("movq (%rax), %rcx")
+                    self._e("movq 8(%rax), %rdx")
+                    self._e("movq %rcx, %rax")
+                else:
+                    self._e("movq %rax, %rsi")
+                    self._e("movq {}(%rbp), %rdi".format(self._hidden))
+                    self._copy_block(sz, n)
+                    self._e("movq {}(%rbp), %rax".format(self._hidden))
+                # the ONE jmp to the epilogue is the shared Return tail
+                # below — the door only computes the result.
+            elif n.value is not None:
                 self._fp_guard(self._ty(n.value), self._fn_ret, n)
                 self._emit_expr(n.value)
                 self._convert(self._fn_ret)   # §2.2: result wraps to fn type

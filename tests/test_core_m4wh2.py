@@ -317,18 +317,31 @@ def test_wh2_cond_arm_stays_loud(tmp_path):
 
 
 def test_wh2_call_rhs_stays_loud(tmp_path):
-    # NAMED DEFER (measured gcc rc 0): `dest = cap_drop(a, set)` — the
-    # capability.h:169 class (12 sweep rows). The wall is STRUCT
-    # RETURN-BY-VALUE (codegen:486/520, shipped LOUD, §5 pass/return),
-    # NOT the assignment: the copy law never fakes a caller-allocated
-    # hidden return. The close-leg sweep keeps these rows LOUD — the
-    # honest move, named. Retirement rides the by-value return law.
-    r = _compile(tmp_path, "wh2_cr",
-                 "struct S{int a;} x;\nstruct S fs(void){ return x; }\n"
-                 "int g(void){ struct S d; d = fs(); return d.a; }\n"
-                 "int main(void){ return g(); }")
-    assert r.returncode != 0, (
-        "when struct RETURN lands, FLIP to the run-pair expect 4")
+    # FLIPPED by M4 W-M (MC 12670) — the named retirement ARRIVED: the
+    # by-value RETURN law ships (measured size classes, tests/
+    # test_core_m4wm2.py), so this pin becomes the run-pair it named
+    # ("when struct RETURN lands, FLIP to the run-pair expect 4"). The
+    # capability.h:169 class (12 sweep rows) is MEASURED now, not LOUD.
+    src = ("struct S{int a;} x = {4};\nstruct S fs(void){ return x; }\n"
+           "int g(void){ struct S d; d = fs(); return d.a; }\n"
+           "int main(void){ return g(); }\n")
+    s = tmp_path / "wh2_cr.c"
+    s.write_text(src)
+    gx = tmp_path / "wh2_cr.gcc"
+    gr = subprocess.run(["gcc", "-std=gnu89", "-O0", str(s), "-o", str(gx)],
+                        capture_output=True, text=True,
+                        env={"PATH": "/usr/bin:/bin"})
+    assert gr.returncode == 0, gr.stderr
+    bx = tmp_path / "wh2_cr.blcc"
+    br = subprocess.run(
+        [sys.executable, "-m", "blcc", str(s), "-o", str(bx)],
+        capture_output=True, text=True, cwd=REPO,
+        env={"PYTHONPATH": REPO, "PATH": "/usr/bin:/bin"})
+    assert br.returncode == 0, br.stderr
+    g = subprocess.run([str(gx)], capture_output=True, text=True)
+    b = subprocess.run([str(bx)], capture_output=True, text=True)
+    assert g.returncode == b.returncode == 4, \
+        "run-pair: gcc {} blcc {} expect 4".format(g.returncode, b.returncode)
 
 
 def test_wh2_const_lhs_divergence(tmp_path):

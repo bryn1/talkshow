@@ -702,6 +702,36 @@ class TypeMap(CompatLawMixin):
             return ast.PtrType(ty.file, ty.line, ty.col, ty)
         return ty
 
+    def _struct_has_fp(self, ty: ast.Node, _seen=None) -> bool:
+        # M4 W-M (MC 12670): the SSE-class test for the struct-return
+        # door — a float/double ANYWHERE (member, array element, nested
+        # struct/union) makes the return SSE/MEMORY class, outside the
+        # GP-only subset (§1 row 14; kernel -mno-sse volume 0). A
+        # by-value struct cannot legally cycle (C forbids it); the
+        # _seen set is belt-and-braces over the tag walk.
+        if _seen is None:
+            _seen = set()
+        if not isinstance(ty, ast.StructType) or ty.tag in _seen:
+            return False
+        _seen.add(ty.tag)
+        for m in self.structs.get(ty.tag) or ():
+            mt = self._untype(m.type)
+            if (isinstance(mt, ast.BuiltinType)
+                    and mt.name in ("float", "double")):
+                return True
+            if isinstance(mt, ast.ArrayType):
+                it = self._untype(mt.inner)
+                if (isinstance(it, ast.BuiltinType)
+                        and it.name in ("float", "double")):
+                    return True
+                if isinstance(it, ast.StructType) and \
+                        self._struct_has_fp(it, _seen):
+                    return True
+            if isinstance(mt, ast.StructType) and self._struct_has_fp(mt,
+                                                                     _seen):
+                return True
+        return False
+
     def _struct_layout(self, ty: ast.StructType,
                        at) -> Tuple[Dict[str, int], int, List]:
         """Returns (flat name->byte-offset WITH promoted anonymous-member

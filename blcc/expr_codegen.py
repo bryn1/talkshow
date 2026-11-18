@@ -566,12 +566,29 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
             # int-strlen call rides the int→long sign-extend); the §6
             # table answers only the UNDECLARED spelling.
             want = BUILTINS[name][0]
+            sret_sz = None
         else:
             params, ret, variadic = self.sigs[name]
             want = len(params)
-            if isinstance(self._decay(ret), ast.StructType):
-                self._err(n, "call to a 'struct'-returning function is 'struct "
-                          "assignment' (§5)", name, "asm")
+            # M4 W-M (MC 12670): the §5 struct-return CALL wall is the
+            # caller-temp mechanism now (the size class decides the
+            # shape; tests/test_core_m4wm2.py). An fp-bearing struct is
+            # the SSE-class LOUD-DIV twin (the definition door checks
+            # too — an extern-only declaration reaches it HERE); a
+            # struct from a VARIADIC call is a named LOUD twin (the
+            # `%al=0` vector law and a pair-class return would fight
+            # over %rax; 706-stream volume 0).
+            sret_sz = (self._size(self._decay(ret), n)
+                       if isinstance(self._decay(ret), ast.StructType)
+                       else None)
+            if sret_sz is not None and variadic:
+                self._err(n, "a 'struct' returned by a variadic call is "
+                          "not in the subset (§2.14 LOUD-DIV twin)", name)
+            if sret_sz is not None and self._struct_has_fp(
+                    self._decay(ret)):
+                self._err(n, "an SSE-class 'struct' returned by value "
+                          "(float/double member) is not in the GP-only "
+                          "subset (§1 row 14)", name)
         if variadic:
             # §1 row 17 caller side + §2.14: fewer than the NAMED
             # parameters is LOUD; the extras must be scalar (§2.14 NEG
@@ -607,12 +624,41 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
         decl_params = (self.sigs[name][0]
                        if name not in BUILTINS or name in self.sigs
                        else None)
-        self._stage_call(n.args, want, decl_params, variadic, name)
+        sret_off = self._sret_pre(sret_sz, self._decay(ret), n) \
+            if sret_sz is not None else None
+        self._stage_call(n.args, want, decl_params, variadic, name,
+                         hidden=sret_off if sret_sz and sret_sz > 16
+                         else None)
+        if sret_sz is not None:
+            self._sret_post(sret_sz, sret_off)
 
     # -- staging + call tail: ONE mechanism for named AND indirect calls ----
 
+    def _sret_pre(self, sret_sz, ret_ty, n):
+        """M4 W-M (MC 12670) caller step 1: ONE `sizeof`-byte RESULT
+        slot on the frame — the address the MEMORY class (>16) stages
+        as a hidden FIRST argument inside _stage_call (it consumes
+        %rdi and shifts the callee's GP ladder by one — measured mem17:
+        args 1..5 ride rsi..r9, arg 6+ hit the stack early; the W-L
+        push block COUNTS the hidden slot, so the pad law holds)."""
+        return self._slot(ret_ty, n)
+
+    def _sret_post(self, sret_sz, off):
+        """M4 W-M caller step 2 (AFTER the call): the register classes
+        spill %rax(:rdx) INTO the temp — blcc's spill-to-slot form, the
+        named shape superset of gcc's register-form carry (W-L
+        precedent, value-equal, run-pair pinned); the MEMORY class was
+        written IN PLACE through the hidden pointer already. The call
+        expression answers with the result ADDRESS — the shipped W-H
+        source-address/block-copy law takes it from there."""
+        if sret_sz <= 16:
+            self._e("movq %rax, {}(%rbp)".format(off))
+            if sret_sz > 8:
+                self._e("movq %rdx, {}(%rbp)".format(off + 8))
+        self._e("leaq {}(%rbp), %rax".format(off))
+
     def _stage_call(self, args, want, decl_params, variadic, call_arm,
-                    target=None) -> None:
+                    target=None, hidden=None) -> None:
         """§2.14 caller sequence, the single home of: args → temps →
         rdi/rsi/rdx/rcx/r8/r9, the args-7+ stack block (M4 W-L: fixed
         arity AND variadic), `%al = 0` on a variadic call, and the `call`
@@ -654,6 +700,16 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
         # evaluated after another temp (e.g. `a*100 + f(...)`) is NOT based
         # at T1; the stack-push addressing below must honour the base.
         slot_base = self.fn.temp_top
+        # M4 W-M (MC 12670): the hidden struct-result pointer enters as
+        # the FIRST temp of THIS call (physical 8*(slot_base+1) — the
+        # push-source formula below counts it in its list position, the
+        # SAME law as an argument), consuming %rdi; the GP ladder shifts
+        # and the >6 block counts it toward K (pad law unchanged).
+        if hidden is not None:
+            self._e("leaq {}(%rbp), %rax".format(hidden))
+            ht = self._t()
+            self._e("movq %rax, {}".format(ht))
+            slots.append(ht)
         for idx, a in enumerate(args):
             if is_i128(self._decay(self._ty(a))):
                 self._i128_byval_guard(a, "as a call argument")
@@ -752,9 +808,21 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
         while isinstance(ce, ast.Unary) and ce.op == "*" \
                 and isinstance(self._ty(ce), ast.FuncType):
             ce = ce.operand
-        if isinstance(self._decay(ft.ret), ast.StructType):
-            self._err(n, "call to a 'struct'-returning function is 'struct "
-                      "assignment' (§5)", ft.ret.tag or "struct", "asm")
+        # M4 W-M (MC 12670): the indirect arm rides the SAME caller-temp
+        # mechanism (the TARGET law untouched — the target is evaluated
+        # into its pool temp before ANY staging, hidden slot included).
+        sret_sz = (self._size(self._decay(ft.ret), n)
+                   if isinstance(self._decay(ft.ret), ast.StructType)
+                   else None)
+        if sret_sz is not None and ft.variadic:
+            self._err(n, "a 'struct' returned by a variadic call is "
+                      "not in the subset (§2.14 LOUD-DIV twin)",
+                      "function pointer")
+        if sret_sz is not None and self._struct_has_fp(
+                self._decay(ft.ret)):
+            self._err(n, "an SSE-class 'struct' returned by value "
+                      "(float/double member) is not in the GP-only "
+                      "subset (§1 row 14)", ft.ret.tag or "struct")
         if ft.variadic:
             if len(n.args) < want:
                 self._err(n, "variadic 'function pointer' call passes {} "
@@ -780,6 +848,9 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
             # too — the ONE _stage_call block serves both (the gate's C1/
             # C2 target law untouched: the target is still evaluated into
             # its pool temp before any staging).
+        sret_off = self._sret_pre(sret_sz, self._decay(ft.ret), n) \
+            if sret_sz is not None else None
+        hidden = sret_off if sret_sz and sret_sz > 16 else None
         if ft.variadic:
             # §2 R5: the variadic target rides %r10 — the TARGET LAW in
             # _stage_call materializes it into a pool temp BEFORE the
@@ -787,10 +858,12 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
             # (a nested call in the args must not be able to rewrite
             # the callee — gate class C2).
             self._stage_call(n.args, want, ft.params, True, "*%r10",
-                             target=ce)
+                             target=ce, hidden=hidden)
         else:
             self._stage_call(n.args, want, ft.params, False, "*%rax",
-                             target=ce)
+                             target=ce, hidden=hidden)
+        if sret_sz is not None:
+            self._sret_post(sret_sz, sret_off)
 
     def _ex_cast(self, n) -> None:
         # M4 W-B (MC 12596): a Cast with a 128-bit side rides the pair law
@@ -1708,6 +1781,15 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
                 self._emit_addr(n.base)
             if off:
                 self._e("addq ${}, %rax".format(off))
+            return
+        if isinstance(n, ast.Call) and isinstance(
+                self._decay(self._ty(n)), ast.StructType):
+            # M4 W-M (MC 12670): a struct-by-value CALL IS addressable —
+            # at its caller temp. _sret_post left the RESULT ADDRESS in
+            # %rax; the shipped W-H source-address/block-copy law takes
+            # it from here (`t = f();` and `struct S t = f();` both
+            # copy from the temp; `f().m` adds the member offset).
+            self._emit_expr(n)
             return
         self._emit_expr(n)                             # rvalue: not addressable
         self._err(n, "not an addressable l-value (§4)", self._what(n))
