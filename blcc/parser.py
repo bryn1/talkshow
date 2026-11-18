@@ -1069,6 +1069,14 @@ class Parser(AsmParseMixin):
                     if not self.s.accept_punct(","):
                         break
                     continue
+                if nm == "fallthrough" and sink is not None:
+                    # M4 W-J (MC 12655): CAPTURE the marker for the
+                    # attribute-declaration law (the kernel `fallthrough;`
+                    # statement). Every OTHER sink owner filters by name
+                    # and DROPS it — where gcc says "ignored" rc0
+                    # (params/typedefs/decl heads) the drop is pair-clean;
+                    # only the attr+`;\` doors (_attr_decl_law) consult it.
+                    sink.append(("fallthrough", None))
                 if self.s.accept_punct("("):
                     depth = 1
                     while depth:
@@ -1081,6 +1089,29 @@ class Parser(AsmParseMixin):
                     break
             self.s.expect_punct(")")
             self.s.expect_punct(")")
+
+    def _attr_decl_law(self, sink, at_file, pos) -> None:
+        """M4 W-J (MC 12655): the GNU/C23 attribute-DECLARATION —
+        `__attribute__((...));` with NO declarator (the kernel
+        `fallthrough;` macro after pp). Measured law (gcc 11.4 gnu89
+        -Os, .tmp/m4-wj/probes/ out-gcc.txt): the form is an EMPTY
+        DECLARATION — `unused`/`aligned`/`section` runs rc0 in any
+        function position (ft_j/k/q, warning "empty declaration"); at
+        FILE SCOPE even a `fallthrough` run is rc0 (ft_i, "'fallthrough'
+        attribute at top level" warning); INSIDE a function body the
+        `fallthrough` attribute is SWITCH-GATED: gcc rc1 "invalid use of
+        attribute 'fallthrough'" unless an enclosing switch exists
+        (ft_h plain body, ft_o unbraced-if — the shipped switch_depth
+        counter answers BOTH, it spans nested compounds/loops exactly
+        like gcc's in_switch flag, ft_s/ft_t measured). The statement
+        emits NOTHING: blcc's switch already falls through; the attr is
+        a -Wimplicit-fallthrough marker and that flag is NOT in the
+        kernel recipe (the level-3 end-of-compound and not-preceding
+        warnings, ft_e/ft_t, are rc0 noise)."""
+        if not at_file and self.switch_depth == 0 and \
+                any(nm == "fallthrough" for nm, _a in sink):
+            self._sema(pos, "invalid use of attribute 'fallthrough'"
+                       " (§1 row 9, measured gcc rc1 twin)", "fallthrough")
 
     # -- types ------------------------------------------------------------------
 
@@ -1903,6 +1934,14 @@ class Parser(AsmParseMixin):
         # captured layout/placement class ACTS on the object or function.
         decl_sink: List[tuple] = []
         self._skip_gnu_attrs(decl_sink)
+        if self.s.at_punct(";"):
+            # M4 W-J (MC 12655): the GNU/C23 attribute-DECLARATION — the
+            # runs are consumed, the declarator list is EMPTY: a no-op.
+            # Blocks and file scope take this ONE door (statement
+            # position has its own arm applying the SAME law).
+            self._attr_decl_law(decl_sink, at_file, self.s.peek())
+            self.s.next()
+            return out
         is_static = False
         static_tok = self._accept("static")
         if static_tok is not None:
@@ -2644,6 +2683,26 @@ class Parser(AsmParseMixin):
                 self.s.expect_punct(";")
                 return ast.Return(t.file, t.line, t.col, value)
             if self.starts_decl():
+                # M4 W-J (MC 12655): the GNU/C23 attribute-DECLARATION in
+                # STATEMENT position — `case 1: r+=1; fallthrough;` (the
+                # signal.h:155 shape, 205+128 streams). Snapshot the
+                # cursor, probe the runs + ';'; on the attr+`;` shape
+                # apply the SAME _attr_decl_law and emit an empty
+                # statement (the shipped `;` no-op node — codegen already
+                # ignores it). A REAL declaration RESTORES the cursor and
+                # answers with the shipped wall VERBATIM (the W-H guard
+                # class; ft_r measured gcc rc1 for attr-before-stmt, so
+                # the same-verdict wall stays for the non-`;` shape).
+                if self._at_attr() or self._at_extension():
+                    saved = self.s.i
+                    stmt_sink: List[tuple] = []
+                    self._skip_gnu_attrs(stmt_sink)
+                    if self.s.at_punct(";"):
+                        self._attr_decl_law(stmt_sink, False, t)
+                        pos = self.s.next()
+                        return ast.ExprStmt(pos.file, pos.line, pos.col,
+                                            None)
+                    self.s.i = saved
                 self._parse_err(t, "'declaration' in an unbraced statement — use a '{ ... }' block")
         if t.kind == "id" and self.s.peek(1).kind == "punct" and \
                 self.s.peek(1).text == ":":
