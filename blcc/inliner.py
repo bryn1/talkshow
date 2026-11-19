@@ -16,11 +16,21 @@ nospec-branch.h:375 `"i" (param)` law; `alternative_msr_write`'s `[f]
 
 What it REPLACES (no parallel pipeline): (1) for a covered call site,
 the `_stage_call` register staging + `call sym` text; (2) for a
-static-inline whose sites are ALL spliced, the standalone `_emit_func`
-copy in the compile() loop — which also makes a ZERO-call-site static
-inline vanish (the discard the walk's first object, init/main.o with an
-uncalled `alternative_msr_write`, needs; gcc's own -Os posture — rows
-i03/i05: no symbol survives in its .s).
+static-inline whose sites are ALL spliced AND that HAS call sites, the
+standalone `_emit_func` copy in the compile() loop. MEASURED-TRUTH
+REPAIR (M4 W-Q MC 12712, gate MC 12708 F-1 — the earlier "zero-site =
+never emitted" wording was CONTRADICTED): `_inl_analyze` SKIPS
+site-less candidates (`if not sites.get(n) … continue`), so a
+ZERO-call-site static inline KEEPS its standalone copy in all three
+spellings (plain / `always_inline` / `gnu_inline` — nm pin
+test_wp1_zero_site_keeps_copy) where gcc -Os keeps none. Gate nm sizing
+over the 46 accepts: W-P removed 1120 dead copies (local-text 12453 →
+11333; gcc: 14) — 11319 rows REMAIN, all the untouched zero-site class;
+the real zero-site discard routes to the code-size family with F-8
+(plan AMENDMENT-18). The W-P walk advance never depended on the
+discard: init/main.o's uncalled barrier copy compiles because the
+callee splices INSIDE that still-emitted copy (rows i03/i05 state
+GCC's posture only — no symbol survives in GCC's .s).
 
 Universe guards — a MISS keeps today's call+copy posture untouched
 (including today's LOUD walls; never a silent rewrite):

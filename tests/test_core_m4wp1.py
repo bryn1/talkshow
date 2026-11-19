@@ -18,9 +18,13 @@ goto/label/asm-goto/static local/register-asm, scalar params,
 void/scalar return, not recursive/cyclic, not address-taken, not an
 alias target) is spliced AT the site by the existing statement emitter:
 params copy-in left-to-right with the §2.2 conversion (row i01:
-`f(i++, i)` = 8 both sides); the standalone copy is DISCARDED — which
-also makes a ZERO-call-site static inline vanish (gcc -Os posture,
-measured rows i03/i05/i08: no symbol survives in its .s). A param
+`f(i++, i)` = 8 both sides); the standalone copy of a candidate that
+HAS call sites and is fully spliced is DISCARDED. MEASURED-TRUTH
+REPAIR (M4 W-Q MC 12712, gate MC 12708 F-1): a ZERO-call-site static
+inline is NOT discarded — `_inl_analyze` skips site-less candidates and
+the copy survives in all three spellings (nm pin
+test_wp1_zero_site_keeps_copy; rows i03/i05/i08 measured GCC's -Os
+posture only: no symbol survives in GCC's .s). A param
 whose caller-arg folds to a constant answers the imm closure with the
 LITERAL (`.word 245`), guarded: body writes/addresses the param →
 slot-only → the S5/L4 refusal stands (named LOUD twin — row i15).
@@ -122,16 +126,52 @@ def test_wp1_nospec_witness():
                          re.M)
 
 
-def test_wp1_discard_zero_site():
-    """init/main.o law: the UNCALLED static inline never reaches .s
-    (gcc -Os discards it; blcc's discard is the walk-first-object
-    unlock — measured: init/main.c never calls the barrier)."""
+def test_wp1_discard_site_inside_uncalled_caller():
+    """MEASURED BEHAVIOR (renamed M4 W-Q MC 12712 from the misleading
+    `test_wp1_discard_zero_site`, gate MC 12708 F-1): the discarded
+    callee `alternative_msr_write` HAS a call site — inside the
+    uncalled barrier — is fully spliced there, and its standalone copy
+    is gone (gcc keeps neither symbol: the parity row below). The
+    ZERO-site barrier itself is NOT discarded (pin:
+    test_wp1_zero_site_keeps_copy); the walk's init/main.o never
+    needed a zero-site discard — its uncalled barrier copy compiles
+    because the callee splices INSIDE that copy."""
     g, b, gex, bex, btxt = _pair(
         "zero", NOSPEC + "\nint main(void){ return 3; }\n", want=3)
     assert b == 0
     assert "alternative_msr_write" not in btxt
+    assert re.search(r"^indirect_branch_prediction_barrier:", btxt,
+                     re.M), \
+        "measured truth: the ZERO-site caller keeps its copy"
     gtxt = open("/dev/shm/wp1_zero.g.s").read()
     assert "alternative_msr_write" not in gtxt     # parity row
+
+
+def test_wp1_zero_site_keeps_copy():
+    """MEASURED-TRUTH pin (M4 W-Q MC 12712, gate F-1 repair-forward):
+    a ZERO-call-site static inline keeps its standalone copy in ALL
+    THREE spellings — plain / `always_inline` / `gnu_inline` (nm at
+    tip: t f_plain/f_alw/f_gnu, .tmp/m4-wq/out/c0-claim-red.txt) where
+    gcc -Os keeps none. The 11319 extra copies the gate measured over
+    the 46 accepts are THIS class — code-size story, routed to the
+    F-8 family with the real zero-site discard (plan AMENDMENT-18);
+    W-Q ships NO discard behavior. If a future wave lands the real
+    discard, re-pin this leg to gcc parity HERE, not silently."""
+    src = ("static inline int f_plain(int a){ return a + 1; }\n"
+           "static inline __attribute__((__always_inline__)) int "
+           "f_alw(int a)\n{ return a + 2; }\n"
+           "static inline __attribute__((__gnu_inline__)) int f_gnu"
+           "(int a)\n{ return a + 3; }\n"
+           "int main(void){ return 3; }\n")
+    g, b, _gex, _bex, btxt = _pair("zskeep", src, want=3)
+    assert g == 0 and b == 0
+    gtxt = open("/dev/shm/wp1_zskeep.g.s").read()
+    for fn in ("f_plain", "f_alw", "f_gnu"):
+        assert re.search("^%s:" % fn, btxt, re.M), \
+            "zero-site copy vanished — real discard shipped? re-pin " \
+            "this law to gcc parity in the same commit"
+        assert not re.search("^%s:" % fn, gtxt, re.M), \
+            "oracle moved at -Os — re-measure before touching the law"
 
 
 def test_wp1_slot_param_load():
