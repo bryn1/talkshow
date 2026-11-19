@@ -36,6 +36,15 @@ class AsmSubMixin:
         for v in (getattr(node, "folded", None),):
             if v is not None:
                 return v
+        if self._inl_imm and isinstance(e, ast.Ident):
+            # M4 W-P (MC 12705): a spliced-body param whose caller arg
+            # folded — the imm answer the ARGUMENT gives at the call
+            # (gcc's post-inline literal; row i03: `.word 245`). The
+            # closure itself is UNTOUCHED: only this IDENT resolution
+            # gained a source.
+            v = self._inl_imm.get(e.name)
+            if v is not None:
+                return v
         sym = self._asm_sym(e)
         if sym is not None:
             return sym

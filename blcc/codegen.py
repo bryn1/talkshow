@@ -22,6 +22,7 @@ from blcc import ast
 from blcc.data import DataEmitter
 from blcc.expr_codegen import REG_ARGS, ExprEmitter, _fp
 from blcc.i128 import mem8   # W-B: hi-limb address form (i128.py law)
+from blcc.inliner import InlinerMixin   # M4 W-P (MC 12705): THE inline pass
 from blcc.types import TypeMap, _roundup8, is_i128, is_unsigned, stmt_children
 from blcc.asmgen import AsmGenMixin
 from blcc import predef
@@ -79,7 +80,7 @@ def _stmtexprs_in_expr(s):
     return out
 
 
-class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin):
+class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin, InlinerMixin):
     def __init__(self, tu: ast.TranslationUnit):
         self.tu = tu
         self.funcs: Dict[str, ast.FuncDecl] = {}
@@ -110,6 +111,9 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin):
         self.loops: List[Tuple[str, Optional[str]]] = []
         self._case_lbl: Dict[int, str] = {}
         self._collect()
+        # M4 W-P (MC 12705, AM17): the inline call-graph, AFTER collection
+        # (it needs the full TU view: candidates, sites, cycles, addr-taken).
+        self._inl_init()
 
     # -- collection pass -------------------------------------------------------
 
@@ -368,6 +372,11 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin):
         # mentions after; functions carry "ax",@progbits).
         self._sec_seen: set = set()
         for name in self.funcs:
+            if name in self._inl_discard:
+                # M4 W-P (MC 12705): fully-spliced static inline — the
+                # standalone `_emit_func` copy is REPLACED (gcc -Os rows
+                # i03/i05/i08: no symbol survives in its .s).
+                continue
             fd = self.funcs[name]
             lines = self._emit_func(fd)
             if fd.inline_kind == "extern-inline":
@@ -663,6 +672,13 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin):
             self._stmt_seq(n.body)
             self.fn.locals = saved
         elif isinstance(n, ast.ExprStmt):
+            if (isinstance(n.expr, ast.Call)
+                    and isinstance(n.expr.callee, ast.Ident)
+                    and n.expr.callee.name in self._inl_map):
+                # M4 W-P (MC 12705): the covered call site — body spliced
+                # here by the SAME emitter; `_stage_call`+call is REPLACED.
+                self._splice_call(n.expr)
+                return
             if isinstance(n.expr, ast.StmtExpr) and n.expr.value is None:
                 # §2.4(c): a void `({…;})` is legal in STATEMENT position.
                 self._se_run(n.expr, False)
