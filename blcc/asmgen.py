@@ -288,6 +288,12 @@ class AsmGenMixin(AsmSubMixin):
         if ci.cls in ("m", "p"):
             o.form = "mem"
             o.mem = self._asm_static(o.expr)   # None → computed base reg
+            if ci.cls == "p" and o.mem is not None \
+                    and not self._asm_p_text_ok(o.expr):
+                # M4 W-O (MC 12690): 'p' carries the VALUE; a pointer
+                # scalar's value is RUNTIME (the slot text is &pp, not
+                # pp) — computed base reg, printing `%reg` (P5c law).
+                o.mem = None
             return o
         o.form = "reg"                   # fixed / r / q / e
         if ci.cls == "fixed":

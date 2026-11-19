@@ -306,6 +306,27 @@ class AsmSubMixin:
             return "{}(%rbp)".format(val + off)
         return "{}{}(%rip)".format(val, _plus(off))
 
+    def _asm_p_text_ok(self, e) -> bool:
+        """May a `'p'` operand's VALUE be printed as a STATIC text at all?
+        'p' takes the VALUE of the expression; that value is printable
+        only where it IS a static address — an `&object` expression or a
+        DECAYED ARRAY (slot and object coincide, the W-N `p`-text legs).
+        A bare POINTER variable answers a RUNTIME value: the slot's text
+        is the pointer's OWN address (`&pp`), and answering it for `pp`
+        is the F-N-1 slot/value confusion under `'p'` — measured gcc
+        P5c at REC: the value rides a reg and `%P` prints the bare
+        `%rdi` (MC 12690). Everything else takes the computed route."""
+        node = e
+        while isinstance(node, ast.Cast):
+            node = node.operand
+        if isinstance(node, ast.Unary) and node.op == "&":
+            return True
+        try:
+            ty = self._untype(self._ty(node))
+        except DiagError:
+            return False
+        return isinstance(ty, ast.ArrayType)
+
     def _asm_static_value(self, e) -> Optional[str]:
         """A plain-scalar ident's VALUE already lives in its slot → return
         that memory text (binds are handled by the §3.10 law)."""
@@ -530,10 +551,31 @@ class AsmSubMixin:
                 # text). Guarded by gcc's OWN refusals: a `"p"` operand
                 # whose text is a FRAME address (gcc rc1 'invalid
                 # expression as operand' — a runtime address is not a
-                # constant) and any COMPUTED operand (no text exists;
-                # the named honest wall for computed "m", volume 0).
-                if o.mem is not None and \
-                        not (o.ci.cls == "p" and "%rbp" in o.mem):
+                # constant).
+                if o.mem is None:
+                    # M4 W-O MATERIALIZATION (MC 12690, gate-confirmed
+                    # walk wall special_insns.h:217): a COMPUTED operand
+                    # answers the same plain text from its base register
+                    # (stage (4) moved the aslot address into %o.reg
+                    # before the template). Measured at REC, 12 shapes
+                    # (.tmp/m4-wo/out/measure-pct-computed.txt): the
+                    # computed MEMORY operand's text is the parenthesized
+                    # base reg — `clflush (%rdi)`; the computed `'p'`
+                    # operand CARRIES the value in its base reg and
+                    # prints the bare name — `movq %rdi, %rdx` (P5c; the
+                    # tip's "computed = unprintable rc1" reading was
+                    # measured FALSE — rc1 is the FRAME-under-'p'
+                    # posture, which stays LOUD below, P12 re-confirmed
+                    # at REC). Same L3 equivalence law as the static
+                    # texts: gcc folds disp(base,index,scale) into the
+                    # text, blcc's computed route carries the FULL
+                    # address in the base reg — value-paired, the
+                    # `(%reg)` text already pinned by the plain path
+                    # (line 548), never a new printer.
+                    if o.ci.cls == "p":
+                        return "%{}".format(o.reg)
+                    return "(%{})".format(o.reg)
+                if not (o.ci.cls == "p" and "%rbp" in o.mem):
                     return o.mem
                 self._err(n, "'%P' needs a CONSTANT address operand — no"
                           " address text here (gcc law MC 12687: frame/"
@@ -545,6 +587,16 @@ class AsmSubMixin:
                           .format(mod), "%{}".format(mod), "asm")
             if o.mem is not None:
                 return o.mem
+            # M4 W-O (MC 12690): the SAME measured value law as `%P` —
+            # a computed `'p'` operand CARRIES its value in the base
+            # reg (plain `%N` prints the bare reg; `(reg)` would LOAD
+            # through it — a silent value split, measured gcc exit 1
+            # vs blcc 0 on `movq %1, %0`/"p"(pp) before this arm); a
+            # computed `"m"` operand's text is the parenthesized base
+            # reg (the pre-existing plain path, byte-equal to gcc for
+            # the `(%reg)` shapes).
+            if o.ci.cls == "p":
+                return "%{}".format(o.reg)
             return "(%{})".format(o.reg)
         if o.form == "imm":
             if mod in ("b", "w", "q", "h", "k"):

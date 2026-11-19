@@ -230,19 +230,25 @@ def test_wn1_P_on_p_local_loud(tmp_path):
     assert b.returncode != 0, "%%P on a frame address must stay LOUD"
 
 
-def test_wn1_P_on_m_computed_honest_wall(tmp_path):
-    # NAMED honest wall: `%P` on a COMPUTED "m" (`gs[i]`): gcc emits the
-    # computed text `gs(,%rdi,4)` (rc0); blcc's model materializes the
-    # address into a register and REFUSES the text — LOUD, named (corpus
-    # volume 0: the 316-stream wall is the `p`-symbol spelling).
+def test_wn1_P_on_m_computed_FLIPPED_by_WO(tmp_path):
+    # W-N NAMED honest wall — FLIPPED to a law pin by M4 W-O (MC 12690),
+    # the wave this wall was deferred to: `%P` on a computed "m" now
+    # MATERIALIZES the base-reg text `(%reg)` (gcc folds `gs(,%rdi,4)`
+    # into its text — the pinned L3 EQUIVALENCE, values pair; witness
+    # legs + the 12-shape table in tests/test_core_m4wo1.py). W-L
+    # convention honored: renamed and re-asserted, never deleted.
+    import re
     src = (PRE + TPL.format("%P1", '"m"(gs[i])')).replace(
         "long f(void)", "long f(long i)")
     s = tmp_path / "wn1mc.c"
     s.write_text(src)
     g = gcc(REC + ["-S", str(s), "-o", "/dev/null"])
     assert g.returncode == 0, "gcc emits computed text (measured)"
-    b = blcc(["-c", str(s), "-o", str(tmp_path / "wn1mc.o")])
-    assert b.returncode != 0
+    o = tmp_path / "wn1mc.o"
+    b = blcc(["-c", str(s), "--emit-asm", "-o", str(o)])
+    assert b.returncode == 0, b.stderr
+    a = open(str(o) + ".s").read()
+    assert re.search(r"\(%r[a-z0-9]+\)", a), a
 
 
 def test_wn1_Pq_doubled_loud(tmp_path):
