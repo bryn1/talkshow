@@ -1125,10 +1125,22 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin):
                     raise _SwitchFallback()
 
     def _arm_terminates(self, node) -> bool:
-        """Does this case arm's statement provably NOT fall through?
+        """Does the TAIL of this case arm provably NOT fall through?
         break/return/goto yes; a Compound yes when its LAST statement
         does; anything else (fall-through expressions, if-without-else,
-        loops, ...) is undetermined -> False (keep the cascade)."""
+        loops, ...) is undetermined -> False (keep the cascade).
+
+        M4 W-P (MC 12705, gate F-5) THE TAIL-WALK LAW: the caller passes
+        the arm's LAST executed statement, found by walking the arm
+        region in execution order — the `case X: body; break;` UNBRACED
+        shape hangs the `break` as a SIBLING of the Case node (the
+        parser wraps only the first statement), so reading only
+        `Case.stmt` missed a terminating tail and the W-O dispatch kept
+        the LATER dead arms (gate: reverse-order cmpxchg as-died where
+        gcc folds — probe f5_a: tip `'%edx' not allowed with
+        cmpxchgb'` rc3 vs gcc rc0). _switch_const feeds this predicate
+        the region's last visited statement; the predicate itself and
+        its conservative undetermined side are UNCHANGED."""
         if node is None:
             return False
         if isinstance(node, (ast.Break, ast.Return, ast.Goto)):
@@ -1161,15 +1173,24 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin):
         Earlier arms are skipped LABEL AND BODY; their texts never
         reach `as`, exactly as in gcc's folded .s. Case labels exist
         already — _collect_cases ran before this dispatch."""
-        # A matched arm whose tail TERMINATES (break/return/goto) makes
+        # A matched arm whose TAIL TERMINATES (break/return/goto) makes
         # every LATER arm unreachable — gcc's folded switch prints ONLY
         # the matching arm then (measured, probe sw1 at REC — even at
         # -O0). A fall-through match keeps the cascade (C semantics;
         # the cascade leg pairs it). Undetermined tails (if-without-
         # else, loops) keep the cascade: conservative, never silent.
-        emit_later = True
-        if sel is not None:
-            emit_later = not self._arm_terminates(marks[sel][1].stmt)
+        # M4 W-P (MC 12705, gate F-5): the TAIL is the arm REGION's last
+        # executed statement, not just `Case.stmt` — the UNBRACED
+        # `case X: body; break;` shape hangs the break beside the Case
+        # node, and the W-O single-statement read kept the later dead
+        # arms (f5_a as-death where gcc folds). The decision is DEFERRED
+        # to the first marker after the match (or walk end): every
+        # statement the walk visits in the region updates the tail, in
+        # execution order (nested compounds recurse before their outer
+        # siblings — visit order IS fall-through order).
+        emit_later = [True]                # None = decision pending
+        tail = [None]
+        past = [False]
         mi = [0]
         jmped = [False]
 
@@ -1185,15 +1206,25 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin):
                         self._e("jmp {}".format(tgt))
                     if sel is None or i < sel:
                         continue           # dead arm: label AND body
-                    if i > sel and not emit_later:
-                        continue           # unreachable past a
-                        # terminating match (gcc's folded .s prints
-                        # the match ONLY)
+                    if i == sel:
+                        past[0] = True
+                        emit_later[0] = None   # the tail walk decides
+                    elif emit_later[0] is None:
+                        emit_later[0] = not self._arm_terminates(
+                            tail[0])
+                        if not emit_later[0]:
+                            continue       # unreachable past a
+                            # terminating match (gcc's folded .s prints
+                            # the match ONLY)
+                    elif not emit_later[0]:
+                        continue           # decided: later arms stay dead
                     self.fn.lines.append(
                         "{}:".format(self._case_lbl[id(s)]))
                     if s.stmt is not None:
                         walk([s.stmt])
                     continue
+                if past[0] and emit_later[0] is None:
+                    tail[0] = s            # region tail, execution order
                 if isinstance(s, ast.Compound):
                     saved = dict(self.fn.locals)
                     walk(s.body)

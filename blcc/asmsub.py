@@ -439,7 +439,16 @@ class AsmSubMixin:
         except DiagError:
             return None
         if isinstance(ty, ast.ArrayType):
-            return self._decay(ty.inner)
+            # M4 W-P (MC 12705, gate F-1): the element is the UNDECAYED
+            # inner object. A row of a 2-D array IS a row-sized object
+            # (`int mm[2][3]`: the row step is sizeof(int[3]) = 12);
+            # decaying to the row pointer gave esz 8 — `mm[1][2]` folded
+            # to mm+16 (row 1 landed at byte 12*1 + 2*4 = 20, gcc
+            # measured). W-O's decay at THIS tail was right for scalars
+            # (decay of a scalar is identity) and wrong for array
+            # elements; the walk's array/pointer gate at the top of this
+            # function is the W-O F-N-1 law and stays.
+            return ty.inner
         return None
 
     # ---------------------------------------------------- substitution --
