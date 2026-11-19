@@ -104,6 +104,16 @@ class Param:
 # --------------------------------------------------------------------------
 
 @dataclass(frozen=True)
+class TopAsm(Node):
+    """M4 W-N COMMIT-3 (MC 12687): a file-scope `asm("…")` block — the
+    merged string literal text, emitted VERBATIM inside #APP/#NO_APP
+    (measured gcc law; operands/volatile are rc1 and never reach this
+    node)."""
+
+    text: str
+
+
+@dataclass(frozen=True)
 class TranslationUnit(Node):
     decls: Tuple[Node, ...]
 

@@ -404,6 +404,19 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin):
             if not is_static:
                 out.append("    .globl {}".format(name))
             out.append("    .set {},{}".format(name, tgt))
+        # M4 W-N COMMIT-3 (MC 12687): file-scope asm blocks — VERBATIM
+        # text inside #APP/#NO_APP, declaration order, after the
+        # function blocks and before the data sections. NAMED placement
+        # divergence (gcc interleaves at source position in its
+        # functions/data mix); the #APP BODY BYTES are byte-parity law
+        # and the kernel families here (.weak/.set/.section directives)
+        # are section-order-independent — pinned by the alias run-pair.
+        for d in self.tu.decls:
+            if isinstance(d, ast.TopAsm):
+                out.append("#APP")
+                for ln in d.text.split("\n"):
+                    out.append("\t" + ln.lstrip())
+                out.append("#NO_APP")
         out.append("    .section .rodata")
         for lab, raw in self._str_order:
             out.append("{}:".format(lab))

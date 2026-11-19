@@ -2945,6 +2945,38 @@ class Parser(AsmParseMixin, CompatLawMixin):
         while self.s.peek().kind != "eof":
             if self.s.accept_punct(";"):
                 continue
+            if self.s.peek().kind in ("id", "kw") and \
+                    self.s.peek().text in ("asm", "__asm__"):
+                # M4 W-N COMMIT-3 (MC 12687): file-scope asm(...) — the
+                # alias/annotation family the kernel TUs ship wholesale
+                # (the sys_ni compat_sys_* `.weak`/`.set` blocks).
+                # MEASURED gcc gnu89 law: ONE (lexically merged) string
+                # literal argument; the text is the ASSEMBLER's — blcc
+                # never parses it. `volatile` and operand COLONS are
+                # gcc rc1 (measured) — the refusal below is the twin;
+                # a non-literal argument refuses through the same arm.
+                pos = self.s.next()
+                if self.s.peek().text in ("volatile", "__volatile__"):
+                    self._parse_err(self.s.peek(), "file-scope asm "
+                                    "cannot be 'volatile' (gcc rc1 law, "
+                                    "MC 12687)")
+                self.s.expect_punct("(")
+                parts = []
+                while True:
+                    t = self.s.peek()
+                    if t.kind != "str":
+                        self._parse_err(
+                            t, "file-scope asm takes exactly string "
+                            "literals — operands/expressions are gcc "
+                            "rc1 here (MC 12687)")
+                    parts.append(self.s.next().value)
+                    if self.s.accept_punct(",") is None:
+                        break
+                self.s.expect_punct(")")
+                self.s.expect_punct(";")
+                decls.append(ast.TopAsm(pos.file, pos.line, pos.col,
+                                        "".join(parts)))
+                continue
             if self.starts_decl():
                 decls.extend(self.parse_decl(at_file=True))
             else:
