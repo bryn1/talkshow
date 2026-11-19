@@ -115,12 +115,21 @@ def test_gnu89_bare_inline_is_global():
 
 
 def test_static_inline_local_and_run_pair():
+    # W-R (MC 12714) RETARGETED (NAMED flip): a value-site `static
+    # inline` call is now SPLICED and the copy discarded — the §2.8
+    # visibility law (static inline ⇒ LOCAL t, never T) is pinned here
+    # on a copy that STILL STANDS: `h` is address-taken, so it stays a
+    # candidate-refusing real symbol. The vanished-copy posture is
+    # pinned in tests/test_core_m4wr1.py (w01: no `^f:` after splices)
+    # and test_wp1_multi_site_value (FLIPPED pin).
     src = ("static inline int h(void) { return 2; }\n"
-           "int main(void) { return h() + 1; }\n")
+           "static int (*const hp)(void) = h;\n"
+           "int main(void) { return hp ? h() + 1 : 0; }\n")
     p, syms = blcc_bin(src, "inl-static")
     # blcc has NO DCE: `h` IS emitted — as a LOCAL symbol, never global.
     assert re.search(r"\bt h\b", syms), \
         "static inline ⇒ local t (§2.8): " + syms
+    assert not re.search(r"\bT h\b", syms), "never global: " + syms
     assert not re.search(r"\bT h\b", syms), syms
     os.remove(p)
     both_run(src, "inl-static-run")

@@ -394,6 +394,18 @@ class TypeMap(CompatLawMixin):
             return n.value - 256 if n.value > 127 else n.value
         if isinstance(n, ast.Ident) and n.name in self.enums:
             return self.enums[n.name]
+        if isinstance(n, ast.Ident) and getattr(self, "_inl_imm", None):
+            # M4 W-R row i16 (MC 12714): a spliced-body param bound to
+            # its caller arg's literal answers the SAME fold engine
+            # THROUGH composed operand expressions — the cpufeature
+            # `[bitnum] "i" (1 << (bit & 7))` folds at the site. The
+            # map is only ever ACTIVE during a splice (the guard law at
+            # `_splice_call` owns it); inert everywhere else. A symbol
+            # closure (tuple) is NOT an int fold — the Ident stays on
+            # the `_asm_fold` route that answers symbol texts.
+            v = self._inl_imm.get(n.name)
+            if isinstance(v, int):
+                return v
         if isinstance(n, ast.Unary) and n.op == "~":
             v = self._fold_const(n.operand, at)
             oty = self._fold_ty(n.operand, at)

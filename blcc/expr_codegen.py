@@ -477,6 +477,19 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
             self._ex_call_ind(n)
             return
         name = n.callee.name
+        fd_inl = self._inl_map.get(name)
+        if fd_inl is not None:
+            # M4 W-R (MC 12714): THE VALUE SEAM of the same inline pass —
+            # the body splices HERE, the epilogue pattern leaves the value
+            # in %rax at statement boundaries (§2.4, the house law the
+            # real call already rode). Params copy-in left-to-right — the
+            # ORDER-UNDEFINED twin values STAND (row i15: blcc 21, gcc 12
+            # unchanged). A void return used as a value falls through:
+            # the existing void-value law answers, never silent here.
+            rt = self._decay(self._untype(fd_inl.ret_type))
+            if not (isinstance(rt, ast.BuiltinType) and rt.name == "void"):
+                self._splice_call(n)
+                return
         if (name not in self.sigs and name not in BUILTINS
                 and name not in predef.MEM_FOLDS
                 and name not in predef.MEM_PLAIN

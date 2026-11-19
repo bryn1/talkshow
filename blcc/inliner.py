@@ -1,60 +1,62 @@
-"""M4 W-P (MC 12705, plan AMENDMENT-17): THE inline pass.
+"""M4 W-P (MC 12705, plan AMENDMENT-17): THE inline pass. W-R (MC
+12714, plan AMENDMENT-19) extends THE SAME seam — no second pipeline.
 
-ONE mechanism at the existing statement seam. For a file-scope
-`static inline` function (gnu89 header-helper shape, with or without
-`__always_inline` — measured rows i05/i08: gcc -Os inlines AND discards
-BOTH spellings) whose every call site sits in STATEMENT position and
-whose body is inside the splice universe, the call is REPLACED by the
-body: params copy-in to fresh caller-frame slots in left-to-right order
-with the §2.2 conversion law (row i01: `f(i++, i)` measures 8 both
-sides — the call-by-value copy, once per param), the body rides the SAME
-statement emitter (`_stmt` — the pipeline is not forked), and a param
-whose argument folds to a constant answers the imm-closure fold with
-that literal (row i03: gcc answers `.word` with 245 post-inline — the
-nospec-branch.h:375 `"i" (param)` law; `alternative_msr_write`'s `[f]
-"i"(feature)` folds to $245 at the copy).
+ONE mechanism at the existing seam. For a file-scope `static inline`
+(gnu89 header-helper, with or without `__always_inline` — rows i05/i08:
+gcc -Os inlines AND discards BOTH spellings) whose every call site is
+covered — statement seam (W-P) AND, since W-R, value seam too (the
+epilogue answers %rax; the §2.2 copy-in law UNCHANGED: blcc stays
+left-to-right, the ORDER-UNDEFINED twin values stand) — and whose body
+is in the splice universe, the call is REPLACED by the body: params
+copy-in to fresh caller-frame slots left-to-right with the §2.2
+conversion law (row i01: `f(i++, i)` measures 8 both sides — one
+call-by-value copy per param), the body rides the SAME statement
+emitter (`_stmt` — the pipeline is not forked), and a param whose
+argument folds to a constant answers the imm-closure fold with that
+literal (row i03: gcc answers `.word` 245 post-inline — the
+nospec-branch.h:375 `"i" (param)` law; W-R row i16: the SAME engine
+answers the literal THROUGH composed operands — cpufeature `[bitnum]
+"i" (1 << (bit & 7))` folds 16 at a bit=4 site — and W-R TRANSITIVELY
+through nested splices, own table w02).
 
-What it REPLACES (no parallel pipeline): (1) for a covered call site,
-the `_stage_call` register staging + `call sym` text; (2) for a
-static-inline whose sites are ALL spliced AND that HAS call sites, the
-standalone `_emit_func` copy in the compile() loop. MEASURED-TRUTH
-REPAIR (M4 W-Q MC 12712, gate MC 12708 F-1 — the earlier "zero-site =
-never emitted" wording was CONTRADICTED): `_inl_analyze` SKIPS
-site-less candidates (`if not sites.get(n) … continue`), so a
-ZERO-call-site static inline KEEPS its standalone copy in all three
-spellings (plain / `always_inline` / `gnu_inline` — nm pin
-test_wp1_zero_site_keeps_copy) where gcc -Os keeps none. Gate nm sizing
-over the 46 accepts: W-P removed 1120 dead copies (local-text 12453 →
-11333; gcc: 14) — 11319 rows REMAIN, all the untouched zero-site class;
-the real zero-site discard routes to the code-size family with F-8
-(plan AMENDMENT-18). The W-P walk advance never depended on the
-discard: init/main.o's uncalled barrier copy compiles because the
-callee splices INSIDE that still-emitted copy (rows i03/i05 state
-GCC's posture only — no symbol survives in GCC's .s).
+What it REPLACES: (1) at a covered site, the `_stage_call` staging +
+`call sym` text; (2) for a static-inline whose sites are ALL spliced
+AND that HAS sites, the standalone `_emit_func` copy. MEASURED-TRUTH
+REPAIR (W-Q MC 12712, gate MC 12708 F-1 — the earlier "zero-site =
+never emitted" wording was CONTRADICTED): a ZERO-call-site static
+inline KEEPS its copy in all three spellings (nm pin
+test_wp1_zero_site_keeps_copy) where gcc -Os keeps none — W-R's honest
+accepts 50→50 with the cpufeature first-wall 483→14 proves the law
+stream-by-stream (the 14 remnant are ALL zero-site; the SIM's 54 was
+the copy-DISCARD instrument deleting even those). Gate nm sizing:
+W-P removed 1120 dead copies (local-text 12453→11333; gcc: 14); the
+zero-site discard routes to the code-size family (AMENDMENT-18 F-8).
 
 Universe guards — a MISS keeps today's call+copy posture untouched
 (including today's LOUD walls; never a silent rewrite):
-  * scalar/pointer params, void-or-scalar return (the sret door and the
-    fp classes stay the CALL law; `self._sret` is masked during a splice
-    so a spliced `return` can never write the CALLER's hidden pointer);
-  * no `goto`, no label decls/refs, no `asm goto` operands, no static
-    locals, no `register … asm` binds, no `__label__`;
-  * not recursive, no call cycle (recursion stays today's twin — row
-    i06: gcc answers 24 without a copy, blcc keeps the copy and the
-    VALUE pairs);
-  * not address-taken anywhere (fn-pointer use keeps the real symbol);
-  * not an alias target (the §6 `.set` must have its body);
-  * per-param: the imm-map applies only when the body neither writes the
-    param (assignment, ++/--, nor an asm operand naming it) nor takes
-    its address — slot and literal must not be able to diverge. A
-    param without the map is slot-only: `"i"(param)` under a
-    NON-constant arg keeps the S5/L4 refusal, one frame earlier (named
-    LOUD twin; the closure itself is UNTOUCHED).
+  * scalar/pointer params, void-or-scalar return (sret door and fp
+    classes stay the CALL law; `self._sret` masked during a splice);
+  * no C `goto`, no `__label__`, no static locals, no `register … asm`
+    binds. W-R: an `asm goto` whose targets are C labels defined FLAT
+    at the body top (the cpufeature.h:187 `_static_cpu_has` shape) is
+    IN — each splice emits a PER-SITE clone with FRESH minted labels
+    (w01: shared `t_yes` merges the arms; w11: caller-same-named
+    labels must not collide). `asm goto` WITH outputs (w05: gcc value
+    DIVERGE — refused, named), a plain C `goto` (w03), a label no
+    asm-goto targets, and any label below top level stay the CALL law;
+  * not recursive / no call cycle (row i06 twin: values pair, copy
+    kept);
+  * not address-taken; not an alias target (§6 `.set` needs its body);
+  * per-param: the imm-map applies only when the body neither writes
+    the param nor takes its address — slot and literal must not
+    diverge. A slot-only param keeps the S5/L4 refusal at
+    `"i"(param)`-under-runtime (named LOUD twin; closure UNTOUCHED).
 """
 import dataclasses
 
 from blcc import ast
 from blcc.expr_codegen import _fp
+from blcc.inlclone import inl_clone
 from blcc.types import stmt_children, is_i128
 
 _NOT_SCALAR = (ast.StructType, ast.ArrayType)
@@ -68,6 +70,7 @@ class InlinerMixin:
         self._inl_discard = set()   # names whose standalone copy is gone
         self._inl_imm_off = {}      # fd name -> slot-only param names
         self._inl_imm = {}          # ACTIVE imm map during a splice body
+        self._inl_goto = {}         # fd name -> asm-goto body-label names
         self._inl_analyze()
 
     # ---------------------------------------------------------- analysis --
@@ -81,8 +84,7 @@ class InlinerMixin:
             why = self._inl_universe(fd)
             if why:
                 del cands[n]
-        # call cycles: a candidate reachable from itself (direct or
-        # mutual) stays the CALL law (recursion LOUD twin).
+        # call cycles (direct or mutual) stay the CALL law.
         calls = {n: self._inl_calls(fd.body) for n, fd in cands.items()}
         for n in list(cands):
             seen, stack, cyc = set(), list(calls.get(n, ())), False
@@ -111,10 +113,13 @@ class InlinerMixin:
         for n, fd in cands.items():
             if n in alias_tgt or n in taken:
                 continue
-            if not sites.get(n) or any(not p for p in sites[n]):
-                continue
+            if not sites.get(n):
+                continue                       # W-R: VALUE sites cover too
             self._inl_map[n] = fd
             self._inl_discard.add(n)
+            gl = _inl_goto_names(fd.body)
+            if gl:
+                self._inl_goto[n] = gl
 
     def _inl_universe(self, fd):
         """Reason the fd CANNOT be spliced, or None. Records per-param
@@ -136,8 +141,15 @@ class InlinerMixin:
                 return "static/register-asm local"
             if isinstance(s, ast.LabelDecl):
                 return "__label__"
+            if isinstance(s, ast.Goto):
+                return "C goto in the body stays the CALL law"  # w03
             if isinstance(s, ast.AsmStmt) and (s.goto_ or s.labels):
-                return "asm goto"
+                # W-R: asm-goto enters under the label law below;
+                # outputs+goto is the measured gcc w05 value-DIVERGE.
+                if s.outs:
+                    return "asm goto with outputs stays the CALL law"
+                if not s.goto_:
+                    return "asm label section without goto"
             if isinstance(s, ast.Return) and s.value is not None and is_void:
                 return "value return in void fn"
             if isinstance(s, ast.AsmStmt):
@@ -155,6 +167,25 @@ class InlinerMixin:
                         e = e.operand
                     if isinstance(e, ast.Ident) and e.name in pnames:
                         slot_only.add(e.name)
+        labels = {s.name for s in _stmts_of(fd.body)
+                  if isinstance(s, ast.Label)}
+        gnames = _inl_goto_names(fd.body)
+        if gnames:
+            # W-R label law (cpufeature.h:187 shape): targets sit
+            # FLAT at the body top, no other label anywhere (below-
+            # top = `({...})` groups stay CALL law; §2.5 not re-lit).
+            if any(isinstance(s, ast.StmtExpr) for s in _stmts_of(fd.body)):
+                return "asm-goto body with a statement-expression"
+            top = {s.name for s in fd.body.body
+                   if isinstance(s, ast.Label)}
+            if labels != top:
+                return "asm-goto label below the body top"
+            if not labels >= gnames:
+                return "asm-goto target label never defined"
+            if labels - gnames:
+                return "plain label w/o asm-goto stays the CALL law"
+        elif labels:
+            return "labels without asm-goto stay the CALL law"
         for e in _exprs_of(fd.body):
             nm = _writes_ident(e)
             if nm is not None:
@@ -183,6 +214,9 @@ class InlinerMixin:
         return names - callees
 
     def _inl_sites(self, body, sites):
+        # W-R: coverage is positional-INDEPENDENT (statement seam AND
+        # value seam); the True/False split of the W-P all-statement law
+        # is gone — every Ident call site counts.
         pos = set()
         for s in _stmts_of(body):
             if isinstance(s, ast.ExprStmt) and \
@@ -208,7 +242,8 @@ class InlinerMixin:
         self._fn_ret = fd.ret_type
         self._sret = None
         self.loops = []                  # stray break/continue LOUD law
-        self._inl_imm = {}
+        outer = self._inl_imm
+        imm = {}
         for p, a in zip(fd.params, call.args):
             self._emit_expr(a)
             self._convert(p.type, a)     # §2.2 conversion, the call law
@@ -216,16 +251,41 @@ class InlinerMixin:
             self._e("movq %rax, {}(%rbp)".format(off))
             self.fn.locals[p.name] = (off, self._decay(
                 self._untype(p.type)))
+            # W-R TRANSITIVE SITE LAW (own table w02): an argument
+            # folds THROUGH the map of the splice we are nested in
+            # (`h(0)` maps bit=0; its body's `g(8 + bit)` site folds
+            # 8; that body's `f(bit)` answers 8) — the chain gcc -Os
+            # propagation walks. A RUNTIME Ident folds to None from
+            # the engine (the slot-only S5/L4 twin stands); the old
+            # blanket Ident-ban only blocked this sound chain.
             v = self._asm_const(a)
-            if isinstance(a, ast.Ident):
-                v = None                 # no map for a passed Ident
             if v is not None and p.name not in \
                     self._inl_imm_off.get(fd.name, ()):
-                self._inl_imm[p.name] = v
-        self._stmt(fd.body)              # the ONE statement emitter
+                imm[p.name] = v
+        self._inl_imm = imm
+        self._stmt(self._inl_site_body(fd))   # the ONE statement emitter
         self.fn.lines.append("{}:".format(self.fn.epilogue))
         (self.fn.locals, self._fn_ret, self._sret, self.fn.epilogue,
          self.loops, self._inl_imm) = saved
+
+    def _inl_site_body(self, fd):
+        """THE per-site splice body. An asm-goto candidate gets a CLONE
+        whose body labels carry FRESH minted names — the measured gcc
+        law of per-copy label scoping (own table w01/w11: shared `t_yes`
+        merges the arms; a caller's own same-named label must not
+        collide). The minted names ride fn_labels as identity entries
+        (flat depth 0, §2.5); the clone rewrites Label stmt, asm-goto
+        label list AND `%l[old]` escapes TOGETHER (a partial rename is
+        the plant-1 class). Other candidates splice the shared body
+        untouched (W-P posture, byte-for-byte)."""
+        names = self._inl_goto.get(fd.name)
+        if not names:
+            return fd.body
+        fresh = {}
+        for nm in sorted(names):
+            fresh[nm] = self._label("inl_" + nm)
+            self.fn_labels[fresh[nm]] = fresh[nm]
+        return inl_clone(fd.body, fresh)
 
 
 # --------------------------------------------------------------- walkers --
@@ -242,9 +302,8 @@ def _stmts_of(body):
 
 
 def _is_expr(x):
-    """An EXPRESSION field value: any AST node that is neither a
-    statement nor a struct/member declaration node (type nodes that are
-    not structish are inert for the Call/Ident walks below)."""
+    """An EXPRESSION field value: an AST node that is neither a
+    statement nor a struct/member decl node."""
     return (isinstance(x, ast.Node) and not _is_stmt(x)
             and not isinstance(x, (ast.StructType, ast.Member)))
 
@@ -259,8 +318,12 @@ def _is_stmt(s):
 
 
 def _exprs_of(node):
-    """Every expression of a body, descending statement fields,
-    expression fields and statement-expression bodies."""
+    """Every expression of a body (descends `({...})` bodies too).
+    W-R repair: an EXPRESSION root (`int (*p)(void) = f;` — the whole
+    vd.init is a bare Ident/Call) now walks too; the statement-root
+    assumption left every global-init address-taken blind (the taken
+    law never saw `= f`, `[f]`-style decay — W-P hid it because plain
+    value sites were not covered then)."""
     out = []
 
     def ex(e):
@@ -297,7 +360,10 @@ def _exprs_of(node):
                 elif x is not None and _is_stmt(x):
                     st(x)
 
-    st(node)
+    if _is_expr(node):          # W-R: an expression root (vd.init) walks
+        ex(node)
+    else:
+        st(node)
     return out
 
 
@@ -312,3 +378,12 @@ def _writes_ident(e):
     if isinstance(e, ast.IncDec) and isinstance(e.operand, ast.Ident):
         return e.operand.name
     return None
+
+
+def _inl_goto_names(body):
+    """C identifiers the body's asm-gotos target."""
+    names = set()
+    for s in _stmts_of(body):
+        if isinstance(s, ast.AsmStmt) and (s.goto_ or s.labels):
+            names.update(s.labels)
+    return names

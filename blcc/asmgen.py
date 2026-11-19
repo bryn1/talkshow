@@ -251,7 +251,21 @@ class AsmGenMixin(AsmSubMixin):
             o.form = "match"
             return o
         if ci.cls in ("i", "I", "N", "n"):
+            # M4 W-R (MC 12714): the splice imm-map answers a PURE-imm
+            # constraint (`"i" (1 << (bit & 7))` — the cpufeature
+            # `[bitnum]` law, folded THROUGH the composed expression by
+            # the fold-engine arm). A constraint with a register/memory
+            # ALTERNATIVE ("iq", "Ir"…) keeps the house S2 alt posture:
+            # the map is hidden for this fold, the alt (reg/slot) is
+            # taken — where `%b1` needs a REG (wk2 bitops verbatim:
+            # gcc -O0 pairs the slot; a forced imm is the §3.5 LOUD).
+            # The W-P bare-Ident map arm inside `_asm_fold` rides the
+            # SAME mask, exactly as its posture was before this wave.
+            saved = self._inl_imm
+            if ci.alt:
+                self._inl_imm = {}
             val = self._asm_fold(o.expr, node)
+            self._inl_imm = saved
             if val is None and ci.alt:
                 o.ci = parse_constraint(ci.alt, node)   # iq/Ir fallback S2
             elif val is None:

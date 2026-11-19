@@ -220,12 +220,16 @@ def test_wp1_multi_site():
 
 
 def test_wp1_multi_site_value():
-    """Sites in VALUE position are NOT spliced — the callee keeps its
-    copy and the real call (all-sites law; i05 values)."""
+    """W-R (MC 12714) FLIPPED PIN: value-position sites ARE spliced now
+    — the same pass covers the value seam (the epilogue answers %rax),
+    the copy is discarded. The VALUES of row i10 still pair (44 both);
+    only the posture flipped (was: "value site must keep the copy" —
+    W-P law, superseded by plan AMENDMENT-19; the ORDER-UNDEFINED twin
+    of test_wp1_value_position_untouched STANDS unchanged)."""
     src = ("static inline int f(int v){ return v + 1; }\n"
            "int main(void){ return (f(1) + f(41)) & 0xff; }\n")
     g, b, gex, bex, btxt = _pair("msite", src, want=44)
-    assert re.search(r"^f:", btxt, re.M), "value site must keep the copy"
+    assert not re.search(r"^f:", btxt, re.M), "value site now splices"
 
 
 def test_wp1_addr_taken_param():
@@ -385,10 +389,18 @@ def test_wp1_corpus_wall_moved():
     assert "struct declaration in block scope" not in r.stderr, \
         "the W-Q wall came back: " + r.stderr[:200]
     first = next(ln for ln in r.stderr.splitlines() if ln.strip())
-    assert ":10493:" in first, \
-        "wall must stand on the NAMED SITE (clean :10493: = the " \
-        "_static_cpu_has definition, cpufeature.h:187 under the walk; " \
-        "a nospec-class string would pass without this): " + first[:300]
-    assert "'i' operand is not a compile-time" in first, \
-        "wall must stand on the named NEXT class (cpufeature 'i'): " \
+    # W-R (MC 12714) FLIPPED SITE PIN with the wave (same precedent as
+    # W-Q's "4 wall pins FLIPPED"): the asm-goto splice eats the
+    # cpufeature copy-posture — the COMMIT-0 pins (":10493:" standing,
+    # class "'i' operand") are asserted GONE — and the stream lands on
+    # the NAMED behind-class, the `__here` label wall (the 193-stream
+    # crowd; F-4 WALL-IS-A-QUEUE), clean-stream :11342:.
+    assert ":10493:" not in first and "constraint 'i' operand is not a " \
+        "compile-time" not in first, "the cpufeature wall came back: " \
+        + first[:300]
+    assert ":11342:" in first, \
+        "wall must land on the named behind SITE (clean :11342: = " \
+        "the __here crowd): " + first[:300]
+    assert "label '__here' used but not defined" in first, \
+        "wall must stand on the named NEXT class (__here): " \
         + first[:300]
