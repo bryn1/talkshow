@@ -335,8 +335,15 @@ def reg_name(reg: str, width: int, mod: Optional[str] = None,
                       "(ah/ch/dh/bh); '%{}' has none -- S3.5 LOUD".format(
                           reg), "%h")
         return _HIGH8[reg]
-    if mod in ("b", "k"):
+    if mod == "b":
         width = 1
+    elif mod == "k":
+        # M4 W-O (MC 12690), MEASURED at REC (probe kmod): `%k` prints
+        # the 32-BIT name of the assigned register (gcc `movl %edi`);
+        # the tip mapped it to the BYTE width — `%cl`, a wrong value
+        # (and `%cl not allowed with cmpxchgl' in the dead-arm family).
+        # The loose W-M pin (test_asm_m1 %k leg) still matches %edi.
+        width = 4
     elif mod == "w":
         width = 2
     elif mod == "q":

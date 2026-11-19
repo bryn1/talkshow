@@ -1018,6 +1018,46 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin):
             # universe compares 64-bit tags. Corpus volume 0.
             self._err(sw.control, "a 128-bit 'switch' control value is not "
                       "in the subset (§5)", "switch")
+        # M4 W-O COMMIT-2 (MC 12690) — CONSTANT-SWITCH DISPATCH (R4: the
+        # cmpxchg width family, the 18-stream as-die census
+        # .tmp/m4-wo/out/rc3-census.json). A control that FOLDS at the
+        # fold-entry law (`switch (sizeof(*p))` — the kernel's
+        # __always_inline helpers; gcc folds and emits the MATCHING ARM
+        # ONLY, measured even at -O0: probes sw1/r4b at REC) with plain
+        # arms skips the pure folded control evaluation and every
+        # EARLIER arm; C fall-through from the match keeps every LATER
+        # arm (cascade). The dead arms' texts (`cmpxchgb %edx` on a
+        # 4-byte object — `%edx' not allowed with cmpxchgb'`, the exact
+        # 16-stream as-death) never reach `as`, exactly as in gcc's .s.
+        # CONSERVATIVE fallbacks (NAMED, chain emission unchanged):
+        # markers nested under if/loop bodies (reachable only through a
+        # skipped test — volume 0), and a BARE (unbraced) VarDecl in a
+        # SKIPPED arm (the name stays in function scope for the live
+        # region). Non-folding control: the shipped chain, byte-identical
+        # (runtime leg pinned both directions).
+        konst = self._asm_const(sw.control)
+        if konst is not None:
+            marks = []
+            try:
+                self._switch_marks(list(sw.body), marks)
+            except _SwitchFallback:
+                marks = None
+            if marks is not None:
+                sel = None
+                for i, (kind, node) in enumerate(marks):
+                    if (kind == "case" and node.value == konst) or \
+                            (kind == "range" and node.lo <= konst
+                             <= node.hi):
+                        sel = i
+                        break
+                if sel is None:
+                    sel = next((i for i, (kind, nd) in enumerate(marks)
+                                if kind == "def"), None)
+                if not self._switch_bare_decl(marks, sel):
+                    self._switch_const(list(sw.body), marks, sel, l_end)
+                    self.loops.pop()
+                    self.fn.lines.append("{}:".format(l_end))
+                    return
         self._emit_expr(sw.control)
         for node, lab in order:
             if isinstance(node, ast.CaseRange):
@@ -1047,6 +1087,129 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin):
         self._stmt_seq(sw.body)
         self.loops.pop()
         self.fn.lines.append("{}:".format(l_end))
+
+    def _switch_marks(self, stmts, marks) -> None:
+        """Flatten the case/default markers in SOURCE order, mirroring
+        _collect_cases. A marker nested under an If/While/DoWhile/For
+        body raises _SwitchFallback — the constant dispatch falls back to
+        the shipped compare chain (volume 0, named)."""
+        for s in stmts:
+            if isinstance(s, ast.Case):
+                marks.append(("case", s))
+                if s.stmt is not None:
+                    self._switch_marks([s.stmt], marks)
+            elif isinstance(s, ast.CaseRange):
+                marks.append(("range", s))
+                if s.stmt is not None:
+                    self._switch_marks([s.stmt], marks)
+            elif isinstance(s, ast.Default):
+                marks.append(("def", s))
+                if s.stmt is not None:
+                    self._switch_marks([s.stmt], marks)
+            elif isinstance(s, ast.Compound):
+                self._switch_marks(s.body, marks)
+            elif isinstance(s, ast.Label):
+                if s.stmt is not None:
+                    self._switch_marks([s.stmt], marks)
+            elif isinstance(s, ast.If):
+                pre = len(marks)
+                self._switch_marks([s.then], marks)
+                if s.orelse is not None:
+                    self._switch_marks([s.orelse], marks)
+                if len(marks) > pre:
+                    raise _SwitchFallback()
+            elif isinstance(s, (ast.While, ast.DoWhile, ast.For)):
+                pre = len(marks)
+                self._switch_marks([s.body], marks)
+                if len(marks) > pre:
+                    raise _SwitchFallback()
+
+    def _arm_terminates(self, node) -> bool:
+        """Does this case arm's statement provably NOT fall through?
+        break/return/goto yes; a Compound yes when its LAST statement
+        does; anything else (fall-through expressions, if-without-else,
+        loops, ...) is undetermined -> False (keep the cascade)."""
+        if node is None:
+            return False
+        if isinstance(node, (ast.Break, ast.Return, ast.Goto)):
+            return True
+        if isinstance(node, ast.Compound):
+            return (bool(node.body)
+                    and self._arm_terminates(node.body[-1]))
+        if isinstance(node, ast.Label):
+            return self._arm_terminates(node.stmt)
+        return False
+
+    def _switch_bare_decl(self, marks, sel):
+        """Fallback test: a SKIPPED arm (index before the selection)
+        whose statement is a BARE VarDecl keeps its name in
+        function-visible scope — a live reference could dangle. A braced
+        (Compound) arm decl is scope-closed: dispatch stays (the kernel
+        arms are all braced compounds)."""
+        for i, (kind, node) in enumerate(marks):
+            if sel is not None and i < sel:
+                if isinstance(node.stmt, ast.VarDecl):
+                    return True
+        return False
+
+    def _switch_const(self, stmts, marks, sel, l_end) -> None:
+        """Emit the constant-dispatched body in ONE walk: the statements
+        before the first marker, then (at the first marker) a forward
+        jmp to the matched label — or the switch end when nothing
+        matches — then the matched arm and every LATER arm verbatim
+        through the shipped statement pipeline (fall-through cascade).
+        Earlier arms are skipped LABEL AND BODY; their texts never
+        reach `as`, exactly as in gcc's folded .s. Case labels exist
+        already — _collect_cases ran before this dispatch."""
+        # A matched arm whose tail TERMINATES (break/return/goto) makes
+        # every LATER arm unreachable — gcc's folded switch prints ONLY
+        # the matching arm then (measured, probe sw1 at REC — even at
+        # -O0). A fall-through match keeps the cascade (C semantics;
+        # the cascade leg pairs it). Undetermined tails (if-without-
+        # else, loops) keep the cascade: conservative, never silent.
+        emit_later = True
+        if sel is not None:
+            emit_later = not self._arm_terminates(marks[sel][1].stmt)
+        mi = [0]
+        jmped = [False]
+
+        def walk(seq):
+            for s in seq:
+                if isinstance(s, (ast.Case, ast.CaseRange, ast.Default)):
+                    i = mi[0]
+                    mi[0] += 1
+                    if not jmped[0]:
+                        jmped[0] = True
+                        tgt = l_end if sel is None else \
+                            self._case_lbl[id(marks[sel][1])]
+                        self._e("jmp {}".format(tgt))
+                    if sel is None or i < sel:
+                        continue           # dead arm: label AND body
+                    if i > sel and not emit_later:
+                        continue           # unreachable past a
+                        # terminating match (gcc's folded .s prints
+                        # the match ONLY)
+                    self.fn.lines.append(
+                        "{}:".format(self._case_lbl[id(s)]))
+                    if s.stmt is not None:
+                        walk([s.stmt])
+                    continue
+                if isinstance(s, ast.Compound):
+                    saved = dict(self.fn.locals)
+                    walk(s.body)
+                    self.fn.locals = saved
+                    continue
+                if isinstance(s, ast.Label):
+                    self.fn.lines.append("{}:".format(
+                        self._label_ref(s, s.name)))
+                    if s.stmt is not None:
+                        walk([s.stmt])
+                    continue
+                self._stmt(s)
+
+        walk(stmts)
+        if not jmped[0]:                   # empty switch body
+            self._e("jmp {}".format(l_end))
 
     def _collect_cases(self, stmts, order, default) -> None:
         for s in stmts:
@@ -1085,6 +1248,12 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin):
                     self._collect_cases([s.orelse], order, default)
             elif isinstance(s, (ast.While, ast.DoWhile, ast.For)):
                 self._collect_cases([s.body], order, default)
+
+
+class _SwitchFallback(Exception):
+    """internal signal: case markers nested under if/loop bodies
+    (see _switch_marks) — constant dispatch falls back to the shipped
+    chain; never escapes _stmt_switch."""
 
 
 def compile_tu(tu: ast.TranslationUnit) -> str:
