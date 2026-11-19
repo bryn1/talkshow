@@ -173,3 +173,15 @@ i8259 crowd wall now stands on the cpufeature.h 'i' class — F-4
 WALL-IS-A-QUEUE, the W-R queue-behind). Suites at this exact content:
 plain 1698-0-108 rc0 (seal 1677-0-108; +1 COMMIT-0 +20 this wave); kernel
 tier builder posture KERNEL_510 unset → 108 skips rc0.
+M4 W-Q COMMIT-2 (MC 12712, card 12404.2.91, this commit) — THE GATE'S
+CORRUPTION GUARDS, VERBATIM, + THE INTERACTION TUs (tests only, no
+production change): b01_tag_reuse_outer_scope / b13_two_functions_same_tag
+/ b15_guard_outer_alive ride the gate's own probe texts (MC 12708 leg 5) —
+5 NAMED RED at tip (out/c2-red-tip.txt; the one both-states-green leg is
+the S5/L4 fairness arm), pair-run 0/0/0 at this tree; interactions: W-P
+splice body carrying block-scope struct + block enum + constant-dispatched
+switch called from a caller LOOP (pair 54), NON-constant "i" naming a
+block-struct member keeps the refusal on BOTH trees (gcc rc1 twin),
+cmpxchg-family dispatch with block-scope definitions in LIVE and DEAD arms
+(pair 7, W-O skip law undisturbed). Plain tier at this exact content:
+1704-0-108 rc0 (+6 over COMMIT-1).
