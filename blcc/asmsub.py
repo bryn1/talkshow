@@ -138,6 +138,13 @@ class AsmSubMixin:
             if addr:
                 # address-of ANY object/function with a symbol answers
                 # the symbol — scalar or not (`&gi` -> `$gi`, `&c` -> `$c`).
+                # M4 W-O S27 (MC 12690): a FUNCTION folds as an address
+                # ONLY when DEFINED in this TU — gcc on a declared-only
+                # `&f` answers LOUD 'impossible constraint' (measured
+                # s27c); the tip answered `$f` silently through
+                # `nm in self.sigs`. The ADDRESS fold of an OBJECT
+                # (global/static) stays qualifier-blind (S19: `&vc` is
+                # $vc rc0, measured s19d).
                 if g is not None or nm in self.sigs:
                     return ("sym", nm, 0)
                 if stc is not None:
@@ -148,7 +155,12 @@ class AsmSubMixin:
                 spine = self._untype(spine)
                 if isinstance(spine, ast.ArrayType):
                     return ("sym", nm, 0)        # decayed array address
-                if ("const" in qt and g.init is not None
+                # M4 W-O S19 (MC 12690): the VALUE fold reads the
+                # QUALIFIER — a VOLATILE-qualified const is gcc LOUD
+                # 'impossible constraint' (gate rp19 + bare volatile,
+                # measured) and the tip printed `$42` silently.
+                if ("const" in qt and "volatile" not in qt
+                        and g.init is not None
                         and isinstance(spine, ast.BuiltinType)
                         and spine.name not in ("void", "float", "double")):
                     v = self._asm_const(g.init)  # F-3 VALUE arm (bare spelling)
@@ -156,13 +168,45 @@ class AsmSubMixin:
                         return v
                 return None                      # non-const scalar: gcc LOUD
             if nm in self.sigs:
+                # M4 W-O S27 DISCOVERY (MC 12690, own hands): at the
+                # KERNEL recipe (-fno-pic in) gcc folds $fn under "i"
+                # for DEFINED and declared-only functions alike, both
+                # spellings (`f` and `&f` — probes u2/u3/s27c rc0);
+                # 'impossible constraint' is the PIE-posture answer
+                # (same probes, -fPIE/default-pie). blcc is static
+                # non-PIE by the §6 link law — the W-N fold stays the
+                # REC-pair answer; the gate's S27 LOUD capture was
+                # measured in a PIE context (its leg1 harness carries
+                # no kernel REC flags — grep-verified), named in the
+                # verdict as the claim-repair exception.
                 return ("sym", nm, 0)            # function address
             if stc is not None:
-                # file- or fn-scope static: the value fold has no init in
-                # the statics table — the address still folds (the `&`
-                # arm answered it above); a bare fn-static const int
-                # answers the symbol (honest wall, named in the card).
-                return ("sym", stc[0], 0)
+                # M4 W-O S18 (MC 12690): the BARE fn-static spelling
+                # folds by the SAME ONE type law as the global arm —
+                # const, non-volatile, scalar spine, constant
+                # initializer answers the VALUE (gcc `movl $7`,
+                # measured; the tip printed the symbol `$sc.0` — a
+                # silent wrong value, gate rp18: gcc exit 42, blcc
+                # exit garbage). Arrays keep the DECAYED-SYMBOL arm
+                # ($nm.N / the `__func__` leg); a non-const bare
+                # static now REFUSES (the `gi` law made symmetric —
+                # gcc folds it only by dataflow propagation, which
+                # the parse-time fold cannot re-derive: named
+                # LOUD-DIV twin, volume 0 in the 706). The W-N
+                # "no init in the statics table" note is DEAD — the
+                # table carries the init expression since this card.
+                spine2 = self._untype(stc[1])    # layout type: sized, bare
+                qt3 = self._split_q(stc[3])[0] if len(stc) > 3 else ()
+                if isinstance(spine2, ast.ArrayType):
+                    return ("sym", stc[0], 0)    # decayed array address
+                if (len(stc) > 2 and stc[2] is not None
+                        and "const" in qt3 and "volatile" not in qt3
+                        and isinstance(spine2, ast.BuiltinType)
+                        and spine2.name not in ("void", "float", "double")):
+                    v = self._asm_const(stc[2])  # S18 VALUE fold
+                    if v is not None:
+                        return v
+                return None
             return None
         return None
 
@@ -274,7 +318,7 @@ class AsmSubMixin:
         if nm in self.fn.regasms or nm in self.regasm_global:
             return None
         if nm in self.fn.statics:
-            sym, sty = self.fn.statics[nm]
+            sym, sty = self.fn.statics[nm][0], self.fn.statics[nm][1]
             if isinstance(self._untype(sty), ast.ArrayType):
                 return None
             return "{}(%rip)".format(sym)
@@ -354,13 +398,26 @@ class AsmSubMixin:
         return None
 
     def _asm_elem_ty(self, e):
+        """Element type of an ARRAY-typed subscriptable base for the
+        static-address walk. M4 W-O (MC 12690, gate F-N-1): the walk
+        folds a `[k]` ONLY over an ARRAY base — an array's slot IS the
+        object, so sym/frame + k·esz is a STATIC address. A POINTER-
+        typed base answers None: `p[i]` lives where p POINTS — a
+        runtime value — and folding the pointer's OWN frame/sym slot
+        is the F-N-1 silent miscompile (gate rp5f 7→207, rp5l 42→7,
+        rp5p write-through the frame slot; the tip died LOUD with an
+        AttributeError before W-N legitimated this arm). The computed
+        L3 route (address → aslot → base reg) carries the pointer
+        shape with the right VALUE. W-N read the DECAYED type here —
+        arrays and pointers were one arm; the W-O law reads the
+        UNDECAYED type, which is exactly the array/pointer distinction
+        the fold needs (the ICE-dead legs stay green: `gs[3]` is an
+        array under either read)."""
         try:
-            ty = self._untype(self._decay(self._ty(e)))
+            ty = self._untype(self._ty(e))
         except DiagError:
             return None
         if isinstance(ty, ast.ArrayType):
-            return self._decay(ty.inner)
-        if isinstance(ty, ast.PtrType):
             return self._decay(ty.inner)
         return None
 

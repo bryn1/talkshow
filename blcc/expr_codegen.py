@@ -109,7 +109,7 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
             # §1c (MC 12486): a function-scope `static` local lives in
             # TU storage and SHADOWS the same-name global — checked
             # first, %rip-accessed (gcc w4 law).
-            sym, ty = self.fn.statics[n.name]
+            sym, ty = self.fn.statics[n.name][0], self.fn.statics[n.name][1]
             if isinstance(ty, ast.ArrayType) and ty.size is not None:
                 self._e("leaq {}(%rip), %rax".format(sym))  # decay (§4)
             else:
@@ -1221,7 +1221,7 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
             self._emit_expr(n.value)
             if n.target.name in self.fn.statics:
                 # §1c (MC 12486): store through the static's TU symbol.
-                sym, _ = self.fn.statics[n.target.name]
+                sym = self.fn.statics[n.target.name][0]
                 self._store(ty, "{}(%rip)".format(sym), at=n)
             elif n.target.name in self.fn.locals:
                 self._store(ty, "{}(%rbp)".format(
@@ -1783,7 +1783,7 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
         if isinstance(n, ast.Ident):
             if n.name in self.fn.statics:
                 # §1c (MC 12486): &static-local = its TU symbol (§1c law).
-                sym, _ = self.fn.statics[n.name]
+                sym = self.fn.statics[n.name][0]
                 self._e("leaq {}(%rip), %rax".format(sym))
                 return
             if n.name in self.fn.locals:

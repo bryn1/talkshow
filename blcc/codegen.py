@@ -828,7 +828,7 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin):
             ty = self._sized_array_decl(self._untype(vd.type), vd.init, vd)
             sym = "{}.{}".format(vd.name, self._static_n)
             self._static_n += 1
-            self.fn.statics[vd.name] = (sym, ty)
+            self.fn.statics[vd.name] = (sym, ty, vd.init, vd.type)
             self.static_objs.append(ast.VarDecl(vd.file, vd.line, vd.col,
                                                 sym, ty, vd.init, True))
             return
