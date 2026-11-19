@@ -363,7 +363,12 @@ def test_wp1_corpus_wall_moved():
     struct wall; W-Q (MC 12712) moved it AGAIN onto the cpufeature.h
     'i' class (asm-goto `_static_cpu_has` — the W-R queue-behind wall,
     F-4 WALL-IS-A-QUEUE doctrine). Path-gated: the pinned corpus dir
-    decides."""
+    decides. F-2 HARDENING (M4 W-R COMMIT-0, gate MC 12713): the pin
+    rides the SITE — clean-stream :10493:, the post-pp `_static_cpu_has`
+    definition (cpufeature.h:187 in the walk) — because the class
+    string alone is SHARED with the retired W-P nospec-branch.h:375
+    wall and could not tell the two apart; the class string stays as
+    the secondary check."""
     if not os.path.isdir(PINNED):
         import pytest
         pytest.skip("pinned corpus not linked (builder posture)")
@@ -379,6 +384,11 @@ def test_wp1_corpus_wall_moved():
     assert r.returncode != 0            # still a honest RED…
     assert "struct declaration in block scope" not in r.stderr, \
         "the W-Q wall came back: " + r.stderr[:200]
-    assert "'i' operand is not a compile-time" in r.stderr, \
+    first = next(ln for ln in r.stderr.splitlines() if ln.strip())
+    assert ":10493:" in first, \
+        "wall must stand on the NAMED SITE (clean :10493: = the " \
+        "_static_cpu_has definition, cpufeature.h:187 under the walk; " \
+        "a nospec-class string would pass without this): " + first[:300]
+    assert "'i' operand is not a compile-time" in first, \
         "wall must stand on the named NEXT class (cpufeature 'i'): " \
-        + r.stderr[:300]
+        + first[:300]
