@@ -300,3 +300,41 @@ def test_wp1_value_position_untouched():
     g, b, gex, bex, _t = _pair("ord", src)
     assert b == 0 and bex == 21, (bex,)      # blcc law: left-to-right
     assert gex == 12                          # gcc -Os: right-to-left
+
+
+def test_wp1_cycle_stmt_sites():
+    """Cycle guard TOOTH: two static inlines calling EACH OTHER in
+    STATEMENT position are every-site-eligible; only the call-cycle
+    guard keeps them the CALL law (compile never diverges, values 6)."""
+    src = ("int acc;\nstatic inline void b(int n);\n"
+           "static inline void a(int n){ if (n) b(n - 1); }\n"
+           "static inline void b(int n){ acc += 1; a(n); }\n"
+           "int main(void){ a(5); return acc & 0xff; }\n")
+    _pair("cyc", src, want=5)
+
+
+PINNED = "/home/claudecode/Blaha/.tmp/m4-plan/streams"
+
+
+def test_wp1_corpus_wall_moved():
+    """CORPUS SPOT (the close instrument's permanent pin): a pinned
+    485-crowd stream (arch_x86_kernel_i8259.c.i) first-blocked at tip
+    on the 'i'-param 'i'-closure wall; at this tree it moves off that
+    class ONTO the named next wall (block-scope struct). Path-gated:
+    the pinned corpus dir decides."""
+    if not os.path.isdir(PINNED):
+        import pytest
+        pytest.skip("pinned corpus not linked (builder posture)")
+    src = PINNED + "/arch_x86_kernel_i8259.c.i"
+    clean = "/dev/shm/wp1_i8259_clean.c"
+    import re as _re
+    lm = _re.compile(r"^#\s+\d+\s+\"")
+    with open(src, errors="replace") as fh, open(clean, "w") as oh:
+        for ln in fh:
+            if not lm.match(ln):
+                oh.write(ln)
+    r = blcc(["-c", clean, "-o", "/dev/shm/wp1_i8259.o"])
+    assert r.returncode != 0            # still a honest RED…
+    assert "'i' operand is not a compile-time" not in r.stderr, \
+        "the 485-crowd wall came back: " + r.stderr[:200]
+    assert "struct declaration in block scope" in r.stderr, r.stderr[:300]
