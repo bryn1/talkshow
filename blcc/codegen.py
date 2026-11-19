@@ -95,6 +95,11 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin, InlinerMixin):
         self.structs: Dict[str, Optional[Tuple[ast.Member, ...]]] = {
             predef.TAG: predef.VA_MEMBERS}
         self.enums: Dict[str, int] = {}
+        self._enum_marks: List[Dict[str, Optional[int]]] = []  # W-Q block
+        # scopes: one dict per enclosing Compound recording the enum names
+        # an inner EnumDecl registered, with their PREVIOUS values (None =
+        # absent); the Compound arm REVERTS them on scope exit (q10b law:
+        # block enum constants never leak to file scope).
         self.strings: Dict[bytes, str] = {}
         self._str_order: List[Tuple[str, bytes]] = []
         self._label_n = 0
@@ -669,7 +674,15 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin, InlinerMixin):
     def _stmt(self, n: ast.Node) -> None:
         if isinstance(n, ast.Compound):
             saved = dict(self.fn.locals)
+            mark = {}                      # W-Q: enum names registered in
+            self._enum_marks.append(mark)  # this block (restore on exit)
             self._stmt_seq(n.body)
+            self._enum_marks.pop()
+            for nm, old in mark.items():   # RESTORE (q10b: constants are
+                if old is None:            # block-scoped, gcc rc1 outside)
+                    del self.enums[nm]
+                else:
+                    self.enums[nm] = old
             self.fn.locals = saved
         elif isinstance(n, ast.ExprStmt):
             if (isinstance(n.expr, ast.Call)
@@ -782,13 +795,49 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin, InlinerMixin):
         elif isinstance(n, ast.AsmStmt):
             self._stmt_asm(n)           # M3 §3: the whole inline-asm law
         elif isinstance(n, ast.EnumDecl):
-            # §8: the message names the CONSTRUCT literally — never a node
-            # class name like 'EnumDecl' (DA-c2 P3-1 / OBS-A).
-            self._err(n, "enum declaration in block scope is not in the "
-                      "subset (§4)", "enum")
+            # M4 W-Q (MC 12712): a block-scope enum REGISTERS its
+            # constants (parse had them scope-correct already; this is
+            # codegen's own flat fold table) and the enclosing Compound
+            # RESTORES them on scope exit — measured law q10/q10b (gcc
+            # rc1 for a block constant used outside). Registration
+            # order = emission order, so the value an expression sees is
+            # the innermost declaration in effect (q05 twin for enums).
+            mark = self._enum_marks[-1] if self._enum_marks else None
+            for name, value in n.constants:
+                if mark is not None and name not in mark:
+                    mark[name] = self.enums.get(name)
+                self.enums[name] = value
         elif isinstance(n, ast.StructDecl):
-            self._err(n, "struct declaration in block scope is not in the "
-                      "subset (§4)", "struct")
+            # M4 W-Q (MC 12712): THE §4 WALL LIFTS. A block-scope struct/
+            # union DEFINITION is a layout fact, not text: register it
+            # and emit nothing. The layout table is keyed by TYPE
+            # IDENTITY (minted `name#blk@file:line#n` for block tags —
+            # parser._tag_define), so ONE tag name can carry TWO live
+            # layouts in one TU (b01/b13/b15 corruption guards) and no
+            # outer layout is ever overwritten. The completion/
+            # redefinition law already fired at the parse seam.
+            if n.members is not None:
+                if self.structs.get(n.tag) is n.members:
+                    pass             # SAME node re-emitted (a W-P splice
+                    # re-runs the callee body per site — the identical
+                    # layout fact, not a redefinition)
+                elif self.structs.get(n.tag) is not None:
+                    self._err(n, "redefinition of struct '{}'".format(n.tag),
+                              n.tag)
+                self.structs[n.tag] = n.members
+                if n.attrs:
+                    reg = getattr(self, "struct_tag_attrs", None)
+                    if reg is None:
+                        reg = self.struct_tag_attrs = {}
+                    reg[n.tag] = n.attrs
+            elif n.tag not in self.structs:
+                self.structs[n.tag] = None
+        elif isinstance(n, ast.TypedefDecl):
+            pass                     # M4 W-Q (MC 12712): a block typedef
+            # names a TYPE only — parse landed it in the scope stack
+            # (restore on pop), codegen emits nothing (file scope always
+            # ignored this node in _collect; tip LOUDed the BLOCK arm
+            # as the pre-existing "cannot emit statement" — q11).
         elif isinstance(n, ast.FuncDecl):
             # M4 W-H (MC 12645): a block-scope function DECLARATION
             # registers the CALL SIGNATURE and emits nothing — the

@@ -81,6 +81,14 @@ class Parser(AsmParseMixin, CompatLawMixin):
         self.struct_tags: Dict[str, Tuple[ast.Member, ...]] = {
             predef.TAG: predef.VA_MEMBERS}
         self._anon_n = 0                  # unique minted-tag counter (T+7)
+        # M4 W-Q (MC 12712): block-scope TAG namespace — NAME -> identity.
+        # The layout tables (struct_tags / codegen.structs) key on the
+        # IDENTITY, not the name (measured law q05/q06: ONE name, TWO live
+        # layouts in one TU); file scope keeps the name as identity (all
+        # pre-W-Q behavior byte-unchanged). Pushed/popped with self.scopes.
+        self._tag_scopes: List[Dict[str, str]] = [{}]
+        self._file_tags = set()           # names bound as tags at file
+        self._blk_tag_n = 0               # block-tag identity mint counter
         # M4 W3 COMMIT-0 (MC 12563): the re-declaration ledger — name →
         # (return key, param key list or None for the old-style empty
         # list, variadic). ONE table, judged by _fn_redecl_law.
@@ -112,11 +120,13 @@ class Parser(AsmParseMixin, CompatLawMixin):
         verified `{` opens the braced group; it is consumed here."""
         self.s.expect_punct("{")
         self.scopes.append({})
+        self._tag_scopes.append({})
         stmts: List[ast.Node] = []
         while not self.s.at_punct("}"):
             if self.s.peek().kind == "eof":
                 self._parse_err(open_tok, "unterminated statement expression")
             stmts.extend(self.parse_block_item())
+        self._tag_scopes.pop()
         self.scopes.pop()
         self.s.expect_punct("}")
         self.s.expect_punct(")")
@@ -1629,6 +1639,56 @@ class Parser(AsmParseMixin, CompatLawMixin):
                        "__const__"):
             self.s.next()
 
+    # -- M4 W-Q (MC 12712): block-scope TAG identity (measured law table
+    # .tmp/m4-wq: q01b/q02/q04/q05/q06/q09/q16b at gcc -Os). A block-scope
+    # NAMED tag gets a MINTED identity — it SHADOWS (never completes) the
+    # outer tag (q01b: the file tag stays incomplete after an inner
+    # definition, gcc rc1 at its sizeof), and layout is keyed by IDENTITY
+    # so two live layouts share one name (q05/q06). File scope keeps the
+    # name as its identity — every pre-W-Q behavior is byte-unchanged.
+
+    def _tag_mint(self, name: str, tok: Token) -> str:
+        self._blk_tag_n += 1
+        return "%s#blk@%s:%d#%d" % (name, tok.file, tok.line,
+                                    self._blk_tag_n)
+
+    def _tag_ref(self, name: str, tok: Token) -> str:
+        """Resolve a tag NAME to its layout identity at the CURRENT scope."""
+        for sc in reversed(self._tag_scopes[1:]):
+            if name in sc:
+                return sc[name]
+        if name in self._file_tags or name in self.struct_tags:
+            return name                    # the visible file-scope tag
+        if len(self._tag_scopes) == 1:     # file scope: identity == name
+            self._file_tags.add(name)
+            return name
+        # A name first mentioned in a block is a NEW block-scope tag
+        # (q09: the LATER file definition of the same name is DIFFERENT).
+        ident = self._tag_mint(name, tok)
+        self._tag_scopes[-1][name] = ident
+        self.struct_tags[ident] = None     # block-scope, INCOMPLETE
+        return ident
+
+    def _tag_define(self, name: str, tok: Token) -> str:
+        """Identity for a tag DEFINITION: complete the current scope's
+        incomplete tag, LOUD on same-scope redefinition, else mint."""
+        if len(self._tag_scopes) == 1:
+            if self.struct_tags.get(name) is not None:
+                self._sema(tok, "struct/union '{}' is already defined"
+                           .format(name))
+            self._file_tags.add(name)
+            return name
+        cur = self._tag_scopes[-1]
+        ident = cur.get(name)
+        if ident is not None:
+            if self.struct_tags.get(ident) is not None:
+                self._sema(tok, "struct/union '{}' is already defined"
+                           .format(name))
+            return ident                   # COMPLETES this block's forward
+        ident = self._tag_mint(name, tok)  # SHADOWS any outer same-name
+        cur[name] = ident                  # tag (b01/b13/b15 law)
+        return ident
+
     def parse_struct_type(self) -> ast.Node:
         # §2.8: struct AND union share the grammar; the tag namespace is
         # shared too (C keeps them in one space). is_union rides the KEY-
@@ -1647,17 +1707,18 @@ class Parser(AsmParseMixin, CompatLawMixin):
             # two inline definitions (T+7 same-line leg).
             self._anon_n += 1
             tag = "<anon@{}:{}#{}>".format(tok.file, tok.line, self._anon_n)
+            named = False                  # anon id IS the identity (W-Q)
         else:
             tag = self.s.expect_id("parse").text
+            named = True
         if self.s.accept_punct("{"):
             members = self.parse_struct_members(is_union)
             tsink: List[tuple] = []
             self._skip_gnu_attrs(tsink)  # tag-definition tail (§1 row 9)
             tsink = pre_sink + tsink     # M4 W2.5: prefix registers like
                                          # the tail (one law)
-            if tag in self.struct_tags:
-                self._sema(tok, "struct/union '{}' is already defined"
-                           .format(tag))
+            if named:                    # M4 W-Q: identity + redefinition
+                tag = self._tag_define(tag, tok)   # law at THIS seam
             self.struct_tags[tag] = members
             if tsink:
                 reg = getattr(self, "struct_tag_attrs", None)
@@ -1669,9 +1730,13 @@ class Parser(AsmParseMixin, CompatLawMixin):
                                                 tuple(tsink)))
             self._bare_type_ok = True
         elif self.s.at_punct(";"):
+            if named:                    # forward-decl arm (W-Q scope law)
+                tag = self._tag_ref(tag, tok)
             self._pending.append(ast.StructDecl(tok.file, tok.line, tok.col,
                                                 tag, None, is_union))
             self._bare_type_ok = True
+        elif named:                      # BARE reference: W-Q tag lookup
+            tag = self._tag_ref(tag, tok)
         return ast.StructType(tok.file, tok.line, tok.col, tag, is_union)
 
     def _flat_member_names(self, members) -> List[str]:
@@ -2902,10 +2967,12 @@ class Parser(AsmParseMixin, CompatLawMixin):
                             fn_name: Optional[str] = None) -> ast.Node:
         opening = self.s.expect_punct("{")
         self.scopes.append({})
+        self._tag_scopes.append({})
         for p in params:
             if p.name:
                 self.scopes[-1][p.name] = ("var", p.type)
         stmts = self._block_stmts_until_brace()
+        self._tag_scopes.pop()
         self.scopes.pop()
         # M4 W-N (MC 12687): gnu89 binds an implicit
         # `char __func__[len+1] = "<name>"` in EVERY function body
@@ -3003,7 +3070,9 @@ class Parser(AsmParseMixin, CompatLawMixin):
     def parse_compound(self) -> ast.Compound:
         opening = self.s.expect_punct("{")
         self.scopes.append({})
+        self._tag_scopes.append({})
         stmts = self._block_stmts_until_brace()
+        self._tag_scopes.pop()
         self.scopes.pop()
         return ast.Compound(opening.file, opening.line, opening.col, stmts)
 

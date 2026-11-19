@@ -359,9 +359,11 @@ PINNED = "/home/claudecode/Blaha/.tmp/m4-plan/streams"
 def test_wp1_corpus_wall_moved():
     """CORPUS SPOT (the close instrument's permanent pin): a pinned
     485-crowd stream (arch_x86_kernel_i8259.c.i) first-blocked at tip
-    on the 'i'-param 'i'-closure wall; at this tree it moves off that
-    class ONTO the named next wall (block-scope struct). Path-gated:
-    the pinned corpus dir decides."""
+    on the 'i'-param 'i'-closure wall; W-P moved it ONTO the block-scope
+    struct wall; W-Q (MC 12712) moved it AGAIN onto the cpufeature.h
+    'i' class (asm-goto `_static_cpu_has` — the W-R queue-behind wall,
+    F-4 WALL-IS-A-QUEUE doctrine). Path-gated: the pinned corpus dir
+    decides."""
     if not os.path.isdir(PINNED):
         import pytest
         pytest.skip("pinned corpus not linked (builder posture)")
@@ -375,6 +377,8 @@ def test_wp1_corpus_wall_moved():
                 oh.write(ln)
     r = blcc(["-c", clean, "-o", "/dev/shm/wp1_i8259.o"])
     assert r.returncode != 0            # still a honest RED…
-    assert "'i' operand is not a compile-time" not in r.stderr, \
-        "the 485-crowd wall came back: " + r.stderr[:200]
-    assert "struct declaration in block scope" in r.stderr, r.stderr[:300]
+    assert "struct declaration in block scope" not in r.stderr, \
+        "the W-Q wall came back: " + r.stderr[:200]
+    assert "'i' operand is not a compile-time" in r.stderr, \
+        "wall must stand on the named NEXT class (cpufeature 'i'): " \
+        + r.stderr[:300]

@@ -309,30 +309,34 @@ def test_boundary_array_compiles_fast_with_zero_directive():
 
 # -- P3-1 (OBS-A): block-scope decl diagnostics name the CONSTRUCT literally ----
 
-def test_block_scope_enum_names_construct_not_node_class():
+def test_block_scope_enum_wq_accepted_FLIPPED():
+    # M4 W-Q (MC 12712, plan AMENDMENT-18) LIFTED the §4 wall: a
+    # block-scope enum REGISTERS and its constants RESTORE at block exit
+    # (measured law q10/q10b at gcc -Os). The DA-c2 §8 intent survives
+    # as the RUN: K is 2 INSIDE the block, OK = 5 file-wide, "6\n".
     src = ('#include "print.h"\nenum { OK = 5 };\nint main(void){\n'
            '  { enum { K = 2 }; int a[K]; a[0] = 1; pint(a[0] + OK); }\n'
            '  pstr(NL);\n  _sys_exit(1);\n}\n')
     r, out = compile_src(src, "be")
-    assert r.returncode == 2, (r.returncode, r.stderr)
-    assert DIAG_RE.match(r.stderr.strip()), r.stderr
-    assert "enum declaration in block scope is not in the subset (§4)" in r.stderr, \
-        r.stderr
-    assert "EnumDecl" not in r.stderr, r.stderr            # §8: no node classes
-    assert_nothing_emitted(out)
+    assert r.returncode == 0, (r.returncode, r.stderr)
+    b = run_bin(out)
+    assert b.stdout.startswith(b"6"), b.stdout
+    assert b.returncode == 1
 
 
-def test_block_scope_struct_names_construct_not_node_class():
+def test_block_scope_struct_wq_accepted_FLIPPED():
+    # M4 W-Q (MC 12712): the §4 block-scope-struct wall LIFTS — the
+    # definition registers (identity-keyed layout) and emits nothing.
+    # The §8 message law retired WITH the wall; the probe's construct
+    # now compiles and RUNS ("1\n").
     src = ('#include "print.h"\nint main(void){\n'
            '  { struct Inner { long big; }; pint(1); }\n'
            '  _sys_exit(1);\n}\n')
     r, out = compile_src(src, "bs")
-    assert r.returncode == 2, (r.returncode, r.stderr)
-    assert DIAG_RE.match(r.stderr.strip()), r.stderr
-    assert "struct declaration in block scope is not in the subset (§4)" in r.stderr, \
-        r.stderr
-    assert "StructDecl" not in r.stderr, r.stderr
-    assert_nothing_emitted(out)
+    assert r.returncode == 0, (r.returncode, r.stderr)
+    b = run_bin(out)
+    assert b.stdout.startswith(b"1"), b.stdout
+    assert b.returncode == 1
 
 
 def test_file_scope_enum_sizes_still_work():

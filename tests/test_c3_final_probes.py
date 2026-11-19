@@ -190,11 +190,13 @@ def test_out_of_set_escape_rejected_loud(esc):
             r"unknown escape")
 
 
-def test_block_scope_enum_decl_is_loud_not_silent():
-    # DA-verdict-c2 P3-1 (OBS-A) adjudicated the §8 message: it must name the
-    # CONSTRUCT literally ("enum declaration in block scope ...") and must NOT
-    # echo the node class 'EnumDecl'. The probe's intent — loud, construct
-    # named — is preserved; the match is case-folded to accept the keyword.
-    _reject("enumblock",
-            "int main(void) { enum { K = 2 }; int g[K]; g[0] = 1; pl(g[0]); return 0; }\n",
-            r"(?i)enum declaration")
+def test_block_scope_enum_decl_FLIPPED_WQ_MC_12712():
+    # M4 W-Q (MC 12712, plan AMENDMENT-18) LIFTS the §4 wall this probe
+    # pinned: the block-scope enum REGISTERS (constants RESTORE at block
+    # exit — measured law q10/q10b); the probe must now COMPILE and RUN
+    # g[0] = 1. The §8 "no node class" clause retired with the wall.
+    r, out = blcc_compile(BLCC_HDR +
+                          "int main(void) { enum { K = 2 }; int g[K]; "
+                          "g[0] = 1; pl(g[0]); return 0; }\n", "enumbf")
+    assert r.returncode == 0, r.stderr
+    assert run(out) == (b"1\n", 0)
