@@ -2927,7 +2927,8 @@ class Parser(AsmParseMixin, CompatLawMixin):
                     ast.IntLit(opening.file, opening.line, opening.col,
                                len(fn_name) + 1)),
                 ast.StrLit(opening.file, opening.line, opening.col,
-                           fn_name))
+                           fn_name),
+                is_static=True)
             stmts = (vd,) + tuple(stmts)
         return ast.Compound(opening.file, opening.line, opening.col, stmts)
 
