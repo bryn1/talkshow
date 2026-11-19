@@ -137,6 +137,23 @@ int main(void){ int i, acc = 0; for (i = 1; i <= 3; i++){ gt = 0;
     _pair("spmix", src, want=54)
 
 
+def test_wq2_block_forward_completion_no_leak():
+    """A block-scope forward declaration COMPLETED in the same block
+    (q08 family) must NOT make the NAME visible at file scope: the
+    LATER file definition of the same name is a DIFFERENT type — gcc
+    compiles this TU (file sizeof 8, block sizeof 4); a leak would
+    LOUD the file definition as "already defined"."""
+    _pair("noleak", """
+int gb, gf;
+void f(void){ struct N1 *p; struct N1 { int a; } v; v.a = 1;
+    gb = (int)sizeof(v); p = &v; gb += p->a; }
+struct N1 { long z; long y; long x; long w; };
+int h(void){ struct N1 k; gf = (int)sizeof(k); return gf; }
+int main(void){ f(); h(); if (gb != 5) return 11;
+    if (gf != 32) return 12; return 0; }
+""", want=0)
+
+
 def test_wq2_i_operand_block_member_loud():
     """The imm map answers PARAMS only: a NON-constant `"i"` operand
     naming a BLOCK-STRUCT MEMBER keeps the S5/L4 refusal on BOTH trees

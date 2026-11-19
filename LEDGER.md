@@ -185,3 +185,33 @@ block-struct member keeps the refusal on BOTH trees (gcc rc1 twin),
 cmpxchg-family dispatch with block-scope definitions in LIVE and DEAD arms
 (pair 7, W-O skip law undisturbed). Plain tier at this exact content:
 1704-0-108 rc0 (+6 over COMMIT-1).
+M4 W-Q CLOSE (MC 12712, card 12404.2.91, this row) — RE-SWEEP AT MY
+HANDS (pinned 706, same instrument, shipped tree 127ff5f): accepts
+46→50 (GAINED arch_x86_boot_cmdline + arch_x86_lib_cmdline = the two
+enum-first-wall streams, R-3 "enum ships WITH R-1"; + boot_string +
+boot_compressed_string = the anonymous block-union __div_u64_rem class;
+LOST: none). THE 483 cpufeature.h:187 'i'-asm-goto streams RE-WALL
+EXACTLY as measured pre-wave — different 'i'-class = W-R's queue
+(483 = NEW top-1; then choose_expr 37, "expected identifier ';'" 29 —
+NEW top-3 NAMED). OWN kcopy WALK (walk-wq.sh, O=.tmp/m4-wq/build,
+CC=shipped wrapper): init/main.o CLEARED special_insns.h:225 (the W-P
+walk's death row — own log-vs-log diff) and the FIRST RED PAST IT is
+cpufeature.h:187:1343 (asm-goto _static_cpu_has 'i') — WALK-STILL-BLOCKED
+(row law: the :225 wall is down; the queue's next wall is the W-R 'i'
+class; no vmlinux, named). DC-v4 rc0 (3 sprod delegations, 0 malformed).
+§6 nm-parity RE-SCOPED to the 4 gained TUs: visible-letter-diffs 0/4,
+UNDEF parity 2/4; the 2 NAMED DIFF TUs emit, where gcc AT THE WALK
+RECIPE -Os emits NOTHING, __compiletime_assert_N calls (41) and
+constant-folded extern refs (HEAP/heap_end/boot_params/max_pfn_mapped)
+— blcc's constant-condition ELISION gap, named, volume 0 behind the
+walk wall, NOT W-Q's law (tag-scope surface pairs clean). TOOTH PLANTS
+4 (isolated worktree, main tree never touched): mint removed → 10 NAMED
+RED (b01/b13/b15/q06/q12 chain); enum-restore removed → exactly q10b
+FALSE-ACCEPT; same-node splice guard removed → exactly clwb double-site
+FALSE-REFUSE; compound pop removed → q04/b01/b15 RED; every plant
+reverted, worktree porcelain 0 each time. Extra guard leg added:
+block-forward-completion NO-LEAK (noleak) — q08-completion x later
+file-definition identity. Suites: plain 1704-0-108 at COMMIT-2 content;
+kernel tier: lab-pass launched at 127ff5f (production bytes of this
+final commit — `git diff 127ff5f..HEAD -- blcc/` EMPTY) and RE-RUN at
+this close sha, both rows in .tmp/m4-wq/out/lab-pass*.txt.
