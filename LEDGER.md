@@ -412,3 +412,41 @@ i8259: BOTH own classes eaten, wall on the NAMED carry
 Teeth (3 plants on committed bytes, RED named, restored): seam-mark
 -> wt2-witness + wr1 RED; positional-recursion -> the five wt1 RED-
 first legs RED verbatim; scoped-label twin -> wt0 loud legs RED.
+M4 W-T CLOSE (MC 12736, card 12404.2.99, this commit, LEDGER+evidence)
+— accepts 78 -> 153 (+75 gained, 0 LOST; final-sweep SET-EQUAL to the
+pre-wave sim-combo on the repo bytes, corpus sha 22655bf48c05bd7a both
+ends; the pairing law PAID: hoist-alone +0/-0, CL-alone +72/-0, combo
++75/-0 — the +3 delta is the files needing BOTH). 'construct' +
+BUILD_BUG-anon first-walls 0/706: BOTH 432-crowd classes EATEN. NEW
+top-3 first-wall classes NAMED: statement-expression-as-l-value 279
+(the walk's and the corpus's new #1 — next wave's accept lever),
+choose_expr 37, 5-byte struct-load 28 (the WALK land: own-kcopy walk
+CC=abs bin/blcc-cc, build OUTSIDE .tmp, lab-newer 0 both ends,
+mrproper/olddefconfig rc0 — first RED MOVED DEEPER to
+arch/x86/include/asm/text-patching.h:114:2 'cannot load a 5-byte value
+(§4)' at init/main.o; walk-log greps construct 0 / anon 0). DC-v4 over
+the walk ledgers rc0 (3==3, malformed 0, 49 host rows by traffic law).
+§6 nm-parity 6 of 75 gained TUs: VISIBLE-DIFF 0 PARITY-OK 6/6;
+link-readiness recomputed at the KERNEL-OWN symtab law (own FULL gcc
+reference build of the same kcopy/config: 8443 names / 746 objs, NOT
+gcc-per-TU per brief): 155 distinct link-blocking surplus names/TU,
+ALL pre-NAMED classes (compiletime_assert elision W-S; fortify/
+fat-branch slow-path helpers W-O family) — QUANTIFIED carry, no new
+class. TEETH 3 plants RED-named-restored (seam-mark/positional-
+recursion/scoped-label). TIERS: plain 1750-0-108 -> 1771-6-108 (all 6
+named: 4 wt2 RED-first + 2 queue flips) -> 1782-0-108; KERNEL TIER
+1890-0-0 lab-pass @46e3ed7 production bytes (1782+108 corpus legs,
+64min — deeper stream compiles at final bytes). DEVIATIONS NAMED:
+brief's W-F-layout-seam premise for bitfields measured FALSE (13-row
+law pairs at tip — ordering was the wall, pins shipped); enum-typed
+bitfield field has NO refusal (pair, pinned); gate CL-alone '+0' was
+the weak-stub number (own sweep +72). F-ROW CARRIES: g_scalar file-
+scope CL LOUDER row (pair-pinned), g_cl_nested + k06 quieter rows
+(tip-precedent, pinned; k06 LOUD message names its class honestly,
+first-wall volume 0). sim-bf-v1 law-failure + BF2 recovery named at
+COMMIT-2 row — the pre-wave sweep CAUGHT what the combo would have
+shipped silent (-2). NEXT: the 279-crowd statement-expr-lvalue class
+owns the next wave; link-stage carries 155 names. Commits: 1a7e4a1,
+9dd32d4, 3676994, 46e3ed7, this close. Evidence:
+.tmp/m4-wt/out/evidence-m4wt.md (+ sweeps/laws/walk/nmleg logs).
+Commit author: code (MC 12736) via -c flags; git config NEVER touched.
