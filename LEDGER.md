@@ -302,3 +302,18 @@ spot at "i"-operands PRE-EXISTING (S5/L4 family, w09 posture law),
 NAMED not fixed (scope). Tests test_core_m4ws1.py 7 legs (pair table
 + stream pin + interaction TU anon-inside-asm-goto-splice + global
 advance regression arm).
+COMMIT-3 — percpu addressing law table PINNED (MEASURED-first, gcc
+11.4 -Os own rows p01-p09 + this wave's pair legs): what the corpus
+actually rides is the percpu SE + typeof + EXPLICIT-`%gs`-asm idiom
+(precpu.h spelling), NOT the C address-space keyword — own-hands
+census: `__seg_gs` / `__seg_fs` / `this_base` appear in 0 of the 706
+pinned streams (absence NAMED; there is nothing corpus-reachable to
+extend — the EXTEND-if-present clause reports: NOT present). The
+keyword stays a NAMED LOUD parse wall (gcc rc0 / blcc rc2 pinned as a
+diverge row, volume 0). RUN-PAIRS: read idiom fault-pair (-11 == -11
+at %gs base 0 — the run of the FAULT is the user-space observable);
+write sizes b/w/l/q posture pair; percpu+__here interaction (the
+191-crowd's real family) pair. Tests: tests/test_core_m4ws3.py 4
+legs, 4-green @COMMIT-2-bytes (measured BEFORE committing: the %gs
+idioms ALREADY pair — this commit carries the LAW PINS, zero code
+change named honestly). Plain tier 1742-0-108.
