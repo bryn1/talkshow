@@ -343,3 +343,22 @@ TIER 1850-0-0 lab-pass @b00e8a7 production bytes (1828 + 22 W-S legs,
 tier completed::success @b00e8a7 (44676431813). SUITE FLIPS NAMED 3
 (zsize empty-struct posture + wp1/wr1 i8259 pins, flip precedent).
 NEXT: the 'construct' 322-crowd owns the next wave.
+
+M4 W-T (MC 12736, card 12404.2.99) SET per AMENDMENT-21: (1) CL
+nested-brace normalization at the _norm ONE home; (2) BUILD_BUG crowd
+anon/enum fact-hoist at the block-stmt seam. PRE-WAVE SIM owns the
+bitfield unlock measurement (gate-named UNMEASURED gap row).
+M4 W-T COMMIT-0 (MC 12736, gate 12721 LEG3-note recommendation):
+g05/g07 quieter-than-gcc class gets its LOUD twin AT THE ONE
+classifying place — codegen _label_ref (goto AND &&label route
+through it): a `({...})` group that DECLARES a name via `__label__`
+scopes the USE to the group — the resolved definition must live IN
+the group (gcc 11.4: "label 'h' used but not defined", measured own
+hands BOTH rows incl the &&-address twin and the root-shadow row).
+The twin REPLACES: the silent outward `jmp`. Quiet twins pinned
+pair: outward goto WITHOUT an in-group declaration; declare+define
+in-group; deeper-group use of an outer declared name (outward walk
+unchanged; §2.4d jump-INTO law untouched). CORPUS VOLUME 0 leg:
+`goto __here` = 0 over the 706 pinned streams (own re-measure).
+RED-first: 4 LOUD legs RED at tip -> 8-green; plain tier
+1750-0-108 (seal 1742 + 8 legs, 0 failed).

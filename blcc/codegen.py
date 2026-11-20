@@ -192,6 +192,13 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin, InlinerMixin):
         dups: Dict[object, str] = {}       # (scope, name) ⇒ seen once
         out: Dict[str, str] = {}
         self._se_defs: Dict[int, Dict[str, str]] = {}
+        self._se_decls: Dict[int, set] = {}    # M4 W-T: names the group
+        # DECLARED via `__label__` — the scoped-USE law keys on these:
+        # a use inside a group that DECLARES the name resolves ONLY to
+        # the group's own definition (gcc: "label 'h' used but not
+        # defined" even when root/outer defines it — g05/g07 LOUD twin,
+        # the ONE place is _label_ref below).
+        self._se_chain: List[int] = []         # active group scopes
         self._lbl_depth: Dict[str, int] = {}
 
         def define(s, scope, depth):
@@ -214,6 +221,10 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin, InlinerMixin):
 
         def walk(nodes, depth, scope):
             for s in nodes:                       # document order ⇒ k
+                if isinstance(s, ast.LabelDecl) and scope is not None:
+                    # M4 W-T: a group's `__label__` DECLARATION scopes
+                    # the NAME to the group — record it for _label_ref.
+                    self._se_decls.setdefault(scope, set()).update(s.names)
                 if isinstance(s, ast.Label):
                     define(s, scope, depth)
                 if isinstance(s, ast.StmtExpr):
@@ -248,12 +259,14 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin, InlinerMixin):
             self.fn_labels = dict(saved_lbl)      # group's defs shadow
             self.fn_labels.update(se)             # outward (innermost-
         self._se_depth += 1                       # wins, l11 measured)
-        try:
+        self._se_chain.append(id(n))              # M4 W-T: active scope
+        try:                                      # stack for the USE law
             for st in n.stmts:
                 self._stmt(st)
             if with_value:
                 self._emit_expr(n.value)
         finally:
+            self._se_chain.pop()
             self._se_depth -= 1
             self.fn_labels = saved_lbl
             self.fn.locals = saved
@@ -278,6 +291,21 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin, InlinerMixin):
         if lbl is None:
             self._err(at, "label '{}' used but not defined (§2.5)".format(
                 name), name)
+        if self._se_chain and \
+                name in self._se_decls.get(self._se_chain[-1], ()) and \
+                name not in self._se_defs.get(self._se_chain[-1], {}):
+            # M4 W-T (MC 12736): the g05/g07 LOUD twin, AT THIS ONE
+            # classifying place (goto AND &&label route through here).
+            # The innermost ACTIVE group DECLARED the name — the name
+            # is SCOPED to the group, so a use in-group resolves ONLY
+            # to an in-group definition; an outer/root def does not
+            # count (gcc 11.4: "label 'h' used but not defined").
+            # A group that declares NOTHING keeps today's outward walk
+            # (wt0d/wt0f pair legs); §2.4d jump-INTO law untouched.
+            self._err(at, "label '{}' used but not defined (§2.5 — "
+                      "declared __label__ in the statement expression, "
+                      "no definition IN the group; gcc LOUD twin)".format(
+                          name), name)
         if self._lbl_depth.get(name, 0) > self._se_depth:
             self._err(at, "jump INTO a statement-expression is rejected "
                       "(§2.4d — mirror of the gcc error)", name)
