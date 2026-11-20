@@ -2460,13 +2460,9 @@ class Parser(AsmParseMixin, CompatLawMixin):
                 break
             init = self.parse_initializer() if self.s.accept_punct("=") else None
             if init is not None:
-                if isinstance(init, ast.CompoundLit) and \
-                        isinstance(self._unqual(ty),
-                                   (ast.ArrayType, ast.StructType)):
-                    # §1 row 11 in initializer position: gnu89 makes an
-                    # aggregate object initialized from a compound literal
-                    # byte-identical to writing the brace list — use it.
-                    init = init.init
+                # M4 W-T COMMIT-1: the §1 row 11 decl-position unwrap
+                # MOVED into _norm_init (ONE home, now at every depth)
+                # — the byte-identical law is stated ONCE.
                 init = self._norm_init(ty, init, pos)   # §1 row 10
             if is_extern and init is None and not at_file:
                 # an extern LOCAL re-declares a file-scope object; the
@@ -2863,6 +2859,21 @@ class Parser(AsmParseMixin, CompatLawMixin):
         runs MIX with nested paths by RE-WRAPPING the tail ([0].hi = 5 →
         index here, `.hi` descends into the element's own normalization)."""
         ty = self._unqual(ty)
+        # M4 W-T COMMIT-1 (MC 12736): the §1 row 11 byte-identical law
+        # at EVERY brace level — an AGGREGATE object or MEMBER
+        # initialized from a compound literal measures byte-identical
+        # to writing the brace list (gnu89). The law lived at the
+        # decl-position splice ONLY (parser top level); nested depths
+        # never saw it, and `(struct N){ (struct M){4} }` SILENTLY
+        # stored the member's ADDRESS (measured at tip bytes: answers
+        # 82 vs gcc 6 — the gate's t06 row, now measured own hands).
+        # THE LOUD REFUSAL THIS REPLACES: at nested depths the raw CL
+        # reached the _expr emitter (`cannot emit expression, found
+        # 'construct'` — the walk stopper); the unwrap makes depth
+        # behave like depth 0, at the ONE normalization home.
+        if isinstance(init, ast.CompoundLit) and \
+                isinstance(ty, (ast.ArrayType, ast.StructType)):
+            init = init.init
         if isinstance(init, ast.Desig):
             # re-wrapped nested path ([0].hi = 5 descends here as a bare
             # designator run): same brace-level normalization
@@ -2873,7 +2884,24 @@ class Parser(AsmParseMixin, CompatLawMixin):
                            "non-aggregate type (§1 row 10)")
             return init
         if not any(isinstance(it, ast.Desig) for it in init.items):
-            return init                          # positional: as written
+            # M4 W-T COMMIT-1 (MC 12736): positional at THIS brace
+            # level says nothing about the levels BELOW — the gnu89
+            # spin-init crowd writes `{ { .rlock = { .raw_lock = {} } } }`:
+            # a positional OUTER hiding a DESIGNATED inner. The raw
+            # Desig node reaching the _expr emitter is the
+            # `cannot emit expression, found 'construct'` wall — 321
+            # first-blockers, the walk stopper at xarray.h:377:79
+            # (init/main.o). ONE law, this function, no second emitter:
+            # recurse the normalization to member/element depth.
+            if isinstance(ty, ast.ArrayType):
+                return ast.InitList(init.file, init.line, init.col, tuple(
+                    self._norm_init(ty.inner, it, at) for it in init.items))
+            _sl = self._init_slots(ty)
+            if _sl is None:
+                return init                      # scalar: as written
+            return ast.InitList(init.file, init.line, init.col, tuple(
+                self._norm_init(_sl[i][1], it, at) if i < len(_sl) else it
+                for i, it in enumerate(init.items)))
         pos = init
         if isinstance(ty, ast.ArrayType):
             esz = self._csize(ty.inner)

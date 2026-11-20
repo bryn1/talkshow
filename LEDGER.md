@@ -362,3 +362,24 @@ unchanged; §2.4d jump-INTO law untouched). CORPUS VOLUME 0 leg:
 `goto __here` = 0 over the 706 pinned streams (own re-measure).
 RED-first: 4 LOUD legs RED at tip -> 8-green; plain tier
 1750-0-108 (seal 1742 + 8 legs, 0 failed).
+M4 W-T COMMIT-1 (MC 12736, numbers PRE-BUILD own hands): CL nested-brace
+normalization at the ONE _norm_init home. Positional recursion (gnu89
+`{ { .rlock = … } }`: positional OUTER hiding DESIGNATED inner) + the
+§1 row 11 byte-identical unwrap MOVED from the decl-position splice
+into _norm_init (ONE home now at EVERY depth — the dup REPLACED).
+RED-first 5 legs (xarray VERBATIM assign = walk stopper xarray.h:377:79;
+k07 nested-CL-in-CL = SILENT MIS-COMPUTE at tip bytes, gcc 6 vs blcc 82
+— the gate t06 row measured own hands; global nested-desig fold;
+init_main.c.i stream pin: 'construct' EATEN). PRE-WAVE SIM (own sweeps,
+corpus sha 22655bf48c05bd7a both ends): base 78 SET-equal to gate
+sealed; sim-cl 150 = +72 LOST 0, all 72 construct-first (gate's
+counterfactual '+0' was the weak-stub number — named). sim-bf v1
+LAW-FAILED on its own sweep: 76 = 0/-2 (full-drain seam let a NESTED
+compound STEAL the enclosing if-condition's pending fact — copy_mc +
+usercopy lost); BF2 OWNERSHIP-STACK (every seam owns only facts minted
+past its own mark) recovers both, 13 unit-legs green, re-sweep running.
+Behind-walls NAMED (sim-cl, clean coords): anon-BUILD_BUG 283 (COMMIT-2),
+5-byte struct-load 28, global-init 22, string-global 21, choose_expr 37.
+Plain tier 1771-6-108: 6 ALL NAMED = 4 wt2 RED-first legs (uncommitted
+file, COMMIT-2's) + 2 wall-queue FLIPS wp1/wr1 ('construct' landing
+eaten; final flip lands with COMMIT-2, W-S flip precedent).
