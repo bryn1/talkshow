@@ -400,3 +400,15 @@ witnesses EATEN. SUITE FLIPS NAMED 2 (wp1/wr1 i8259 pin, third flip of
 that pin: :22228:70 construct -> :35846:10 not-an-addressable-l-value/
 statement-expression, combo-sweep measured). Plain tier 1782-0-108
 (1742 seal + 45 wave legs, exact).
+M4 W-T COMMIT-3 (MC 12736, zero code change — named honestly): the
+interaction table. goto-into-group x CL object PAIRS; union-member x
+nested-CL PAIRS; ?: -arm x CL temp PAIRS (all measured gcc-paired).
+NAMED PRE-EXISTING LOUD postures pinned so a W-F successor flips a
+LEG, not a posture silently: bitfield member from a CL brace-list and
+bitfield-struct assignment (measured WALL at BASE bytes too — W-F's
+UNSUPPORTED-stays-LOUD row in force). Combo witnesses entry_common +
+i8259: BOTH own classes eaten, wall on the NAMED carry
+(statement-expr-as-lvalue) — the pairing proof at stream level.
+Teeth (3 plants on committed bytes, RED named, restored): seam-mark
+-> wt2-witness + wr1 RED; positional-recursion -> the five wt1 RED-
+first legs RED verbatim; scoped-label twin -> wt0 loud legs RED.
