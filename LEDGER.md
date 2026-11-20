@@ -226,9 +226,14 @@ answers %rax; ORDER-UNDEFINED twin values STAND); TRANSITIVE SITE LAW
 (w02, slot-only guard = soundness); asmgen: map answers PURE-imm only,
 an ALT constraint ("iq" — wk2 %b1 verbatim) keeps the S2 reg posture;
 _exprs_of expression-root repair (global-init address-taken was blind).
-REFUSES NO MORE named: value sites, asm-goto bodies. STILL REFUSES,
+REFUSES NO MORE named: value sites, asm-goto bodies, StmtExpr bodies
+(CORRECTED M4 W-S COMMIT-0, MC 12716, gate 12715 F-1 — the earlier
+"STILL REFUSES … StmtExpr bodies" row was CONTRADICTED: its guard was
+structurally DEAD, the clause REMOVED; such bodies SPLICE and PAIR, gate
+x15 own-hands re-measured; nested-asm-goto-in-stmtexpr stays LOUD via
+the label-law clauses — the TRUE guard, probe f1_se1). STILL REFUSES,
 named: outs+goto (w05 gcc value-DIVERGE g=33 b=41, pre-existing family),
-C goto (w03), below-top labels, StmtExpr bodies, zero-site (measured
+C goto (w03), below-top labels, zero-site (measured
 copy-keeps law — the 14-stream 'i' remnant, suite-pinned). CORPUS RE-
 SWEEP FINAL (own census, corpus-unchanged both ends): accepts 50 -> 50
 HONEST (0 gained, 0 LOST, set-EQUAL) — the 54-sim ceiling was the copy-
@@ -252,3 +257,22 @@ flips NAMED 3 (multi_site value, corpus site, m2 §2.8 retarget). Suites:
 plain 1720-0-108 @46ee30e (Actions success); kernel 1828-0-0 lab-pass @
 production bytes 46ee30e (1813 seal-set + 15 W-R legs); this close commit
 LEDGER-only, git diff 46ee30e..HEAD -- blcc/ EMPTY.
+
+M4 W-S (MC 12716, card 12404.2.95) COMBINED JUMP WAVE per AMENDMENT-20
+(pairing law: the anon-struct ALONE simmed +0; the jump needs the SET).
+COMMIT-0 — gate 12715 F-1 REPAIR: the W-R "STILL REFUSES … StmtExpr
+bodies" law row was CONTRADICTED (guard clause structurally DEAD — own
+hands: _is_stmt(StmtExpr) measures TRUE, the gate's False was its probe
+hitting StmtExpr's positional file:line:col; the REAL deadness is the
+WALKER: stmt_children returns [] for VarDecl/ExprStmt, a StmtExpr lives
+only in expression fields, so _stmts_of can never surface one). The
+clause is REMOVED (named: not made reachable — the body shape MEASURES
+PAIR, gate x15 re-run own hands gex=bex=2; refusing a measured-pair
+body would add LOUDER-than-gcc volume for zero safety — the dangerous
+nested-asm-goto shape is owned by the label-law clauses, measured:
+se1-twin stays LOUD at the copy's S5/L4 'i' wall, never silent). Tests
+test_core_m4ws0.py 3 legs (pair leg RED-revives any REACHABLE re-add;
+walker unit pins WHY the clause was dead). Stale-claim grep-to-zero:
+LEDGER + test_core_m4wr1.py docstring rewritten, message string
+grep-zero repo-wide. PRE-WAVE SIM + MEASURE-FIRST tables: own
+instruments .tmp/m4-ws (numbers in the CLOSE row below).

@@ -174,8 +174,18 @@ class InlinerMixin:
             # W-R label law (cpufeature.h:187 shape): targets sit
             # FLAT at the body top, no other label anywhere (below-
             # top = `({...})` groups stay CALL law; §2.5 not re-lit).
-            if any(isinstance(s, ast.StmtExpr) for s in _stmts_of(fd.body)):
-                return "asm-goto body with a statement-expression"
+            # W-S COMMIT-0 (MC 12716, gate 12715 F-1): the former clause
+            # "asm-goto body with a statement-expression" is REMOVED —
+            # structurally dead: _stmts_of surfaces only stmt_children
+            # outputs and stmt_children never yields an expression-
+            # position StmtExpr (VarDecl/ExprStmt yield []), so the
+            # isinstance test could never fire. The shape it NAMED
+            # measures PAIR (gate x15; suite leg test_ws0_stmtexpr_body_
+            # splices): asm-goto NESTED inside a `({...})` stays LOUD
+            # through the clauses below — the goto-name walk is
+            # statement-based, so a nested goto never claims a flat
+            # label and the plain-label clause owns the shape (own
+            # probe f1_se1: refusal + the copy's S5/L4 'i' twin).
             top = {s.name for s in fd.body.body
                    if isinstance(s, ast.Label)}
             if labels != top:

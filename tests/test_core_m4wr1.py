@@ -13,8 +13,12 @@ body whose target labels sit FLAT at the body top is spliced; (b) VALUE
 test_wp1_multi_site_value pin FLIPPED with the wave, its VALUES pair
 unchanged). What still refuses (named): `asm goto` WITH outputs (own
 law table w05: gcc accepts with a value DIVERGE), a C `goto` in the
-body (w03 keeps the copy), plain labels, labels below top level,
-statement-expression bodies.
+body (w03 keeps the copy), plain labels, labels below top level.
+(Statement-expression bodies: the refusal first NAMED here was
+CONTRADICTED at gate 12715 F-1 — its guard clause was structurally
+DEAD; W-S COMMIT-0 REMOVED it and pinned the measured law — such
+bodies SPLICE and PAIR, nested-asm-goto stays LOUD — in
+tests/test_core_m4ws0.py.)
 
 THE LAWS the legs pin, from the own-hands table (m4-wr/out/laws-tip.txt,
 gcc 11.4 gnu89 -Os REC oracle — rows BEYOND the W-Q gate's 10):
