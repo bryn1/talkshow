@@ -215,3 +215,40 @@ file-definition identity. Suites: plain 1704-0-108 at COMMIT-2 content;
 kernel tier: lab-pass launched at 127ff5f (production bytes of this
 final commit — `git diff 127ff5f..HEAD -- blcc/` EMPTY) and RE-RUN at
 this close sha, both rows in .tmp/m4-wq/out/lab-pass*.txt.
+
+M4 W-R CLOSE (MC 12714, card 12404.2.93, this row) — PER-SITE asm-goto
+SPLICE at THE SAME inliner seam (no second pipeline): the cpufeature.h:187
+_static_cpu_has shape SPLICED — asm-goto with FLAT body-top labels per-site
+CLONED with FRESH minted labels (blcc/inlclone.py; w01 per-copy scoping,
+w11 collide-safe; partial-rename = plant P1, 10 NAMED RED); VALUE SEAM —
+the all-sites-STATEMENT law's any(not p) clause refuses no more (epilogue
+answers %rax; ORDER-UNDEFINED twin values STAND); TRANSITIVE SITE LAW
+(w02, slot-only guard = soundness); asmgen: map answers PURE-imm only,
+an ALT constraint ("iq" — wk2 %b1 verbatim) keeps the S2 reg posture;
+_exprs_of expression-root repair (global-init address-taken was blind).
+REFUSES NO MORE named: value sites, asm-goto bodies. STILL REFUSES,
+named: outs+goto (w05 gcc value-DIVERGE g=33 b=41, pre-existing family),
+C goto (w03), below-top labels, StmtExpr bodies, zero-site (measured
+copy-keeps law — the 14-stream 'i' remnant, suite-pinned). CORPUS RE-
+SWEEP FINAL (own census, corpus-unchanged both ends): accepts 50 -> 50
+HONEST (0 gained, 0 LOST, set-EQUAL) — the 54-sim ceiling was the copy-
+DISCARD instrument deleting even zero-site copies; the cpufeature 'i'
+FIRST-WALL CLASS IS EATEN: 483 -> 14; flagship i8259 :10493: -> :11342:
+__here (wp1 pin FLIPPED with the wave, NAMED, 4-pin W-Q precedent); NEW
+top-3: __here 191 / choose_expr 37 / parse-';' 29 (F-4 queue). OWN fresh
+kcopy WALK @final bytes: first RED past cpufeature = spinlock.h:184:58
+anon-struct '<anon@spinlock_types_up.h:25#8>' init/main.o (EXACT predicted
+landing); WALK-STILL-BLOCKED NO_VMLINUX; DC-v4 rc0 (3 sprod EXACT); lab
+untouched 0/0 lines. §6 nm-parity 6 TUs visible-PARITY-OK, UNDEF diffs
+ONLY the already-NAMED W-Q elision families (elision re-check: leg6 8
+rows UNCHANGED, zero new exposure). LAWS: 14-row own table @tip + @final
+(8 wall rows PAIR-VALUE; w12/w14 BOTH-LOUD both trees; .alt byte-parity
+cmp IDENTICAL f5f507000000 + suite leg; w09 -O posture row proves the
+literal is a -Os fold fact; w13 %l off-list too-lax PRE-EXISTING NAMED;
+bonus: AsmStmt.labels tuple inert at emit — template-name resolution).
+TEETH: RED-FIRST 11 NAMED @tip; plants P1 10 RED / P2 2 RED / P3c 5 RED
+/ P4 epilogue-misorder HANG-CAPTURED; plant worktree porcelain 0; suite
+flips NAMED 3 (multi_site value, corpus site, m2 §2.8 retarget). Suites:
+plain 1720-0-108 @46ee30e (Actions success); kernel 1828-0-0 lab-pass @
+production bytes 46ee30e (1813 seal-set + 15 W-R legs); this close commit
+LEDGER-only, git diff 46ee30e..HEAD -- blcc/ EMPTY.
