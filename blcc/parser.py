@@ -2351,8 +2351,11 @@ class Parser(AsmParseMixin, CompatLawMixin):
         # it). MEASURED law table in tests/test_core_m4wh1.py.
         if self._at("__auto_type"):
             return self._parse_auto_type(self.s.next(), is_static, out)
+        pmark = len(self._pending)   # W-T COMMIT-2: own only own facts
         base = self.parse_base_type(decl_sink)
-        out.extend(self._drain_pending())
+        facts = self._pending[pmark:]
+        del self._pending[pmark:]
+        out.extend(facts)
         if self._bare_type_ok and self.s.accept_punct(";"):
             return out  # bare 'struct S;' / 'enum E { ... };' definition
         self._bare_type_ok = False
@@ -2634,8 +2637,11 @@ class Parser(AsmParseMixin, CompatLawMixin):
         # before `typedef` — one law, every position (section rc1, layout
         # = the shipped LOUD-DIV posture, markers drop).
         pre_sink = list(pre_sink)
+        pmark = len(self._pending)   # W-T COMMIT-2: own only own facts
         base = self.parse_base_type(spec_sink)
-        out.extend(self._drain_pending())
+        facts = self._pending[pmark:]
+        del self._pending[pmark:]
+        out.extend(facts)
         while True:
             pos = self.s.peek()
             tsink: List[tuple] = []
@@ -3030,7 +3036,26 @@ class Parser(AsmParseMixin, CompatLawMixin):
     def _block_stmts_until_brace(self) -> Tuple[ast.Node, ...]:
         stmts: List[ast.Node] = []
         while not self.s.at_punct("}"):
+            mark = len(stmts)
+            # M4 W-T COMMIT-2 (MC 12736): OWNERSHIP STACK — _pending is
+            # a stack of UN-OWNED layout facts and a seam owns ONLY
+            # what was minted past its OWN mark. A STATEMENT-position
+            # expression mints anon struct/enum facts (the
+            # `sizeof(struct { int:(-!!(e)); })` BUILD_BUG_ON_ZERO
+            # family — 111 first-wall streams at the sealed sweep);
+            # the fact rides IN FRONT of its own item, so codegen
+            # meets the layout before the use. The mark law is not
+            # pedantry: a full drain here lets a NESTED compound STEAL
+            # the enclosing if-condition's fact (measured on the pre-
+            # wave sim sweep: arch_x86/lib/copy_mc + lib/usercopy, two
+            # long-accepted TUs, LOST — the stream then walled
+            # `undefined struct <anon@…>` at the condition).
+            pmark = len(self._pending)
             stmts.extend(self.parse_block_item())
+            if len(self._pending) > pmark:
+                facts = self._pending[pmark:]
+                del self._pending[pmark:]
+                stmts[mark:] = facts + stmts[mark:]
         self.s.expect_punct("}")
         return tuple(stmts)
 

@@ -383,3 +383,20 @@ Behind-walls NAMED (sim-cl, clean coords): anon-BUILD_BUG 283 (COMMIT-2),
 Plain tier 1771-6-108: 6 ALL NAMED = 4 wt2 RED-first legs (uncommitted
 file, COMMIT-2's) + 2 wall-queue FLIPS wp1/wr1 ('construct' landing
 eaten; final flip lands with COMMIT-2, W-S flip precedent).
+M4 W-T COMMIT-2 (MC 12736): the 111-stream BUILD_BUG_ON_ZERO crowd's
+wall was ORDERING, not layout — measured: the 13-row bitfield law
+PAILS AT TIP BYTES (deviation from the brief's W-F-seam premise NAMED;
+rows ride as law pins). Hoist at the ONE block-statement seam + both
+parse_decl arms + typedef arm: OWNERSHIP STACK — a seam owns only
+facts minted past its own mark (full-drain version LAW-FAILED the own
+pre-wave sweep: 0 gain / 2 LOST, nested compounds stealing the
+enclosing if-condition's pending — copy_mc + usercopy; BF2 recovers
+both). Numbers PRE-BUILD (own sweeps): sim-bf BF2 alone +0/-0 (pairing
+law: the anon crowd sits BEHIND construct walls — the gate's UNMEASURED
+row, MEASURED); combo 153 = +75/-0; walk land init_main :32585:2
+5-byte-load (outside SET); queue-behind NAMED: statement-expr-lvalue
+279 NEW TOP (next wave's lever). RED-first 4 legs + i8259/entry_common
+witnesses EATEN. SUITE FLIPS NAMED 2 (wp1/wr1 i8259 pin, third flip of
+that pin: :22228:70 construct -> :35846:10 not-an-addressable-l-value/
+statement-expression, combo-sweep measured). Plain tier 1782-0-108
+(1742 seal + 45 wave legs, exact).

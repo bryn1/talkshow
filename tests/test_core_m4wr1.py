@@ -132,6 +132,12 @@ def test_wr_stream_cpufeature_wall_flipped():
     law eats the `__here` wall (site :11342: and CLASS asserted GONE);
     the stream lands on the next behind-class, expression-'construct'
     at clean :22228:70 (a NEW top-class row of the W-S close sweep).
+    M4 W-T (MC 12736) FLIPPED THIS PIN AGAIN: COMMIT-1 eats the
+    expression-'construct' wall (site :22228:70 and CLASS asserted
+    GONE — the queue law in action); the stream lands on the NEW
+    top-class behind-row, `not an addressable l-value` at clean
+    :35846:10 (the ({...})-as-lvalue class — the combo sweep's 279-
+    stream top blocker, the next wave's named lever).
     The copy is GONE from the object the compile never reaches — the
     wall could not silently stay: path-gated pinned corpus."""
     if not os.path.isdir(PINNED):
@@ -147,8 +153,12 @@ def test_wr_stream_cpufeature_wall_flipped():
     assert ":11342:" not in first and "label '__here' used but not " \
         "defined" not in first, "the __here wall (W-R behind-class) " \
         "must be EATEN by W-S COMMIT-2: " + first[:300]
-    assert ":22228:70" in first and "'construct'" in first, \
-        "wall must land on the W-S behind SITE+CLASS: " + first[:300]
+    assert "found 'construct'" not in first, \
+        "the expression-construct wall (W-S behind-class) must be " \
+        "EATEN by W-T COMMIT-1: " + first[:300]
+    assert ":35846:10" in first and "not an addressable l-value" \
+        in first and "statement expression" in first, \
+        "wall must land on the W-T behind SITE+CLASS: " + first[:300]
 
 
 # corpus spot: streams whose TIP first-wall was the cpufeature 'i'

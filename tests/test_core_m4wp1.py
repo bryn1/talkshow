@@ -401,12 +401,24 @@ def test_wp1_corpus_wall_moved():
     # stream lands on the next behind-class, the expression-'construct'
     # wall at clean :22228:70 (a NEW top-class row of the W-S close
     # sweep, named there).
+    # M4 W-T (MC 12736) FLIPPED THIS PIN A THIRD TIME: COMMIT-1 eats
+    # the expression-'construct' wall — the ":22228:70" SITE and the
+    # "'construct'" CLASS are asserted GONE (queue law, W-T combo
+    # sweep numbers) — and the stream lands on the combo sweep's NEW
+    # top-class behind-row, `not an addressable l-value` (the
+    # ({...})-as-lvalue class) at clean :35846:10 — the 279-stream
+    # blocker named as the next wave's lever.
     assert ":10493:" not in first and "constraint 'i' operand is not a " \
         "compile-time" not in first, "the cpufeature wall came back: " \
         + first[:300]
     assert ":11342:" not in first and "label '__here' used but not " \
         "defined" not in first, "the __label__ wall came back: " \
         + first[:300]
-    assert ":22228:70" in first and "'construct'" in first, \
+    assert "found 'construct'" not in first, \
+        "the expression-construct wall (W-S behind-class) must be " \
+        "EATEN by W-T COMMIT-1: " + first[:300]
+    assert ":35846:10" in first and "not an addressable l-value" \
+        in first and "statement expression" in first, \
         "wall must land on the named behind SITE+CLASS (clean " \
-        ":22228:70 = the expression-construct wall): " + first[:300]
+        ":35846:10 = the statement-expression l-value wall): " \
+        + first[:300]
