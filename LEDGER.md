@@ -276,3 +276,29 @@ walker unit pins WHY the clause was dead). Stale-claim grep-to-zero:
 LEDGER + test_core_m4wr1.py docstring rewritten, message string
 grep-zero repo-wide. PRE-WAVE SIM + MEASURE-FIRST tables: own
 instruments .tmp/m4-ws (numbers in the CLOSE row below).
+COMMIT-1 — EMPTY anon struct COMPLETED at the ONE tag-identity seam:
+the W-Q mint <anon@file:line#N> carries empty definitions untouched;
+the completion is the TWO falsy-keyed defined/incomplete tests in
+blcc/types.py (parser seam was already `is None` — W-Q) → `is None`,
+plus the zero-COPY posture arms _load answers the determinate 0 /
+_store writes NOTHING (gcc -Os measured rc0 rows s14/s15; the value of
+a no-member object is UNOBSERVABLE, identity rides addresses — slot
+min-8 keeps s06/s11b addresses distinct). MEASURE-FIRST at gcc 11.4
+-Os (own instrument .tmp/m4-ws/ws_laws.py → out/laws-gcc.txt): 15
+empty-struct rows s01-s15 (sizeof 0; empty member shifts NOTHING incl.
+packed x W-F s12 { {},long}=8/1; array-of-empty 0; &empty-field ==
+OUTER address s13 = THE spinlock.h:184:58 `&lock->raw_lock` law; nested
+/ params / return / assignment posture; distinct anon-typedef identity
+s11 mint-#N guard). RED-FIRST @tip: 5 NAMED RED before any green
+(out/c1-red-tip.txt). SUITE FLIP NAMED 1: test_zerofam_empty_struct_
+stays_loud pinned the PRE-WAVE LOUD posture the wave's DoD EATS —
+flipped to the measured COMPLETED law (rc0 + sizeof-0 value pair),
+zsize docstring stale claim rewritten; the sibling zerofam legs
+(tentative int[], fam) stay LOUD UNTOUCHED. Queue law CONFIRMED own
+hands at COMMIT-1 bytes: init_main.c.i wall MOVED :11442:58 (anon) ->
+:11498:50 `__label__`/__here class — EXACTLY the pre-wave SIM behind-
+class; boot_compressed_cmdline :10923:45 same; fold-through-LOCAL blind-
+spot at "i"-operands PRE-EXISTING (S5/L4 family, w09 posture law),
+NAMED not fixed (scope). Tests test_core_m4ws1.py 7 legs (pair table
++ stream pin + interaction TU anon-inside-asm-goto-splice + global
+advance regression arm).

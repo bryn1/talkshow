@@ -315,6 +315,17 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin, InlinerMixin):
             return
         sz = self._size(self._decay(ty), at)
         uns = is_unsigned(ty) and sz < 8
+        if sz == 0:
+            # M4 W-S (MC 12716): the EMPTY struct (`typedef struct { }
+            # arch_spinlock_t`, spinlock_types_up.h:25) has NO CONTENT:
+            # gcc -Os copies zero bytes and leaves the register
+            # undefined; the value is UNOBSERVABLE (an object with no
+            # member has nothing to read — identity rides ADDRESSES,
+            # which the slot/lea paths never load). blcc answers the
+            # determinate 0 (measured posture pairs: rc0 rows s14/s15
+            # of the W-S law table, .tmp/m4-ws/out/laws-gcc.txt).
+            self._e("movq $0, %rax")
+            return
         if sz == 1:
             self._e("movzbq {}, %rax".format(mem) if uns
                     else "movsbq {}, %rax".format(mem))
@@ -344,6 +355,12 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin, InlinerMixin):
             self._e("movq {}, {}".format(tr, mem8(mem)))
             return
         sz = self._size(self._decay(ty), at)
+        if sz == 0:
+            # W-S (MC 12716): storing a zero-size object writes ZERO
+            # BYTES (gcc -Os: empty-struct assignment copies nothing,
+            # measured rc0 s15). The two objects keep their OWN
+            # addresses (identity law, s06/s11b legs).
+            return
         if sz not in _STORE_OP:
             self._err(at or self.tu, "'struct assignment' is not in the subset "
                       "(§5) — assign member by member", "store")

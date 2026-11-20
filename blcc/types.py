@@ -680,7 +680,15 @@ class TypeMap(CompatLawMixin):
             return self._align(ty.inner, at)
         if isinstance(ty, ast.StructType):
             members = self.structs.get(ty.tag)
-            if not members:
+            # M4 W-S (MC 12716): the DEFINED/INCOMPLETE law keys on
+            # `is None` (the registry stores `()` for a DEFINED EMPTY
+            # struct — the spinlock_types_up.h:25 `typedef struct { }
+            # arch_spinlock_t` class; the falsy test conflated empty-
+            # defined with incomplete — gate s02-s07 law table). gcc
+            # -Os MEASURED: sizeof(struct {}) = 0, align 1, empty
+            # member occupies zero bytes (next member keeps its
+            # offset), &empty-member == outer address.
+            if members is None:
                 self._err(at or ty, "undefined struct '{}' — only fully defined "
                           "structs are in the subset (§4)".format(ty.tag), ty.tag)
             packed = self._attr_packed(ty)
@@ -769,7 +777,9 @@ class TypeMap(CompatLawMixin):
         width, unit type name) as the 5th element — never in the byte
         `offs` map: addressing/offsetof a bitfield stays LOUD (§2.13)."""
         members = self.structs.get(ty.tag)
-        if not members:
+        # W-S (MC 12716): `()` (defined EMPTY struct) LAYS OUT as size
+        # 0/align 1 (gcc -Os measured); only `None` (incomplete) walls.
+        if members is None:
             self._err(at or ty, "undefined struct '{}' — only fully defined "
                       "structs are in the subset (§4)".format(ty.tag), ty.tag)
         if not hasattr(self, "_bf_cache"):

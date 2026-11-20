@@ -9,11 +9,14 @@ zsz2}.c, -O0 and the audit at -Os agree): `y: .zero 1` + `.size y, 0` —
 the label advances 1 byte while the symbol stays size 0 — so
 after@y+1, after2@a+1, after4@e0+1. The blcc twin (uniform .align 8) must
 keep every pair at DISTINCT addresses with ≥1 byte advance. Postures the
-gate states as correct and this file pins UNCHANGED: an empty struct stays
-LOUD (§5), a local `int a[0];` keeps its frame-slot posture, and the
-tentative `int tent[];` edge stays LOUD (gcc completes it to 4 bytes
-— measured; blcc's §4 rejection is the shipped LOUD posture, not a silent
-class).
+gate states as correct: a local `int a[0];` keeps its frame-slot posture,
+and the tentative `int tent[];` edge stays LOUD (gcc completes it to 4
+bytes — measured; blcc's §4 rejection is the shipped LOUD posture, not a
+silent class). THE EMPTY-STRUCT LINE WAS SUPERSEDED by M4 W-S (MC 12716):
+the §5 "empty struct stays LOUD" posture was REPLACED by the completed
+gcc-11.4 law (sizeof 0, rc0 — the spinlock_types_up.h:25 class); the
+leg below was FLIPPED with the wave (W-R flip precedent) and now pins
+the COMPLETED posture; the distinct-address law above stays armed on it.
 """
 import os
 import re
@@ -198,21 +201,35 @@ int main(void) {
 
 # ---- postures the gate states as CORRECT — pinned unchanged ----------------
 
-def test_zerofam_empty_struct_stays_loud():
-    # gcc accepts size-0 EMPTY structs; blcc rejects their USE LOUD (§4
-    # "undefined struct"). The gate: "empty struct `struct es {};` — blcc
-    # LOUD (undefined struct) — §5-compliant, not a hole". Fix must not
-    # flip this posture.
+def test_zerofam_empty_struct_completed():
+    # M4 W-S FLIP (MC 12716, W-R flip precedent): this leg pinned the
+    # PRE-WAVE posture ("empty struct use stays LOUD §4") — the W-S
+    # wave's DOA is exactly this completion (spinlock_types_up.h:25
+    # `typedef struct { } arch_spinlock_t`, the 278-stream first wall).
+    # The MEASURED gcc 11.4 -Os law (own table .tmp/m4-ws/out/
+    # laws-gcc.txt rows s01-s15) answers rc0 with sizeof 0; the leg now
+    # pins the COMPLETED posture and its size answer — the sibling
+    # zerofam legs (tentative int[], fam) stay LOUD and UNTOUCHED.
     p = _fresh("zse")
-    src_path = p + ".c"
-    open(src_path, "w").write("struct es { };\nstruct es es0;\n"
-                              "int main(void){return 0;}\n")
-    rb = subprocess.run([sys.executable, "-m", "blcc", src_path, "-o",
-                         os.devnull], cwd=ROOT, capture_output=True,
+    open(p + ".c", "w").write("struct es { };\nstruct es es0;\n"
+                              "int main(void){return (int)sizeof(es0);}\n")
+    g = subprocess.run(["gcc", "-std=gnu89", "-Os", "-no-pie", p + ".c",
+                        "-o", p + ".g"], capture_output=True, text=True,
+                       timeout=60)
+    assert g.returncode == 0, "law row must be valid C: " + g.stderr
+    rb = subprocess.run([sys.executable, "-m", "blcc", "-c", p + ".c",
+                         "-o", p + ".o"], cwd=ROOT, capture_output=True,
                         text=True, timeout=60)
-    os.remove(src_path)
-    assert rb.returncode == 2, \
-        "empty struct must stay LOUD, got rc={}".format(rb.returncode)
+    assert rb.returncode == 0, \
+        "empty struct completion regressed: " + rb.stderr[:200]
+    lr = subprocess.run(["gcc", "-no-pie", p + ".o", "-o", p + ".b"],
+                        capture_output=True, timeout=60)
+    assert lr.returncode == 0
+    env = {"PATH": "/usr/bin:/bin"}
+    assert subprocess.run([p + ".b"], env=env).returncode == \
+        subprocess.run([p + ".g"], env=env).returncode == 0, "sizeof 0 pair"
+    for ext in (".c", ".g", ".o", ".b"):
+        os.remove(p + ext)
 
 
 def test_zerofam_tentative_incomplete_array_stays_loud():
