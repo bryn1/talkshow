@@ -395,12 +395,18 @@ def test_wp1_corpus_wall_moved():
     # class "'i' operand") are asserted GONE — and the stream lands on
     # the NAMED behind-class, the `__here` label wall (the 193-stream
     # crowd; F-4 WALL-IS-A-QUEUE), clean-stream :11342:.
+    # M4 W-S (MC 12716) FLIPPED THIS PIN AGAIN: COMMIT-2's scoped
+    # `__label__` law eats the `__here` wall — the ":11342:" SITE and
+    # the "used but not defined" CLASS are asserted GONE — and the
+    # stream lands on the next behind-class, the expression-'construct'
+    # wall at clean :22228:70 (a NEW top-class row of the W-S close
+    # sweep, named there).
     assert ":10493:" not in first and "constraint 'i' operand is not a " \
         "compile-time" not in first, "the cpufeature wall came back: " \
         + first[:300]
-    assert ":11342:" in first, \
-        "wall must land on the named behind SITE (clean :11342: = " \
-        "the __here crowd): " + first[:300]
-    assert "label '__here' used but not defined" in first, \
-        "wall must stand on the named NEXT class (__here): " \
+    assert ":11342:" not in first and "label '__here' used but not " \
+        "defined" not in first, "the __label__ wall came back: " \
         + first[:300]
+    assert ":22228:70" in first and "'construct'" in first, \
+        "wall must land on the named behind SITE+CLASS (clean " \
+        ":22228:70 = the expression-construct wall): " + first[:300]

@@ -128,6 +128,10 @@ def test_wr_stream_cpufeature_wall_flipped():
     compile-time constant` at clean :10493: (the W-Q F-2 site pin);
     W-R moves it ONTO the named behind-class — the `__here` label wall
     at clean :11342: (the 193-stream crowd, F-4 WALL-IS-A-QUEUE).
+    M4 W-S (MC 12716) FLIPPED THIS PIN: COMMIT-2's scoped `__label__`
+    law eats the `__here` wall (site :11342: and CLASS asserted GONE);
+    the stream lands on the next behind-class, expression-'construct'
+    at clean :22228:70 (a NEW top-class row of the W-S close sweep).
     The copy is GONE from the object the compile never reaches — the
     wall could not silently stay: path-gated pinned corpus."""
     if not os.path.isdir(PINNED):
@@ -140,9 +144,11 @@ def test_wr_stream_cpufeature_wall_flipped():
     assert ":10493:" not in first and "struct declaration in block " \
         "scope" not in first, "the cpufeature/W-Q walls came back: " \
         + first[:200]
-    assert ":11342:" in first, "wall must land on the NAMED behind " \
-        "site (clean :11342: = the __here crowd): " + first[:300]
-    assert "label '__here' used but not defined" in first, first[:300]
+    assert ":11342:" not in first and "label '__here' used but not " \
+        "defined" not in first, "the __here wall (W-R behind-class) " \
+        "must be EATEN by W-S COMMIT-2: " + first[:300]
+    assert ":22228:70" in first and "'construct'" in first, \
+        "wall must land on the W-S behind SITE+CLASS: " + first[:300]
 
 
 # corpus spot: streams whose TIP first-wall was the cpufeature 'i'

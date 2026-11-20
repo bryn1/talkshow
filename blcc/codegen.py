@@ -23,7 +23,7 @@ from blcc.data import DataEmitter
 from blcc.expr_codegen import REG_ARGS, ExprEmitter, _fp
 from blcc.i128 import mem8   # W-B: hi-limb address form (i128.py law)
 from blcc.inliner import InlinerMixin   # M4 W-P (MC 12705): THE inline pass
-from blcc.types import TypeMap, _roundup8, is_i128, is_unsigned, stmt_children
+from blcc.types import stmtexprs_in_expr, TypeMap, _roundup8, is_i128, is_unsigned, stmt_children
 from blcc.asmgen import AsmGenMixin
 from blcc import predef
 
@@ -56,28 +56,6 @@ class _FnState:
         # callee-saved save slot for the §3.6-T bracket of this function.
         self.regasms: Dict[str, tuple] = {}
         self.asm_t: Dict[str, int] = {}
-
-
-def _stmtexprs_in_expr(s):
-    """Statement-expressions reachable through a node's EXPRESSION fields
-    (VarDecl.init, ExprStmt.expr, Return.value, binary operands, call
-    args…). Structural statement fields (stmts/body/then/orelse/stmt) are
-    NOT descended — the statement walk already owns those (one owner, no
-    double-registered labels)."""
-    out = []
-    if not dataclasses.is_dataclass(s):
-        return out
-    for f in dataclasses.fields(s):
-        if f.name in ("stmts", "body", "then", "orelse", "stmt"):
-            continue
-        v = getattr(s, f.name, None)
-        items = v if isinstance(v, (tuple, list)) else (v,)
-        for x in items:
-            if isinstance(x, ast.StmtExpr):
-                out.append(x)
-            elif isinstance(x, ast.Node):
-                out.extend(_stmtexprs_in_expr(x))
-    return out
 
 
 class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin, InlinerMixin):
@@ -194,38 +172,64 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin, InlinerMixin):
         return stmt_children(s)
 
     def _collect_labels(self, fd: ast.FuncDecl):
-        """Enumerate every C label of the function body (flat function-wide
-        namespace, §2.5) and assign the deterministic M2-C1 name
-        `.L<fn>_<label>_<k>`. Duplicate label = sema error (gcc: `duplicate
-        label 'A'`). Undefined goto/&&label targets resolve to LOUD through
-        _label_ref — never a silently-fresh name (M2-C4). `_lbl_depth`
-        records the statement-expression nesting of each definition: §2.4(d)
-        makes a goto/&&label from OUTSIDE into a `({...})` a mirror-reject
-        (gcc rejects the jump INTO the braced group)."""
-        seen: Dict[str, int] = {}
+        """Enumerate every C label of the function body and assign the
+        deterministic M2-C1 name `.L<fn>_<label>_<k>`. §2.5 keeps the
+        FLAT function-wide namespace for plain labels; M4 W-S (MC 12716)
+        adds the SCOPED law for `({...})` groups (l01-l13 measured at
+        gcc 11.4 -Os, .tmp/m4-ws/out/laws-gcc.txt): a label DEFINED
+        inside a group is LOCAL to it — two groups may define the SAME
+        name (l13), a root label may share it (l11) — while the group
+        itself may NOT define it twice (l12: duplicate LOUD). Group defs
+        register in `_se_defs[id(group)]` and ride `_se_run`'s overlay;
+        the returned flat map is the root scope. `_lbl_depth` records
+        the MIN definition depth per name: §2.4(d) makes a goto/&&label
+        from OUTSIDE into a `({...})` a mirror-reject (gcc rejects the
+        jump INTO the braced group) — a name whose only defs are deeper
+        than the point of use is never silently resolved. Undefined
+        targets resolve to LOUD through _label_ref — never a
+        silently-fresh name (M2-C4)."""
+        kcount: Dict[str, int] = {}        # per name ⇒ globally unique .L
+        dups: Dict[object, str] = {}       # (scope, name) ⇒ seen once
         out: Dict[str, str] = {}
+        self._se_defs: Dict[int, Dict[str, str]] = {}
         self._lbl_depth: Dict[str, int] = {}
 
-        def walk(nodes, depth):
+        def define(s, scope, depth):
+            key = (scope, s.name)
+            if key in dups:
+                self._err(s, "duplicate label '{}' in one function "
+                          "(§2.5 — flat function-wide namespace)"
+                          .format(s.name), s.name)
+            dups[key] = s.name
+            k = kcount.get(s.name, 0)
+            kcount[s.name] = k + 1
+            asm = ".L{}_{}_{}".format(fd.name, s.name, k)
+            if scope is None:
+                out[s.name] = asm
+            else:
+                self._se_defs.setdefault(scope, {})[s.name] = asm
+            prev = self._lbl_depth.get(s.name)
+            self._lbl_depth[s.name] = depth if prev is None \
+                else min(prev, depth)
+
+        def walk(nodes, depth, scope):
             for s in nodes:                       # document order ⇒ k
                 if isinstance(s, ast.Label):
-                    k = seen.get(s.name, 0)
-                    if k:
-                        self._err(s, "duplicate label '{}' in one function "
-                                  "(§2.5 — flat function-wide namespace)"
-                                  .format(s.name), s.name)
-                    seen[s.name] = k + 1
-                    out[s.name] = ".L{}_{}_{}".format(fd.name, s.name, k)
-                    self._lbl_depth[s.name] = depth
-                walk(self._child_stmts(s),
-                     depth + (1 if isinstance(s, ast.StmtExpr) else 0))
+                    define(s, scope, depth)
+                if isinstance(s, ast.StmtExpr):
+                    # A group at STATEMENT position (`if (c) ({...})`)
+                    # owns a scope too (W-S): children walk under id(s).
+                    walk(self._child_stmts(s), depth + 1, id(s))
+                else:
+                    walk(self._child_stmts(s), depth, scope)
                 # Labels also live in `({...})` groups that ride an
                 # EXPRESSION (`x = ({ __label__ h; h: (long)&&h; });`):
-                # scan the statement's expression fields for braced groups
-                # and walk their statements one level deeper (§2.4d).
-                for e in _stmtexprs_in_expr(s):
-                    walk(e.stmts, depth + 1)
-        walk(self._child_stmts(fd.body), 0)
+                # scan the statement's expression fields for braced
+                # groups and walk their statements one level deeper —
+                # in their OWN scope (§2.4d + W-S scoping).
+                for e in stmtexprs_in_expr(s):
+                    walk(e.stmts, depth + 1, id(e))
+        walk(self._child_stmts(fd.body), 0, None)
         return out
 
     # -- §2.4 statement-expression emission (M2-C5 leg 1) --------------------
@@ -238,7 +242,12 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin, InlinerMixin):
         frame slots they used stay allocated, which is harmless.
         Nesting depth guards the §2.4d jump-INTO reject."""
         saved = dict(self.fn.locals)
-        self._se_depth += 1
+        saved_lbl = self.fn_labels
+        se = self._se_defs.get(id(n))
+        if se:                                    # W-S scope overlay: the
+            self.fn_labels = dict(saved_lbl)      # group's defs shadow
+            self.fn_labels.update(se)             # outward (innermost-
+        self._se_depth += 1                       # wins, l11 measured)
         try:
             for st in n.stmts:
                 self._stmt(st)
@@ -246,6 +255,7 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin, InlinerMixin):
                 self._emit_expr(n.value)
         finally:
             self._se_depth -= 1
+            self.fn_labels = saved_lbl
             self.fn.locals = saved
 
     def _ex_generic(self, n) -> None:

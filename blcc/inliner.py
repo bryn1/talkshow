@@ -1,3 +1,5 @@
+# LINES reason: THE inline pass is ONE seam (W-P/W-R/W-S doctrine: no
+# second pipeline); label-law helpers live in blcc/inlclone.py.
 """M4 W-P (MC 12705, plan AMENDMENT-17): THE inline pass. W-R (MC
 12714, plan AMENDMENT-19) extends THE SAME seam — no second pipeline.
 
@@ -56,7 +58,7 @@ import dataclasses
 
 from blcc import ast
 from blcc.expr_codegen import _fp
-from blcc.inlclone import inl_clone
+from blcc.inlclone import inl_clone, _inl_group_defs
 from blcc.types import stmt_children, is_i128
 
 _NOT_SCALAR = (ast.StructType, ast.ArrayType)
@@ -71,6 +73,8 @@ class InlinerMixin:
         self._inl_imm_off = {}      # fd name -> slot-only param names
         self._inl_imm = {}          # ACTIVE imm map during a splice body
         self._inl_goto = {}         # fd name -> asm-goto body-label names
+        self._inl_scoped = {}       # fd name -> ({seq: [(name, depth)]},
+                                    #                    {id(group): seq})
         self._inl_analyze()
 
     # ---------------------------------------------------------- analysis --
@@ -170,6 +174,18 @@ class InlinerMixin:
         labels = {s.name for s in _stmts_of(fd.body)
                   if isinstance(s, ast.Label)}
         gnames = _inl_goto_names(fd.body)
+        # M4 W-S (MC 12716): labels DEFINED inside `({...})` groups ride
+        # a per-site scoped mint (the `_THIS_IP_` 191-crowd shape: a
+        # group-local `__label__`+def+`&&ref` spliced into a caller that
+        # never saw it). A DUPLICATE inside ONE group is invalid C
+        # (gcc l12 LOUD) — the candidate stays CALL law so the callee's
+        # own copy emits the honest §2.5 wall, never a silent splice.
+        gdefs, gseq = _inl_group_defs(fd.body)
+        if gdefs is None:
+            return "duplicate label inside one braced group (invalid C "  \
+                   "— gcc l12; the copy posture catches it LOUD)"
+        if gdefs:
+            self._inl_scoped[fd.name] = (gdefs, gseq)
         if gnames:
             # W-R label law (cpufeature.h:187 shape): targets sit
             # FLAT at the body top, no other label anywhere (below-
@@ -289,13 +305,31 @@ class InlinerMixin:
         the plant-1 class). Other candidates splice the shared body
         untouched (W-P posture, byte-for-byte)."""
         names = self._inl_goto.get(fd.name)
-        if not names:
+        scoped = self._inl_scoped.get(fd.name)
+        if not names and not scoped:
             return fd.body
         fresh = {}
-        for nm in sorted(names):
+        for nm in sorted(names or ()):
             fresh[nm] = self._label("inl_" + nm)
             self.fn_labels[fresh[nm]] = fresh[nm]
-        return inl_clone(fd.body, fresh)
+        scoped_fresh = None
+        if scoped:
+            # W-S per-site scoped mint: ONE fresh name per (group, name)
+            # per site — two groups sharing `__here` in one body get TWO
+            # freshes (the l13 pair law), and each minted name registers
+            # flat with the §2.4d depth of ITS def (a jump INTO the
+            # cloned group stays LOUD at the caller too).
+            gdefs, gseq = scoped
+            scoped_fresh = {}
+            for seq in sorted(gdefs):
+                m = {}
+                for nm, d in sorted(gdefs[seq]):
+                    m[nm] = self._label("inl_" + nm)
+                    self.fn_labels[m[nm]] = m[nm]
+                    self._lbl_depth[m[nm]] = d
+                scoped_fresh[seq] = m
+        return inl_clone(fd.body, fresh, scoped=scoped_fresh,
+                         seq_by_id=gseq if scoped else None)
 
 
 # --------------------------------------------------------------- walkers --

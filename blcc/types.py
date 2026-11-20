@@ -7,6 +7,7 @@ result kinds. This is the shared base of blcc.codegen.Codegen: every method
 reads tables Codegen collects (structs/enums/globals/sigs/fn.locals/tu)."""
 from __future__ import annotations
 
+import dataclasses
 from typing import Dict, List, Tuple
 
 from blcc import ast, predef
@@ -130,6 +131,31 @@ def what(n) -> str:
     if isinstance(n, ast.InitList):
         return "{"
     return "construct"
+
+
+def stmtexprs_in_expr(s):
+    """Statement-expressions reachable through a node's EXPRESSION fields
+    (VarDecl.init, ExprStmt.expr, Return.value, binary operands, call
+    args, asm operands…). Structural statement fields (stmts/body/then/
+    orelse/stmt) are NOT descended — the statement walk already owns
+    those (one owner, no double-registered labels). M4 W-S (MC 12716):
+    relocated from blcc/codegen.py to this walker home beside
+    stmt_children, because the INLINER label law now needs the same
+    reach (scoped `__label__` groups); one walker, two callers."""
+    out = []
+    if not dataclasses.is_dataclass(s):
+        return out
+    for f in dataclasses.fields(s):
+        if f.name in ("stmts", "body", "then", "orelse", "stmt"):
+            continue
+        v = getattr(s, f.name, None)
+        items = v if isinstance(v, (tuple, list)) else (v,)
+        for x in items:
+            if isinstance(x, ast.StmtExpr):
+                out.append(x)
+            elif isinstance(x, ast.Node):
+                out.extend(stmtexprs_in_expr(x))
+    return out
 
 
 def stmt_children(s):
