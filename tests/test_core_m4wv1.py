@@ -268,7 +268,21 @@ def test_wv1_init_main_walks_to_the_named_land():
     # include/linux/sockptr.h:30 — the §5 BITFIELD-MEMBER-INIT class
     # (sockptr_t compound literal), the W-W lever. Pinned: the land is
     # bitfield-member-init, and NOT anything this wave owns.
+    # M4 W-W COMMIT-1 (MC 12753) SHIPPED that lever: the land MOVED —
+    # init_main now walks to the bi_size splice-capture class at the
+    # MEASURED :59876:36 (own hands, {W} sweep; the sims' W-tree walk-
+    # leg row names the same wall). The lever-EAT assertion stands.
     rc, first = _first_wall("init_main.c.i")
     assert rc != 0, "init_main still walls (behind class, by design)"
-    assert "bitfield member initializer" in first, \
-        "walk-land per sims §3 (sockptr.h:30): " + first[:200]
+    assert "bitfield member initializer" not in first, \
+        "the W-W lever wall must be EATEN (COMMIT-1, MC 12753): " \
+        + first[:200]
+    assert ":59866:36" in first and "found 'bi_size'" in first, \
+        "walk-land MOVED per W-W {W} measurement: " + first[:200]
+    # NOTE: THIS leg's cleaner is the legacy W-V instrument (it also
+    # normalizes integer suffixes and drops every '#' line). At the
+    # BASE bytes both instruments read the same wall line (:45311:9,
+    # own hands); at law-W bytes this instrument reads :59866:36 where
+    # the sweep's plain-stripper reads :59876:36 — the suffix rewrite
+    # shifts the line count by 10. The WALL (bi_size, §4, col 36) is
+    # the claim; pinned on THIS instrument's number.

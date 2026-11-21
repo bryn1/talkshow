@@ -1133,11 +1133,78 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin, InlinerMixin):
                     if i < len(init.items) and \
                             not isinstance(init.items[i], ast.ZeroFill):
                         if bfx is not None:
-                            # §1 row 12 (M45) deferral (§5): a SUPPLIED
-                            # bitfield value never lands; zero-fill green.
-                            self._err(at, "a bitfield member initializer "
-                                      "is not in the subset (§5 — §1 row "
-                                      "12)", "{")
+                            # M4 W-W COMMIT-1 (MC 12753) local UNION
+                            # twin: the union init touches ONLY the
+                            # designated member; the value lands at bit 0
+                            # of the zeroed extent, masked to w bits
+                            # (measured copy law, row l11). KEEP-laws
+                            # unchanged:
+                            if bfx == ("fam",):
+                                self._err(at, "a flexible array member "
+                                          "initializer is not in the "
+                                          "subset (§5 — §1 row 13)", "{")
+                            if self._attr_packed(ty):
+                                self._err(at, "packed bitfield member "
+                                          "initializer is not in the "
+                                          "subset (W-F unit-window law "
+                                          "stays LOUD)", "packed")
+                            if bfx[3] not in self._BF_UNS:
+                                self._err(at, "bitfield unit type '{}' "
+                                          "has no extraction model (§1 "
+                                          "row 12 LOUD twin)".format(
+                                              bfx[3]), "bitfield")
+                            self._init_bf_local(off, bfx,
+                                                init.items[i], at)
+                            continue
+                        self._init_item(off + mo, sty, init.items[i], at)
+                return
+            supplied_bf = [
+                (i, s[4]) for i, s in enumerate(slots)
+                if i < len(init.items)
+                and not isinstance(init.items[i], ast.ZeroFill)
+                and s[4] is not None and s[4] != ("fam",)]
+            if supplied_bf:
+                # M4 W-W COMMIT-1 (MC 12753): a SUPPLIED bitfield slot is
+                # LEGAL (law W). Copy law = the shipped `_bf_store`
+                # (M2 W-C / M4 W2), measured at the sims' 18-row table:
+                # _Bool NORMALIZES to 0/1 first, the value truncates to
+                # its LOW w BITS (mod 2^w — signedness does NOT change
+                # the stored bits), neighbours keep their bits (RMW).
+                # gcc's excess-width posture is a WARNING over a
+                # truncated object (the -Woverflow row); blcc matches the
+                # OBJECT — warning parity is not claimed (sims §7-4).
+                # KEEP-laws first, sentences unchanged:
+                for i, s in enumerate(slots):
+                    if i < len(init.items) and \
+                            not isinstance(init.items[i], ast.ZeroFill) \
+                            and s[4] == ("fam",):
+                        self._err(at, "a flexible array member initializer "
+                                  "is not in the subset (§5 — §1 row 13)",
+                                  "{")
+                if self._attr_packed(ty):
+                    self._err(at, "packed bitfield member initializer is "
+                              "not in the subset (W-F: the packed LAYOUT "
+                              "law ships, the unit-window codegen stays "
+                              "LOUD — gcc's shrunk-unit extraction is not "
+                              "modelled)", "packed")
+                for _, d in supplied_bf:
+                    if d[3] not in self._BF_UNS:
+                        self._err(at, "bitfield unit type '{}' has no "
+                                  "extraction model (§1 row 12 LOUD "
+                                  "twin)".format(d[3]), "bitfield")
+                # gcc §6.7.9: unsupplied members are ZERO — zero the
+                # whole object first, then land every supplied member in
+                # initializer order (designators already resolved;
+                # repeats are LAST-WINS by walk order, row l18).
+                self._zero_local(off, self._size(ty, at))
+                for i, (sname, sty, mo, ssz, bfx) in enumerate(slots):
+                    if not (i < len(init.items)
+                            and not isinstance(init.items[i],
+                                               ast.ZeroFill)):
+                        continue
+                    if bfx is not None:
+                        self._init_bf_local(off, bfx, init.items[i], at)
+                    else:
                         self._init_item(off + mo, sty, init.items[i], at)
                 return
             for i, (sname, sty, mo, ssz, bfx) in enumerate(slots):
@@ -1145,16 +1212,6 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin, InlinerMixin):
                     self._zero_local(off + placed, mo - placed)
                 has = (i < len(init.items)
                        and not isinstance(init.items[i], ast.ZeroFill))
-                if has and bfx is not None:
-                    if bfx == ("fam",):
-                        # §1 row 13 (M46): gcc EMITS the beyond-size bytes
-                        # (measured .data) — DEFERRED here (§5).
-                        self._err(at, "a flexible array member initializer "
-                                  "is not in the subset (§5 — §1 row 13)",
-                                  "{")
-                    else:
-                        self._err(at, "a bitfield member initializer is not "
-                                  "in the subset (§5 — §1 row 12)", "{")
                 if has:
                     self._init_item(off + mo, sty, init.items[i], at)
                 else:
@@ -1174,6 +1231,42 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin, InlinerMixin):
         self._e("xorl %eax, %eax")
         self._e("cld")
         self._e("rep stosb")
+
+    def _init_bf_local(self, off: int, d, item, at) -> None:
+        """M4 W-W COMMIT-1 (MC 12753): land a supplied bitfield
+        INITIALIZER value into a local. Copy law measured and already
+        shipped for plain assignment (`_bf_store`): _Bool NORMALIZES to
+        0/1 first (M4 W2), the value truncates to the low w bits
+        (mod 2^w — THE seam: truncation AT STORE, never at read), rides
+        `bit` inside the unit, and the read-modify-write keeps the
+        neighbours. The unit is already zero here (the caller's
+        zero-first), so the RMW keeps zeros."""
+        boff, bit, w, un = d
+        unit_bt = ast.BuiltinType(at.file, at.line, at.col, un)
+        uns_bt = ast.BuiltinType(at.file, at.line, at.col,
+                                 self._BF_UNS[un])
+        self._fp_guard(self._ty(item), unit_bt, at)
+        self._emit_expr(item)                     # rax = the value
+        if un == "_Bool":
+            self._convert(unit_bt, at)            # measured 0/1 law
+        left = 64 - w
+        if left:
+            self._e("shlq ${}, %rax".format(left))
+            self._e("shrq ${}, %rax".format(left))   # low w bits, zero
+        if bit:
+            self._e("shlq ${}, %rax".format(bit))
+        self._e("movq %rax, %rcx")
+        self._load(uns_bt, "{}(%rbp)".format(off + boff), at=at)
+        keep = ~(((1 << w) - 1) << bit) & 0xFFFFFFFFFFFFFFFF
+        if keep >= 1 << 63:
+            keep -= 1 << 64
+        if -2 ** 31 <= keep < 2 ** 31:
+            self._e("andq ${}, %rax".format(keep))
+        else:
+            self._e("movabsq ${}, %rsi".format(keep))
+            self._e("andq %rsi, %rax")
+        self._e("orq %rcx, %rax")
+        self._store(uns_bt, "{}(%rbp)".format(off + boff), at=at)
 
     def _init_item(self, off: int, ty: ast.Node, item, at) -> None:
         if isinstance(item, ast.ZeroFill):

@@ -455,14 +455,17 @@ int main(void) { return sizeof(struct S); }
 
 
 def test_bitfield_value_initializer_is_loud():
-    # §5 deferral: supplying a value for a bitfield slot LOUDs (named
-    # designator OR positional) — accepted shapes: zero-fill initializers
-    # that never reach a bitfield slot.
-    blcc_loud("""
+    # M4 W-W COMMIT-1 (MC 12753) FLIPPED this retired-claim pin: the
+    # §5 deferral it named is SHIPPED law now — a positional (or
+    # designated) value for a bitfield slot lands, truncated to the
+    # field width (law W, sims rows l01-l04). The leg keeps its NAME
+    # (suite identity) but proves the SHIP posture with a run-pair:
+    # {1, 5} into {int n; unsigned f:3} answers n=1, f=5 mod 8=5.
+    both_run("""
 struct S { int n; unsigned int f: 3; };
 struct S s = { 1, 5 };
-int main(void) { return s.n; }
-""", "bf-init-desig", "sema")
+int main(void) { return s.n + s.f * 10; }
+""", "bf-init-desig-pair")
 
 
 def test_bitfield_zero_init_green_run_pair():

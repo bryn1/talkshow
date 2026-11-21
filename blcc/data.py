@@ -225,6 +225,70 @@ class DataEmitter:
             return ("lab", n.name)
         return ("lab", "{}+{}".format(n.name, off))
 
+    def _bf_data_guard(self, init, ty, d) -> None:
+        """M4 W-W COMMIT-1 (MC 12753) KEEP-laws (measured, sentences
+        inherited from the shipped LOUD twins): packed bitfields keep
+        the W-F unit-window LOUD; unit types outside the extraction
+        model stay LOUD BY NAME (tip ICEd `unsigned __int128`; W-G named
+        the LOUD)."""
+        if self._attr_packed(ty):
+            self._err(init, "packed bitfield member initializer is not "
+                      "in the subset (W-F: the packed LAYOUT law ships, "
+                      "the unit-window law stays LOUD — gcc's shrunk-"
+                      "unit extraction is not modelled)", "packed")
+        if d[3] not in self._BF_UNS:
+            self._err(init, "bitfield unit type '{}' has no extraction "
+                      "model (§1 row 12 LOUD twin)".format(d[3]),
+                      "bitfield")
+
+    def _bf_merge(self, total, out, bsup, init):
+        """Fold bitfield bit-contributions into the entry stream. Unit
+        bytes are little-endian (x86, W-F layout law); a ('q') label
+        overlapping a bit unit is LOUD (no gcc object does that: the
+        layout law flushes a partial unit before any byte member)."""
+        vals = [0] * total
+        labs = [None] * total
+        pos = 0
+        for k, v in out:
+            if k == "b":
+                vals[pos] = v
+                pos += 1
+            elif k == "q":
+                for p in range(pos, pos + 8):
+                    labs[p] = v
+                pos += 8
+            else:
+                pos += v
+        for uoff, bit, w, ub, v in bsup:
+            for p in range(uoff, uoff + ub):
+                if labs[p] is not None:
+                    self._err(init, "address initializer inside a "
+                              "bitfield unit is not in the subset (§5)",
+                              "initializer")
+            cur = 0
+            for p in range(uoff, uoff + ub):
+                cur |= vals[p] << (8 * (p - uoff))
+            cur = (cur & ~(((1 << w) - 1) << bit)
+                   | (v & ((1 << w) - 1)) << bit) & ((1 << (8 * ub)) - 1)
+            for p in range(uoff, uoff + ub):
+                vals[p] = (cur >> (8 * (p - uoff))) & 255
+        rebuilt = []
+        i = 0
+        while i < total:
+            if labs[i] is not None:
+                rebuilt.append(("q", labs[i]))
+                i += 8
+            elif vals[i]:
+                rebuilt.append(("b", vals[i]))
+                i += 1
+            else:
+                j = i
+                while j < total and not vals[j] and labs[j] is None:
+                    j += 1
+                rebuilt.append(("z", j - i))   # the .zero compression
+                i = j
+        return rebuilt
+
     def _bytes_of(self, ty: ast.Node, init, at,
                   ctx: str = "global") -> List[Tuple[str, int]]:
         """-> list of ('b', byte) | ('q', label) | ('z', count) covering
@@ -255,11 +319,20 @@ class DataEmitter:
                 if i < len(init.items) and \
                         not isinstance(init.items[i], ast.ZeroFill):
                     if bfx is not None:
-                        # §1 row 12 (M45): a bitfield slot may not be
-                        # SUPPLIED (§5 deferral; zero-fill stays green).
-                        self._err(init, "a bitfield member initializer is "
-                                  "not in the subset (§5 — §1 row 12)",
-                                  "initializer")
+                        # M4 W-W COMMIT-1 (MC 12753) data UNION twin:
+                        # the init touches ONLY the designated member;
+                        # the value lands at bit 0 of the zeroed extent,
+                        # masked to w bits. KEEP-laws via _bf_data_guard.
+                        self._bf_data_guard(init, ty, bfx)
+                        v = self._const(init.items[i], ctx)
+                        if not isinstance(v, int):
+                            self._err(init, "address initializer inside a "
+                                      "bitfield slot is not in the "
+                                      "subset (§5)", "initializer")
+                        vv = v & ((1 << bfx[2]) - 1)
+                        for p in range((bfx[2] + 7) // 8):
+                            buf[p] = (vv >> (8 * p)) & 255
+                        continue
                     sub = self._bytes_of(sty, init.items[i], at, ctx)
                     pos = 0
                     for kind, val in sub:
@@ -358,6 +431,7 @@ class DataEmitter:
                 self._err(init, "struct initializer must be a brace list of "
                           "member constants (§4)", "initializer")
             out = []
+            bsup = []
             for i, (sname, sty, mo, ssz, bfx) in enumerate(slots):
                 gap = mo - self._bytelen(out)
                 if gap > 0:
@@ -369,12 +443,28 @@ class DataEmitter:
                             self._err(init, "a flexible array member "
                                       "initializer is not in the subset "
                                       "(§5 — §1 row 13)", "initializer")
-                        self._err(init, "a bitfield member initializer is "
-                                  "not in the subset (§5 — §1 row 12)",
-                                  "initializer")
+                        # M4 W-W COMMIT-1 (MC 12753) data STRUCT twin:
+                        # the constant lands TRUNCATED (mod 2^w) at its
+                        # bit position inside its unit; the field's
+                        # signedness does NOT change stored bits (guard
+                        # rows g1/g2 pin both). KEEP-laws ride
+                        # _bf_data_guard (packed W-F, unit model).
+                        self._bf_data_guard(init, ty, bfx)
+                        v = self._const(items[i], ctx)
+                        if not isinstance(v, int):
+                            self._err(init, "address initializer inside a "
+                                      "bitfield slot is not in the "
+                                      "subset (§5)", "initializer")
+                        bsup.append((bfx[0], bfx[1], bfx[2],
+                                     self._size(ast.BuiltinType(
+                                         init.file, init.line, init.col,
+                                         bfx[3]), at), v))
+                        continue
                     out.extend(self._bytes_of(sty, items[i], at, ctx))
             if total - self._bytelen(out) > 0:
                 out.append(("z", total - self._bytelen(out)))
+            if bsup:
+                out = self._bf_merge(total, out, bsup, init)
             return out
         self._err(at or self.tu, "cannot initialize this type", self._what(ty))
 

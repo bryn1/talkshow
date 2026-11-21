@@ -82,6 +82,10 @@ def test_wt3_bitfield_cl_named_postures():
     # gcc answers, blcc refuses. PIN: a W-F successor that SHIPS
     # these flips THIS leg to _pair (its own RED-first), never a
     # silent posture change.
+    # M4 W-W COMMIT-1 (MC 12753) IS that successor: law W shipped —
+    # the leg flipped to the run-pair posture EXACTLY as the pin
+    # instructed. Answers: init = 3+5+1 = 9 (the .y=9 row truncated to
+    # 5 bits = 9 fits; .x=3 into int:3 = 3); assign = 7+9-8 = 8.
     c = "/dev/shm/wt3_bf.c"
     for tag, src in (
             ("init", "struct BF{int x:3;int y:5;};"
@@ -91,10 +95,20 @@ def test_wt3_bitfield_cl_named_postures():
              "int main(void){struct BF b={1,2};"
              "b=(struct BF){.x=7,.y=9};return b.x+b.y-8;}")):
         open(c, "w").write(src)
-        b = blcc(["-c", c, "-o", "/dev/null"])
-        assert b.returncode != 0, \
-            "bf_cl_%s: W-F bitfield-init LOUD posture MOVED — flip " \
-            "this leg to _pair in the SAME commit that ships it." % tag
+        g = "/dev/shm/wt3_bf_%s.g" % tag
+        r = subprocess.run(["gcc", "-w", "-std=gnu89", "-Os", c,
+                            "-no-pie", "-o", g], capture_output=True)
+        assert r.returncode == 0, r.stderr
+        gx = subprocess.run([g]).returncode
+        o = "/dev/shm/wt3_bf_%s.o" % tag
+        b = blcc(["-c", c, "-o", o])
+        assert b.returncode == 0, \
+            "bf_cl_%s: law W must SHIP (COMMIT-1): " % tag + b.stderr
+        assert subprocess.run(["gcc", "-no-pie", o, "-o", g + ".b"],
+                              capture_output=True).returncode == 0
+        bx = subprocess.run([g + ".b"]).returncode
+        assert bx == gx, "bf_cl_%s run-pair: blcc=%d gcc=%d" % (tag, bx,
+                                                                gx)
 
 
 def test_wt3_combo_witnesses_own_classes_eaten():
@@ -148,16 +162,24 @@ def test_wt3_combo_witnesses_own_classes_eaten():
         # QUEUE-BEHIND row: 88 of the 261 re-walls are this class,
         # named the W-W lever). i8259's land is UNCHANGED (packed
         # bitfield, untouched by W-V).
+        # M4 W-W COMMIT-1 (MC 12753) SHIPS the lever it landed on: the
+        # bitfield wall is GONE and entry_common re-walls FORWARD on
+        # the bi_size capture class at the MEASURED land :46104:36
+        # (own hands, {W} sweep row; the sims' W-tree walk-leg named
+        # the same wall one line earlier). i8259 UNCHANGED.
         assert "'zero_pfn' undeclared" not in first, \
             tu + ": the W-U extern-local class must be EATEN: " \
             + first[:200]
         assert "extern local array" not in first, \
             tu + ": the W-V lever class must be EATEN (COMMIT-E, " \
             "MC 12747): " + first[:200]
+        assert "bitfield member initializer" not in first, \
+            tu + ": the W-W lever class must be EATEN (COMMIT-1, " \
+            "MC 12753): " + first[:200]
         land = {"arch_x86_entry_common.c.i":
-                (":34241:9", "bitfield member initializer"),
+                (":46104:36", "found 'bi_size'"),
                 "arch_x86_kernel_i8259.c.i":
                 (":36560:6", "packed bitfield access")}[tu]
         assert land[0] in first and land[1] in first, \
-            tu + ": behind-wall must land on the measured W-U " \
+            tu + ": behind-wall must land on the measured W-W " \
             "SITE+CLASS %r: " % (land,) + first[:220]

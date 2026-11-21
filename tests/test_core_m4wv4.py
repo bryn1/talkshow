@@ -203,8 +203,16 @@ def test_wv4_four_streams_now_green():
 def test_wv4_the_other_three_rewall_named():
     # honest queue movement: the class dies, the streams land BEHIND
     # other, NAMED classes (measured own hands).
+    # M4 W-W COMMIT-1 (MC 12753): drivers_pci_pci was re-walled ON the
+    # bitfield-member-init class — the class THIS wave's law W ships.
+    # The stream now ACCEPTS outright (measured own hands, {W} sweep:
+    # rc0; nothing behind it in this TU), so it moves to the accept
+    # arm. The other two streams' lands are UNTOUCHED by law W (own
+    # hands: same walls, same lines).
+    rc, first = _first_wall("drivers_pci_pci.c.i")
+    assert rc == 0, "drivers_pci_pci must ACCEPT once law W ships " \
+        "(COMMIT-1, MC 12753): " + first[:170]
     for s, needle in (
-            ("drivers_pci_pci.c.i", "bitfield member initializer"),
             ("drivers_tty_serial_8250_8250_port.c.i", "no member 'ier'"),
             ("kernel_panic.c.i", "address initializer inside a union")):
         rc, first = _first_wall(s)
