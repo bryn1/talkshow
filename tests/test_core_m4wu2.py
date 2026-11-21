@@ -28,9 +28,12 @@ REFERENCE, never new storage:
     (the two-TU value leg below pins the difference).
   * an extern INCOMPLETE-ARRAY local (`extern char __init_begin[],
     __init_end[];` — 304 corpus streams, the #1 first-wall class at the
-    {A+B+D} bytes) stays LOUD, naming the class: gcc compiles it, the §4
-    size wall still owns it, and freeing it is the W-V lever — the queue
-    this wave walks BEHIND (b5: gcc rc0, blcc LOUD, accept-neutral).
+    {A+B+D} bytes) stayed LOUD in THIS wave, naming the class: the §4
+    size wall owned it and freeing it was the named W-V lever — the
+    queue this wave walked BEHIND. SUPERSEDED by M4 W-V COMMIT-E
+    (MC 12747): the lever SHIPPED (reference law, sims rows e02-e16);
+    the b5 leg below carries the flipped posture, sizeof still LOUD
+    from W-V COMMIT-0.
 """
 import os
 import subprocess
@@ -184,17 +187,40 @@ def test_wu_b2b_two_functions_same_extern_local_bind_once():
 
 # ---- the class this wave deliberately still refuses (queue-behind) ----
 
-def test_wu_b5_extern_incomplete_array_local_is_loud_naming_the_class():
+def test_wu_b5_FLIPPED_by_WV_e_reference_ships():
     # 304 corpus streams sit on THIS shape (`extern char __init_begin[],
-    # __init_end[];`). gcc compiles it; blcc keeps the §4 size refusal and
-    # NAMES the class — W-V's lever, the wall this wave's walk lands
-    # behind. LOUD posture measured; the message must name the shape.
-    rc_gcc = _loud("b5", "unsigned long f(void){ extern char __init_begin[], "
-                   "__init_end[]; return (unsigned long)__init_end - "
-                   "(unsigned long)__init_begin; }\n",
-                   "incomplete-array extern")
-    assert rc_gcc == 0, "gcc-side of the queue-behind row moved: the W-V " \
-        "class must still be gcc-legal for the walk story to hold"
+    # __init_end[];`). W-U deliberately kept it LOUD and NAMED the class
+    # as "W-V's lever, the wall this wave's walk lands behind" — that
+    # sentence was INSTRUCTION, and M4 W-V COMMIT-E (MC 12747) released
+    # the lever: gcc's law is a REFERENCE the linker completes, blcc
+    # now answers it rc0 (sims law rows e02-e16, 13 measured run-pairs;
+    # the free_initmem VERBATIM leg + run-pairs live in
+    # tests/test_core_m4wv1.py). The old rc2 pin is history; what this
+    # door still guards is the BINDING SHAPE: a bare `U` reference, no
+    # per-TU storage — nm-proved here and at wv1.
+    c = _w("b5", "unsigned long f(void){ extern char __init_begin[], "
+               "__init_end[]; return (unsigned long)__init_end - "
+               "(unsigned long)__init_begin; }\n")
+    g = subprocess.run(["gcc", "-std=gnu89"] + REC + ["-c", c, "-o",
+                                                      "/dev/null"],
+                       capture_output=True, text=True)
+    assert g.returncode == 0, "gcc-side of the shipped row moved: " \
+        + g.stderr
+    o = "/dev/shm/wu2_b5.o"
+    b = blcc(["-c", c, "-o", o])
+    assert b.returncode == 0, "the e-reference must compile (COMMIT-E): " \
+        + b.stderr
+    nm = subprocess.run(["nm", o], capture_output=True, text=True)
+    kinds = {}
+    for l in nm.stdout.splitlines():
+        p = l.split()
+        if len(p) == 3:
+            kinds[p[2]] = p[1]
+        elif len(p) == 2:
+            kinds[p[1]] = p[0]
+    assert kinds.get("__init_begin") == "U" and \
+        kinds.get("__init_end") == "U", "reference must bind as bare U: " \
+        + nm.stdout
 
 
 def test_wu_b6_extern_local_binds_no_storage():
