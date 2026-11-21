@@ -111,6 +111,33 @@ class DataEmitter:
                 return ("lab", self._anon_static(n.operand))
             if isinstance(n.operand, ast.Ident) and n.operand.name in self.globals:
                 return ("lab", n.operand.name)
+            # M4 W-V COMMIT-G (MC 12747, law row e25): a `.`-select /
+            # index CHAIN rooted at a global object is an address
+            # constant (symbol + byte offset) — the corpus shape
+            # `&(smn_mutex.list)` in a global init (the 39-family's
+            # `&` half, 20/39 rows at the own-hands ladder).
+            # And (row e26, the `(void *)&fn` __addressable_ shim):
+            # &function-name is the function's address.
+            v = self._fold_addr_member(n.operand)
+            if v is not None:
+                return v
+            if isinstance(n.operand, ast.Ident) \
+                    and n.operand.name in getattr(self, "sigs", {}):
+                return ("lab", n.operand.name)
+        # M4 W-V COMMIT-G (law row e26, 19/39 rows — the
+        # `void *__addressable_x = (void *)&x` EXPORT shim): a CAST of
+        # a constant folds to the SAME constant (address or int). A
+        # NON-constant operand falls through — the §4 LOUD stands
+        # (gcc's own "initializer element is not constant" twin, row
+        # e28, measured LOUD both sides at the wave REC).
+        if isinstance(n, ast.Cast):
+            from blcc.lexer import DiagError as _DE
+            try:
+                v = self._const(n.operand, ctx)
+            except _DE:
+                v = None
+            if v is not None:
+                return v
         if isinstance(n, ast.CompoundLit):
             return self._const(n.init, ctx)  # scalar literal value
         if isinstance(n, ast.StrLit):
@@ -141,6 +168,62 @@ class DataEmitter:
                       "inside a function (§2.4d)", "statement expression")
         self._err(n, "{} initializer must be an integer/char constant "
                   "or address-of-global (§4)".format(ctx), self._what(n))
+
+    def _fold_addr_member(self, n):
+        """M4 W-V COMMIT-G (MC 12747): -> ('lab', sym[+off]) for a
+        `&(G.f[i].g)` CHAIN rooted at a GLOBAL OBJECT (measured 20/39
+        rows of the global-init family at the own-hands ladder). The
+        offset is the SHIPPED layout law (`_struct_layout` slots,
+        `_size` element sizes) expressed as `sym+off` in the label —
+        the same symbol+offset addressing data.py already emits for
+        `('q', label)` slots. ARROW selects, bitfields, non-constant
+        indices, incomplete arrays and pointer-rooted chains are NOT
+        address constants — return None keeps the caller's §4 LOUD,
+        which is gcc's own posture at every one of those shapes
+        (measured LOUD twins e27 bitfield / e28 non-constant index)."""
+        from blcc.lexer import DiagError as _DE
+        chain = []
+        while isinstance(n, (ast.Select, ast.Index)):
+            if isinstance(n, ast.Select):
+                if n.arrow:
+                    return None
+                chain.append(("m", n.field))
+                n = n.base
+            else:
+                try:
+                    idx = self._fold_const(n.index, None)
+                except _DE:
+                    return None
+                if not isinstance(idx, int):
+                    return None
+                chain.append(("i", idx))
+                n = n.base
+        if not chain or not isinstance(n, ast.Ident):
+            return None
+        gd = self.globals.get(n.name)
+        if gd is None:
+            return None
+        off, ty = 0, self._untype(gd.type)
+        for kind, arg in reversed(chain):      # ROOT-most op first
+            ty = self._untype(ty)
+            if kind == "m":
+                if not isinstance(ty, ast.StructType):
+                    return None
+                flat, total, slots = self._struct_layout(ty, n)
+                hit = next((s for s in slots if s[0] == arg), None)
+                if hit is None or hit[4] is not None:
+                    return None                 # bitfield: not addressable
+                off += hit[2]
+                ty = hit[1]
+            else:
+                if not isinstance(ty, ast.ArrayType) or ty.size is None:
+                    return None
+                esz = self._size(ty.inner, n)
+                off += arg * esz
+                ty = ty.inner
+        if off == 0:
+            return ("lab", n.name)
+        return ("lab", "{}+{}".format(n.name, off))
 
     def _bytes_of(self, ty: ast.Node, init, at,
                   ctx: str = "global") -> List[Tuple[str, int]]:
