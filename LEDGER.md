@@ -547,3 +547,37 @@ gain is CONDITIONAL on law A's unlock (a stream that carries both walls
 hits the group-lvalue wall first), so the levers are additive-but-ordered,
 not independent; the combo {A+B+D}=181 stands. RED-first: 5 of the 8 legs RED at the pure COMMIT-1 bytes (out/plain-c1pure.txt: b1, b1b two-TU value, b2b, b5 class-name, b6 nm) -> 8 green; b1c/b2/b3/b4 posture pins green-at-write;
 two-TU value leg + nm leg + 2-function dedup leg; plain tier 1799-0-132 in the pinned C2 tree (zero failures; 24 corpus legs skip in a worktree that lacks the lab link — main-tree collection 1823).
+M4 W-U COMMIT-3 (MC 12739, law D, the inliner scope seam): a name means
+what the INNERMOST DECLARING scope says at the point of use, so in a
+SPLICE the callee's local beats the caller's same-name function-scope
+`static`. blcc's per-function maps are FLAT (`fn.locals` = params + autos,
+`fn.statics` = function-scope statics) and every arm that resolves
+`fn.statics` resolved it FIRST; in unspliced C the two maps are DISJOINT
+(the parser LOUDs "'x' collides with a name declared in this scope") so
+that order was harmless — until blcc/inliner.py `_splice_call` put the
+callee's meaning and the caller's static in ONE function. SHIPPED as ONE
+predicate (`ExprEmitter._static_visible`, blcc/expr_codegen.py) guarding
+EVERY statics-resolving arm — `_ex_ident`, the `_ex_assign` fast store,
+`_emit_addr`'s Ident arm, the asm operand fold and the asm memory arm (the
+sixth reader `_asm_addr_base` already resolves locals-first and is NAMED,
+not patched beside); `_ident_ty` was already locals-first, which is why the
+type side of the mis-binding looked invisible until the emission arms
+agreed. THIS REFRAMES THE LEDGER'S OWN PREMISE HONESTLY: the 28-stream
+'cannot load a 5-byte value' class was NOT an odd-size load need —
+text-patching.h:114:2 was reading the CALLER's `static union
+text_poke_insn insn` where the callee's local `union text_poke_insn *insn`
+belonged, so the row-18 witness (gcc 255) LOUDed on a MIS-BOUND load; it
+now compiles and PAIRS. Two of the wave's own shapes are SILENT
+MIS-COMPUTES, not refusals (a caller static ARRAY vs a callee local array
+answered 247 where gcc answers 0; a callee local `q` vs a caller static `q`
+answered 2) — both ride as RUN-PAIR legs, plus the negative half (after
+the call the caller's OWN static keeps its meaning: answer 13), the §1c
+no-splice posture pin, the fresh-label mint pin, and the two interaction
+rows (a transparent-group lvalue INSIDE the spliced body; law A + law B in
+one function). Named residual (instrument, not posture): the mirror image
+— a spliced callee's OWN `static` against a caller LOCAL of the same name —
+resolves toward the local; `_inl_universe` already REFUSES a candidate with
+a static or register-asm local (`"static/register-asm local"`), so the
+shape cannot be built from a spliced candidate, and the corpus census (own
+hands, .tmp/m4-wu/out/label-census.txt instrument class) carries no
+instance: volume 0. RED-first 6-red -> 10 green; plain tier 51 wave legs green at these bytes (m4wu0 8 + m4wu1 25 + m4wu2 8 + m4wu3 10) + the 3 flipped corpus pins green; FULL plain tier at this sha runs in a pinned tree and its number lands in the close row/evidence.

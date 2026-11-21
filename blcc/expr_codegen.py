@@ -94,6 +94,39 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
         # the M2-C1 name through the shared map (never a fresh name).
         self._e("leaq {}(%rip), %rax".format(self._label_ref(n, n.name)))
 
+    def _static_visible(self, name: str) -> bool:
+        """M4 W-U COMMIT-3 (MC 12739) — THE scope-correct resolution law
+        for a name a splice made ambiguous, in ONE place.
+
+        A function-scope `static` local lives in TU storage and shadows
+        the same-name global (§1c, MC 12486) — that part is unchanged.
+        But the INLINER splices a callee body into the caller and the two
+        maps it lands into are FLAT per function: the callee's parameters
+        and autos go to `fn.locals`, the caller's function-scope statics
+        to `fn.statics`. In unspliced C the two are DISJOINT — the parser
+        LOUDs "'x' collides with a name declared in this scope" — so
+        resolving `fn.statics` first was harmless… until a splice put the
+        caller's `static union text_poke_insn insn` and the callee's local
+        `union text_poke_insn *insn` into ONE function: the spliced body
+        then read the WRONG object (the 28-stream 'cannot load a 5-byte
+        value' class, and silent mis-computes where it did not even fail).
+
+        THE LAW: a name means what the INNERMOST DECLARING scope says at
+        the point of use; inside a spliced region that declaration is the
+        callee's LOCAL, so a live `fn.locals` entry beats the caller's
+        static of the same name. Outside the call the caller's own static
+        keeps its meaning (a spliced region cannot remove it — the run-
+        pair leg `s5` pins both halves). Every arm that resolves
+        `fn.statics` calls THIS predicate — `_ex_ident`, the `_ex_assign`
+        fast store, `_emit_addr`'s Ident arm, the asm operand fold and the
+        asm memory arm. The sixth statics reader, `_asm_addr_base`,
+        already resolves locals-first and is deliberately NOT touched: it
+        is named here so the law has one owner, not five variants.
+        """
+        fn = self.fn
+        return fn is not None and name in fn.statics and \
+            name not in fn.locals
+
     def _ex_ident(self, n) -> None:
         ra = self._asm_regasm(n.name)
         if ra is not None and is_i128(self._decay(self._ty(n))):
@@ -105,10 +138,11 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
             # the C width (never silently the stale slot for STABLE).
             self._asm_c_read(n, ra)
             return
-        if n.name in self.fn.statics:
+        if self._static_visible(n.name):
             # §1c (MC 12486): a function-scope `static` local lives in
-            # TU storage and SHADOWS the same-name global — checked
-            # first, %rip-accessed (gcc w4 law).
+            # TU storage and SHADOWS the same-name global, %rip-accessed
+            # (gcc w4 law); W-U COMMIT-3 gates the arm on the ONE
+            # resolution predicate (a spliced callee local wins).
             sym, ty = self.fn.statics[n.name][0], self.fn.statics[n.name][1]
             if isinstance(ty, ast.ArrayType) and ty.size is not None:
                 self._e("leaq {}(%rip), %rax".format(sym))  # decay (§4)
@@ -1232,8 +1266,9 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
         if isinstance(n.target, ast.Ident) and not isinstance(
                 self._ty(n.target), ast.ArrayType):
             self._emit_expr(n.value)
-            if n.target.name in self.fn.statics:
-                # §1c (MC 12486): store through the static's TU symbol.
+            if self._static_visible(n.target.name):
+                # §1c (MC 12486): store through the static's TU symbol;
+                # W-U COMMIT-3: same ONE predicate (spliced local wins).
                 sym = self.fn.statics[n.target.name][0]
                 self._store(ty, "{}(%rip)".format(sym), at=n)
             elif n.target.name in self.fn.locals:
@@ -1794,8 +1829,9 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
             self._e("leaq {}(%rbp), %rax".format(off))
             return
         if isinstance(n, ast.Ident):
-            if n.name in self.fn.statics:
-                # §1c (MC 12486): &static-local = its TU symbol (§1c law).
+            if self._static_visible(n.name):
+                # §1c (MC 12486): &static-local = its TU symbol (§1c law);
+                # W-U COMMIT-3: same ONE predicate (spliced local wins).
                 sym = self.fn.statics[n.name][0]
                 self._e("leaq {}(%rip), %rax".format(sym))
                 return

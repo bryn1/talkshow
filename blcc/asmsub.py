@@ -143,7 +143,11 @@ class AsmSubMixin:
             # Ident arms read the DECLARED type, not the name table alone.
             nm = node.name
             g = self.globals.get(nm)
-            stc = self.fn.statics.get(nm) if self.fn else None
+            # W-U COMMIT-3 (MC 12739): a spliced callee LOCAL of this
+            # name means the caller's static is NOT this operand; the
+            # frame answer below (or the plain local path) owns it.
+            stc = self.fn.statics.get(nm) if (
+                self.fn is not None and nm not in self.fn.locals) else None
             if addr:
                 # address-of ANY object/function with a symbol answers
                 # the symbol — scalar or not (`&gi` -> `$gi`, `&c` -> `$c`).
@@ -347,7 +351,9 @@ class AsmSubMixin:
         nm = node.name
         if nm in self.fn.regasms or nm in self.regasm_global:
             return None
-        if nm in self.fn.statics:
+        if self._static_visible(nm):
+            # W-U COMMIT-3 (MC 12739): ONE predicate, locals-first law
+            # (the spliced callee scope owns the name).
             sym, sty = self.fn.statics[nm][0], self.fn.statics[nm][1]
             if isinstance(self._untype(sty), ast.ArrayType):
                 return None
