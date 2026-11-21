@@ -289,7 +289,25 @@ class DataEmitter:
                 return [("z", sz)]
             if isinstance(init, ast.InitList):
                 self._err(init, "brace initializer for a scalar (§4)", "{")
-            v = self._const(init, ctx)
+            if isinstance(init, ast.StrLit) and isinstance(
+                    self._untype(ty), ast.PtrType):
+                # M4 W-V COMMIT-S (MC 12747, the 37-row `.name = "noop"`
+                # family, measured PAIRED with COMMIT-G): a string in a
+                # POINTER slot is the ADDRESS CONSTANT of its bytes —
+                # gcc emits `.quad .LC`. The bytes ride the SHIPPED
+                # anon-static door (a char[] compound literal sized
+                # from its initializer, the e30 byte law untouched);
+                # dedup is by literal POSITION, never by value, so two
+                # literals can never share a label. A string in any
+                # OTHER scalar slot keeps the §4 LOUD below — gcc's own
+                # int-from-pointer refusal (row e29, LOUD both sides).
+                v = ("lab", self._anon_static(ast.CompoundLit(
+                    init.file, init.line, init.col, ast.ArrayType(
+                        init.file, init.line, init.col,
+                        ast.BuiltinType(init.file, init.line, init.col,
+                                        "char"), None), init)))
+            else:
+                v = self._const(init, ctx)
             if isinstance(v, int):
                 # M4 W2 COMMIT-0 (MC 12545): the DATA-time mirror of the
                 # measured 0/1 rule — `static _Bool gb = 7;` emits the byte

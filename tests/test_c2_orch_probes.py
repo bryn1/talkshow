@@ -257,14 +257,17 @@ def test_const_arith_global_init_accepted():
     assert subprocess.run([out], timeout=30).returncode == 2  # a == 2
 
 
-def test_global_string_init_exact_contract_wording():
-    # §8 wording pinned by the F4 fix: names the construct literally.
+def test_global_string_init_FLIPPED_by_WVS():
+    # M4 W-V COMMIT-S (MC 12747) SHIPPED this exact shape: a string in
+    # a POINTER slot is the ADDRESS CONSTANT of its bytes (sims row
+    # e29-adjacent; the 37-stream `.name = "noop"` family). The old rc2
+    # §8-wording pin is history, not instruction. The boundary it
+    # protected SURVIVES: `int x = "s";` keeps the exact §8 wording —
+    # re-pinned at tests/test_core_m4wv3.py::
+    # test_wv3_e29_int_slot_stays_loud (one law, one place per door).
     r, out = compile_src('char *msg = "hi";\n'
                          'int main(void){ _sys_exit(0); }\n', "gstrx")
-    assert r.returncode == 2, (r.returncode, r.stderr)
-    assert "string literal in global initializer" in r.stderr, r.stderr
-    assert DIAG_RE.match(r.stderr.strip()), r.stderr
-    assert_nothing_emitted(out)
+    assert r.returncode == 0, (r.returncode, r.stderr)
 
 
 # -- OBS-1: integer suffixes are TYPED, not lex walls — re-synced at M2

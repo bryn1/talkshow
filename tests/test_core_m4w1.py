@@ -547,7 +547,10 @@ SMATRIX = {
     "S17_fn_to_voidptr":      (0, None, 0),
     "S18_voidptr_to_fn":          (0, None, 0),
     "S19_fn_to_long":         (0, None, 0),
-    "S20_static_const_table": (2, "string literal in global initializer", 3),
+    # M4 W-V COMMIT-S (MC 12747) FLIPPED this row: the fnptr+string
+    # table is EXACTLY the shipped S-law shape (`.n = "one"` rides the
+    # anon-static address door) — measured rc0 at the S bytes.
+    "S20_static_const_table": (0, None, 0),
     "S21_designated_table":          (0, None, 0),
     "S22_fnptr_ternary_arm":          (0, None, 0),
     "S23_fnptr_as_arg":       (0, None, 0),
