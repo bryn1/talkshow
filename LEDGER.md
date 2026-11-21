@@ -514,3 +514,36 @@ histogram; only the PID temp-name and the scratch-dir path differ),
 {A}=153 +0/-0, {B}=159, {A+B+D}=181 — my ship law-A lands are BYTE-EQUAL
 to the sim stub's lands on all three probes. RED-first 20-red -> 25-green;
 plain tier 1815-0-108 plain at-commit bytes (seal 1782 + 8 W-U COMMIT-0 legs + 25 law-A legs)
+M4 W-U COMMIT-2 (MC 12739, law B, the extern-local `zero_pfn` class): §2.8
+split at the ONE seam blcc already handles an extern LOCAL (blcc/parser.py
+parse_decl). An extern local RE-DECLARES THE SAME OBJECT the file scope
+would name — a reference, never storage — so the seam asks ONE question:
+does this TU name it? KNOWN in an enclosing scope: the tip DROP stands
+unchanged (b2 the later-definition twin, b3 the sized-array twin, b4 the
+plain re-decl: PAIR before and after). UNKNOWN anywhere (the corpus class:
+the object is DEFINED IN ANOTHER TU and this TU only spells it inside a
+function): tip deleted the only declaration the name ever had and codegen
+LOUDed `'zero_pfn' undeclared — not a local, parameter, global or enum
+constant'` where gcc answers rc0 — a COMPILE-time refusal of a LINK-time
+fact (b1: gcc rc0, tip rc2; 304-stream W-V-adjacent). The ship DEFERS the
+binding to TU END — where the file scope is complete, so a later
+file-scope definition keeps the drop posture instead of colliding with a
+hoisted re-decl — and binds the survivor with the SAME shape the file-scope
+`extern T x;` spelling produces: ONE `is_extern` VarDecl (data.py never
+emits it) + ONE file-scope entry, so the use rides the globals door
+`_ex_ident` already has; nm answers a bare `U name` with no storage (b6,
+measured; a defined twin answers `T main` + `U yy`). The VALUE law is
+pinned TWO-TU (`shared` defined in the other object answers gcc's value):
+this is NOT the sim stub's posture, which minted a fresh LOCAL frame slot
+and answers garbage where gcc answers the object. The class this wave
+deliberately STILL refuses, naming it: an extern INCOMPLETE-ARRAY local
+(`extern char __init_begin[], __init_end[];` — 304 streams, the #1
+first-wall at the combo bytes) keeps the §4 size refusal with the class
+named (b5: gcc rc0, blcc LOUD, accept-neutral) — freeing it is the W-V
+lever, the wall this wave's walk lands BEHIND. PRE-WAVE SIM nuance named
+own-hands: the sims' card lists law D (extern-local) ALONE at 175; my own
+stub re-run measures {D}=153 (+0) and {A+D}=175 (+22) — the extern-local
+gain is CONDITIONAL on law A's unlock (a stream that carries both walls
+hits the group-lvalue wall first), so the levers are additive-but-ordered,
+not independent; the combo {A+B+D}=181 stands. RED-first: 5 of the 8 legs RED at the pure COMMIT-1 bytes (out/plain-c1pure.txt: b1, b1b two-TU value, b2b, b5 class-name, b6 nm) -> 8 green; b1c/b2/b3/b4 posture pins green-at-write;
+two-TU value leg + nm leg + 2-function dedup leg; plain tier 1799-0-132 in the pinned C2 tree (zero failures; 24 corpus legs skip in a worktree that lacks the lab link — main-tree collection 1823).

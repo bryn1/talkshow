@@ -136,6 +136,20 @@ def test_wt3_combo_witnesses_own_classes_eaten():
         # wall MOVED FORWARD onto the extern-local `zero_pfn` class
         # (entry_common :24792:16, i8259 :36317:16) — the class W-U
         # COMMIT-2 eats. Re-pinned on the MEASURED land.
-        assert "'zero_pfn' undeclared" in first, \
-            tu + ": behind-wall must land on the W-U extern-local " \
-            "class: " + first[:200]
+        # M4 W-U COMMIT-2 (MC 12739) flipped this pin too: with the
+        # extern-local class eaten, entry_common lands on the extern
+        # INCOMPLETE-ARRAY wall (:32726:14, `__init_begin` — the W-V
+        # lever this wave names and does NOT free, accept-neutral by
+        # design) and i8259 on the packed-bitfield unit-window class
+        # (:36560:6). Both lands re-measured at the COMMIT-3 bytes:
+        # identical, so the wave's walk-land stands behind them.
+        assert "'zero_pfn' undeclared" not in first, \
+            tu + ": the W-U extern-local class must be EATEN: " \
+            + first[:200]
+        land = {"arch_x86_entry_common.c.i":
+                (":32726:14", "extern local array"),
+                "arch_x86_kernel_i8259.c.i":
+                (":36560:6", "packed bitfield access")}[tu]
+        assert land[0] in first and land[1] in first, \
+            tu + ": behind-wall must land on the measured W-U " \
+            "SITE+CLASS %r: " % (land,) + first[:220]

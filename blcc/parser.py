@@ -94,6 +94,11 @@ class Parser(AsmParseMixin, CompatLawMixin):
         # list, variadic). ONE table, judged by _fn_redecl_law.
         self.fn_decls: Dict[str, Tuple] = {}
         self._pending: List[ast.Node] = []  # Struct/EnumDecls made by types
+        # M4 W-U COMMIT-2 (MC 12739): an `extern` local naming a thing
+        # this TU never declares is a REFERENCE to an object defined in
+        # another TU; the binding is DEFERRED to TU end (where the file
+        # scope is complete) so a later file-scope definition wins.
+        self._ext_refs: dict = {}   # name -> (pos, type), deduped
         self._bare_type_ok = False          # a tag/enum definition just read
         self.switch_depth = 0
         self._sizing = set()   # M4 W-K (MC 12663, gate F-5): tags whose
@@ -2518,9 +2523,41 @@ class Parser(AsmParseMixin, CompatLawMixin):
                 # — the byte-identical law is stated ONCE.
                 init = self._norm_init(ty, init, pos)   # §1 row 10
             if is_extern and init is None and not at_file:
-                # an extern LOCAL re-declares a file-scope object; the
-                # name already resolves through the enclosing scope —
-                # nothing to register or emit (§2.8).
+                # §2.8 — an extern LOCAL RE-DECLARES THE SAME OBJECT the
+                # file scope would name: a reference, never new storage.
+                # M4 W-U COMMIT-2 (MC 12739) splits the ONE question the
+                # seam asks (own hands, shapes b1..b6 at the wave REC):
+                #   * a name an enclosing scope ALREADY declares: the
+                #     local declaration adds nothing — DROP, the tip
+                #     posture unchanged (b2/b3/b4 PAIR before and after);
+                #   * a name NOTHING in this TU declares yet (the corpus
+                #     `zero_pfn` class: the object is DEFINED IN ANOTHER
+                #     TU and this TU only ever spells it inside a
+                #     function). Tip dropped the only declaration the name
+                #     ever had and codegen LOUDed "'zero_pfn' undeclared"
+                #     where gcc answers rc0 (a LINK-time fact, not a
+                #     compile-time error — b1: gcc rc0, tip rc2). Recorded
+                #     here, BOUND AT TU END below, where the file scope is
+                #     complete: DEFERRING is what keeps `int f(void){
+                #     extern int t; … } int t = 7;` (b2) answering the
+                #     same object instead of colliding with a hoisted
+                #     re-decl;
+                #   * an extern INCOMPLETE-ARRAY local (`extern char
+                #     __init_begin[], __init_end[];` — 304 corpus streams,
+                #     the #1 first-wall class at the combo bytes) stays
+                #     LOUD HERE and NAMES the class: gcc compiles it, the
+                #     §4 size wall still owns it, and freeing it is the
+                #     W-V lever this wave walks BEHIND (b5: gcc rc0, blcc
+                #     LOUD — accept-neutral).
+                if self.lookup(name) is None:
+                    if isinstance(ty, ast.ArrayType) and ty.size is None:
+                        self._sema(pos, "extern local array '{}' has no "
+                                   "size in this translation unit (§4 — "
+                                   "the incomplete-array extern "
+                                   "reference is the W-V lever; gcc "
+                                   "compiles it, blcc refuses LOUD)"
+                                   .format(name))
+                    self._ext_refs.setdefault(name, (pos, ty))
                 if self.s.accept_punct(","):
                     continue
                 self.s.expect_punct(";")
@@ -3160,6 +3197,30 @@ class Parser(AsmParseMixin, CompatLawMixin):
         # now complete at TU end; collect's first pass registers them
         # wherever they land in the list.
         decls.extend(self._drain_pending())
+        # M4 W-U COMMIT-2 (MC 12739) — the OTHER half of §2.8: bind the
+        # extern locals this TU never declared, now that the file scope
+        # is complete. A name the TU declared itself afterwards keeps the
+        # tip posture (the drop was right; no second declaration). Every
+        # remaining one gets the SAME shape the file-scope `extern T x;`
+        # spelling produces — ONE `is_extern` VarDecl (data.py never
+        # emits it: §2.8 "re-decl, never emits") plus ONE file-scope
+        # entry — so the use rides the globals door `_ex_ident` already
+        # has and nm answers a bare `U name`, exactly the b6 twin's
+        # measured shape (a DEFINED-in-this-TU twin shows `T main` +
+        # `U yy`). This REPLACES tip's silent deletion of the declaration
+        # (which is what made the corpus `zero_pfn` class a COMPILE-time
+        # refusal of a link-time fact); it is NOT the sim stub's posture,
+        # which minted a fresh LOCAL frame slot and answers garbage where
+        # gcc answers the object — the two-TU value leg in
+        # tests/test_core_m4wu2.py pins that difference.
+        for nm, (rpos, rty) in self._ext_refs.items():
+            if self.lookup(nm) is not None:
+                continue
+            decls.append(ast.VarDecl(rpos.file, rpos.line, rpos.col, nm,
+                                     rty, None, is_static=False,
+                                     is_extern=True))
+            self.define(nm, ("var", rty), rpos)
+        self._ext_refs.clear()
         eof = self.s.peek()
         return ast.TranslationUnit(eof.file, eof.line, eof.col, tuple(decls))
 

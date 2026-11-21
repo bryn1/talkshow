@@ -165,9 +165,18 @@ def test_wr_stream_cpufeature_wall_flipped():
     assert ":35846:10" not in first \
         and "not an addressable l-value" not in first, \
         "the W-U group-lvalue class must be EATEN here: " + first[:300]
-    assert ":36317:" in first and "'zero_pfn' undeclared" in first, \
-        "wall must land on the W-U behind SITE+CLASS (extern-local " \
-        "zero_pfn): " + first[:300]
+    # M4 W-U COMMIT-2 (MC 12739) FLIPPED THIS PIN AGAIN, own hands at
+    # the COMMIT-2 bytes: the extern-local `zero_pfn` wall at :36317:16
+    # is EATEN by the §2.8 TU-end binding (asserted GONE below) and the
+    # stream lands on the packed-bitfield unit-window class at
+    # :36560:6 — stable through COMMIT-3 (re-measured identical).
+    assert ":36317:" not in first and "'zero_pfn' undeclared" not in first, \
+        "the extern-local zero_pfn class must be EATEN here: " \
+        + first[:300]
+    assert ":36560:6" in first and "packed bitfield access is not in " \
+        "the subset" in first, \
+        "wall must land on the W-U behind SITE+CLASS (packed bitfield): " \
+        + first[:300]
 
 
 # corpus spot: streams whose TIP first-wall was the cpufeature 'i'

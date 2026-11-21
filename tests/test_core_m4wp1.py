@@ -429,6 +429,16 @@ def test_wp1_corpus_wall_moved():
         and "not an addressable l-value" not in first, \
         "the statement-expression l-value wall (W-U's own class) came " \
         "back: " + first[:300]
-    assert ":36317:" in first and "'zero_pfn' undeclared" in first, \
+    # M4 W-U COMMIT-2 (MC 12739) FLIPPED IT A FIFTH TIME, measured at
+    # the COMMIT-2 bytes: COMMIT-2's extern-local binding eats the
+    # `zero_pfn` wall (":36317:" + "'zero_pfn' undeclared" asserted GONE)
+    # and the stream lands on the packed-bitfield unit-window class at
+    # clean :36560:6 (the sweep's named behind-row; law D moves it no
+    # further — re-measured identical at the COMMIT-3 bytes).
+    assert ":36317:" not in first and "'zero_pfn' undeclared" not in first, \
+        "the extern-local wall (W-U COMMIT-2's own class) came back: " \
+        + first[:300]
+    assert ":36560:6" in first and "packed bitfield access is not in " \
+        "the subset" in first, \
         "wall must land on the named behind SITE+CLASS (clean " \
-        ":36317:16 = the extern-local zero_pfn wall): " + first[:300]
+        ":36560:6 = the packed-bitfield unit-window wall): " + first[:300]
