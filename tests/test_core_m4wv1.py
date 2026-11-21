@@ -277,12 +277,15 @@ def test_wv1_init_main_walks_to_the_named_land():
     assert "bitfield member initializer" not in first, \
         "the W-W lever wall must be EATEN (COMMIT-1, MC 12753): " \
         + first[:200]
-    assert ":59866:36" in first and "found 'bi_size'" in first, \
-        "walk-land MOVED per W-W {W} measurement: " + first[:200]
+    assert "bi_size" not in first, \
+        "the W-W COMMIT-3 capture class must be EATEN: " + first[:200]
+    assert ":60018:29" in first and "passed by value" in first, \
+        "walk-land MOVED per W-W COMMIT-3 measurement: " + first[:200]
     # NOTE: THIS leg's cleaner is the legacy W-V instrument (it also
     # normalizes integer suffixes and drops every '#' line). At the
     # BASE bytes both instruments read the same wall line (:45311:9,
-    # own hands); at law-W bytes this instrument reads :59866:36 where
-    # the sweep's plain-stripper reads :59876:36 — the suffix rewrite
-    # shifts the line count by 10. The WALL (bi_size, §4, col 36) is
-    # the claim; pinned on THIS instrument's number.
+    # own hands); where they differ the offset is the suffix rewrite
+    # (law-W bytes: :59866:36 here vs the sweep's :59876:36; final
+    # bytes: :60018:29 here vs the sweep's :60028:29 — own hands).
+    # The WALL (file, class, column) is the claim; pinned on THIS
+    # instrument's number.

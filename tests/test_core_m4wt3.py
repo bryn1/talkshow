@@ -167,6 +167,12 @@ def test_wt3_combo_witnesses_own_classes_eaten():
         # the bi_size capture class at the MEASURED land :46104:36
         # (own hands, {W} sweep row; the sims' W-tree walk-leg named
         # the same wall one line earlier). i8259 UNCHANGED.
+        # M4 W-W COMMIT-3 (MC 12753) eats the bi_size wall ITSELF (the
+        # splice-capture is the law this commit ships): the stream now
+        # lands on the struct-pass-by-value §5 crowd at the MEASURED
+        # :46256:29 (own hands, {W+FOLD+RENAME} sweep row — the walk's
+        # NAMED carry, outside this wave's SET). The bi_size sentence
+        # must be GONE from the corpus (census leg, m4ww4).
         assert "'zero_pfn' undeclared" not in first, \
             tu + ": the W-U extern-local class must be EATEN: " \
             + first[:200]
@@ -176,8 +182,11 @@ def test_wt3_combo_witnesses_own_classes_eaten():
         assert "bitfield member initializer" not in first, \
             tu + ": the W-W lever class must be EATEN (COMMIT-1, " \
             "MC 12753): " + first[:200]
+        assert "bi_size" not in first, \
+            tu + ": the W-W COMMIT-3 capture class must be EATEN: " \
+            + first[:200]
         land = {"arch_x86_entry_common.c.i":
-                (":46104:36", "found 'bi_size'"),
+                (":46256:29", "passed by value"),
                 "arch_x86_kernel_i8259.c.i":
                 (":36560:6", "packed bitfield access")}[tu]
         assert land[0] in first and land[1] in first, \

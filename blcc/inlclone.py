@@ -21,15 +21,18 @@ from blcc import ast
 from blcc.types import stmt_children, stmtexprs_in_expr
 
 
-def inl_clone(node, fresh, scoped=None, seq_by_id=None):
+def inl_clone(node, fresh, scoped=None, seq_by_id=None, idents=None):
     """Rebuild with the label rename applied; untouched subtrees stay
-    SHARED."""
-    return _clone(node, fresh, scoped, seq_by_id)
+    SHARED. M4 W-W COMMIT-3 (MC 12753) adds `idents`: a name->name map
+    applied to ast.Ident mentions — the alpha-rename twin of the label
+    mint (same per-site clone, same sharing law; a PARTIAL rename is
+    the same wrong-answer class plant-1 named)."""
+    return _clone(node, fresh, scoped, seq_by_id, idents)
 
 
-def _clone(node, active, scoped, seq_by_id):
+def _clone(node, active, scoped, seq_by_id, idents):
     if isinstance(node, (tuple, list)):
-        seq = [_clone(x, active, scoped, seq_by_id) for x in node]
+        seq = [_clone(x, active, scoped, seq_by_id, idents) for x in node]
         if all(x is o for x, o in zip(seq, node)):
             return node
         return tuple(seq) if isinstance(node, tuple) else seq
@@ -44,7 +47,7 @@ def _clone(node, active, scoped, seq_by_id):
     repl = {}
     for f in dataclasses.fields(node):
         v = getattr(node, f.name, None)
-        nv = _clone(v, active, scoped, seq_by_id)
+        nv = _clone(v, active, scoped, seq_by_id, idents)
         if nv is not v:
             repl[f.name] = nv
     if isinstance(node, ast.Label) and node.name in active:
@@ -53,6 +56,8 @@ def _clone(node, active, scoped, seq_by_id):
         repl["name"] = active[node.name]
     if isinstance(node, ast.Goto) and node.name in active:
         repl["name"] = active[node.name]
+    if idents and isinstance(node, ast.Ident) and node.name in idents:
+        repl["name"] = idents[node.name]
     if isinstance(node, ast.AsmStmt) and node.labels:
         names = tuple(active.get(x, x) for x in node.labels)
         if names != tuple(node.labels):

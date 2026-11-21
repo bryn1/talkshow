@@ -270,13 +270,38 @@ class InlinerMixin:
         self.loops = []                  # stray break/continue LOUD law
         outer = self._inl_imm
         imm = {}
+        # M4 W-W COMMIT-3 (MC 12753): SPICE-SCOPE LAW — the measured
+        # bi_size root cause was NAME CAPTURE: binding a callee param
+        # into the caller's locals under its own name makes every
+        # LATER call-argument expression that mentions a same-named
+        # caller object resolve into the callee's slot (the bi7
+        # witness: `iter.bi_size` at the column-36 wall; the r1/r3
+        # legs: the same capture SILENT when the types fit —
+        # silent-wrong is the corruption class this wave never ships).
+        # gcc law: call-arg expressions bind in the CALLER scope,
+        # before any splice binding. MEASURED FIX (sims §4: rename,
+        # NEVER refuse — refusal re-walls 485 imm-fold streams, the
+        # -266 mutant): mint a fresh caller-invisible binding name per
+        # param; the clone renames its Idents with it; the imm-map
+        # keys rename TOGETHER (W-R row i16 universe survives — see
+        # the fold-census corpus leg).
+        alpha = {}
+        for p in fd.params:
+            if not p.name or p.name in alpha:
+                continue
+            k = 1
+            nm = "{}__blccinl{}".format(p.name, k)
+            while nm in self.fn.locals or nm in alpha.values():
+                k += 1
+                nm = "{}__blccinl{}".format(p.name, k)
+            alpha[p.name] = nm
         for p, a in zip(fd.params, call.args):
             self._emit_expr(a)
             self._convert(p.type, a)     # §2.2 conversion, the call law
             off = self._slot(p.type, a)
             self._e("movq %rax, {}(%rbp)".format(off))
-            self.fn.locals[p.name] = (off, self._decay(
-                self._untype(p.type)))
+            self.fn.locals[alpha.get(p.name, p.name)] = (off,
+                self._decay(self._untype(p.type)))
             # W-R TRANSITIVE SITE LAW (own table w02): an argument
             # folds THROUGH the map of the splice we are nested in
             # (`h(0)` maps bit=0; its body's `g(8 + bit)` site folds
@@ -287,14 +312,14 @@ class InlinerMixin:
             v = self._asm_const(a)
             if v is not None and p.name not in \
                     self._inl_imm_off.get(fd.name, ()):
-                imm[p.name] = v
+                imm[alpha.get(p.name, p.name)] = v
         self._inl_imm = imm
-        self._stmt(self._inl_site_body(fd))   # the ONE statement emitter
+        self._stmt(self._inl_site_body(fd, alpha))  # ONE stmt emitter
         self.fn.lines.append("{}:".format(self.fn.epilogue))
         (self.fn.locals, self._fn_ret, self._sret, self.fn.epilogue,
          self.loops, self._inl_imm) = saved
 
-    def _inl_site_body(self, fd):
+    def _inl_site_body(self, fd, idents=None):
         """THE per-site splice body. An asm-goto candidate gets a CLONE
         whose body labels carry FRESH minted names — the measured gcc
         law of per-copy label scoping (own table w01/w11: shared `t_yes`
@@ -307,7 +332,9 @@ class InlinerMixin:
         names = self._inl_goto.get(fd.name)
         scoped = self._inl_scoped.get(fd.name)
         if not names and not scoped:
-            return fd.body
+            if not idents:
+                return fd.body
+            return inl_clone(fd.body, {}, idents=idents)
         fresh = {}
         for nm in sorted(names or ()):
             fresh[nm] = self._label("inl_" + nm)
@@ -329,7 +356,8 @@ class InlinerMixin:
                     self._lbl_depth[m[nm]] = d
                 scoped_fresh[seq] = m
         return inl_clone(fd.body, fresh, scoped=scoped_fresh,
-                         seq_by_id=gseq if scoped else None)
+                         seq_by_id=gseq if scoped else None,
+                         idents=idents)
 
 
 # --------------------------------------------------------------- walkers --

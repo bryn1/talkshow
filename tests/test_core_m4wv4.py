@@ -212,9 +212,17 @@ def test_wv4_the_other_three_rewall_named():
     rc, first = _first_wall("drivers_pci_pci.c.i")
     assert rc == 0, "drivers_pci_pci must ACCEPT once law W ships " \
         "(COMMIT-1, MC 12753): " + first[:170]
+    # M4 W-W COMMIT-3 (MC 12753) FLIPS the 8250_port arm too: its
+    # "no member 'ier'" wall was a CAPTURE SYMPTOM (the splice bound a
+    # param over the caller's port object, the member lookup met the
+    # WRONG struct type) — with the rename the stream ACCEPTS outright
+    # (measured own hands, {W+FOLD+RENAME} sweep: the wave's own-number
+    # gain, LOST 0). kernel_panic's union-address land is UNTOUCHED.
+    rc, first = _first_wall("drivers_tty_serial_8250_8250_port.c.i")
+    assert rc == 0, "8250_port must ACCEPT once the capture is renamed " \
+        "(COMMIT-3, MC 12753): " + first[:170]
     for s, needle in (
-            ("drivers_tty_serial_8250_8250_port.c.i", "no member 'ier'"),
-            ("kernel_panic.c.i", "address initializer inside a union")):
+            ("kernel_panic.c.i", "address initializer inside a union"),):
         rc, first = _first_wall(s)
         assert "void value not ignored" not in first, \
             s + ": the V-class wall must be EATEN: " + first[:150]
