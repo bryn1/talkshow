@@ -219,6 +219,30 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin, InlinerMixin):
             self._lbl_depth[s.name] = depth if prev is None \
                 else min(prev, depth)
 
+        def walk_value(g, depth):
+            """M4 W-U COMMIT-0 (MC 12739, F-G3): a group's VALUE lives
+            OUTSIDE its `stmts` — the parser lifts the final expression
+            there and leaves an empty statement in its place — so the
+            groups riding in a group's VALUE (the nested-`({...})` helper
+            shape) were NEVER walked: their `__label__` DECLARATIONS and
+            definitions went uncollected, and an uncollected declaration
+            is an unenforced scope. That is the real root of the
+            innermost-only gap: the use walked outward past a group whose
+            scope had never been recorded and bound a definition gcc
+            refuses (`shapes/q4.c`: gcc LOUD, tip QUIET). Walk the value
+            chain in the groups' OWN scopes, one level deeper each step
+            (the depth the emitter's `_se_run` will push)."""
+            v = g.value
+            if v is None:
+                return
+            if isinstance(v, ast.StmtExpr):
+                walk(v.stmts, depth + 1, id(v))
+                walk_value(v, depth + 1)
+                return
+            for e in stmtexprs_in_expr(v):
+                walk(e.stmts, depth + 1, id(e))
+                walk_value(e, depth + 1)
+
         def walk(nodes, depth, scope):
             for s in nodes:                       # document order ⇒ k
                 if isinstance(s, ast.LabelDecl) and scope is not None:
@@ -230,16 +254,22 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin, InlinerMixin):
                 if isinstance(s, ast.StmtExpr):
                     # A group at STATEMENT position (`if (c) ({...})`)
                     # owns a scope too (W-S): children walk under id(s).
+                    # W-U: its VALUE chain belongs to the SAME scope
+                    # extent (`walk_value`); the expression-field scan
+                    # below would walk it at the wrong depth, so a group
+                    # owns its value and nothing else does.
                     walk(self._child_stmts(s), depth + 1, id(s))
+                    walk_value(s, depth + 1)
                 else:
                     walk(self._child_stmts(s), depth, scope)
-                # Labels also live in `({...})` groups that ride an
-                # EXPRESSION (`x = ({ __label__ h; h: (long)&&h; });`):
-                # scan the statement's expression fields for braced
-                # groups and walk their statements one level deeper —
-                # in their OWN scope (§2.4d + W-S scoping).
-                for e in stmtexprs_in_expr(s):
-                    walk(e.stmts, depth + 1, id(e))
+                    # Labels also live in `({...})` groups that ride an
+                    # EXPRESSION (`x = ({ __label__ h; h: (long)&&h; });`):
+                    # scan the statement's expression fields for braced
+                    # groups and walk their statements one level deeper —
+                    # in their OWN scope (§2.4d + W-S scoping).
+                    for e in stmtexprs_in_expr(s):
+                        walk(e.stmts, depth + 1, id(e))
+                        walk_value(e, depth + 1)
         walk(self._child_stmts(fd.body), 0, None)
         return out
 
@@ -287,25 +317,37 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin, InlinerMixin):
         self._se_run(n, True)
 
     def _label_ref(self, at, name: str) -> str:
-        lbl = self.fn_labels.get(name)
-        if lbl is None:
-            self._err(at, "label '{}' used but not defined (§2.5)".format(
-                name), name)
-        if self._se_chain and \
-                name in self._se_decls.get(self._se_chain[-1], ()) and \
-                name not in self._se_defs.get(self._se_chain[-1], {}):
-            # M4 W-T (MC 12736): the g05/g07 LOUD twin, AT THIS ONE
-            # classifying place (goto AND &&label route through here).
-            # The innermost ACTIVE group DECLARED the name — the name
-            # is SCOPED to the group, so a use in-group resolves ONLY
-            # to an in-group definition; an outer/root def does not
-            # count (gcc 11.4: "label 'h' used but not defined").
-            # A group that declares NOTHING keeps today's outward walk
-            # (wt0d/wt0f pair legs); §2.4d jump-INTO law untouched.
-            self._err(at, "label '{}' used but not defined (§2.5 — "
-                      "declared __label__ in the statement expression, "
-                      "no definition IN the group; gcc LOUD twin)".format(
-                          name), name)
+        # M4 W-U COMMIT-0 (MC 12739, F-G3): the USE law is a SCOPE WALK,
+        # not an innermost-only test. The SCOPING group of a use is the
+        # INNERMOST ACTIVE group that DECLARES the name (rows q1/q4/q6
+        # measured at gcc 11.4 -Os REC, .tmp/m4-wu/shapes/); the use
+        # resolves ONLY to that group's own DEFINITION, and a declaring
+        # group WITHOUT its definition LOUDs (gcc: "label 'h' used but
+        # not defined"). The W-T twin keyed on `_se_chain[-1]` alone, so
+        # a use NESTED UNDER the declaring group walked past the scope
+        # and resolved outward to a root/outer definition gcc refuses —
+        # the QUIET-today divergence named by that row set. No active
+        # group declares the name ⇒ the outward walk through fn_labels
+        # is UNCHANGED (wt0d + own q3r pair legs); §2.4d jump-INTO law
+        # UNTOUCHED. This REPLACES the single-group arm: one mechanism,
+        # the one classifying place (goto AND &&label route through it).
+        lbl = None
+        scoped = False
+        for g in reversed(self._se_chain):
+            if name in self._se_decls.get(g, ()):
+                scoped = True
+                lbl = self._se_defs.get(g, {}).get(name)
+                if lbl is None:
+                    self._err(at, "label '{}' used but not defined (§2.5 — "
+                              "declared __label__ in the statement expression, "
+                              "no definition IN the group; gcc LOUD twin)".format(
+                                  name), name)
+                break
+        if not scoped:
+            lbl = self.fn_labels.get(name)
+            if lbl is None:
+                self._err(at, "label '{}' used but not defined (§2.5)".format(
+                    name), name)
         if self._lbl_depth.get(name, 0) > self._se_depth:
             self._err(at, "jump INTO a statement-expression is rejected "
                       "(§2.4d — mirror of the gcc error)", name)

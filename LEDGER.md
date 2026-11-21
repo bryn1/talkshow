@@ -450,3 +450,26 @@ owns the next wave; link-stage carries 155 names. Commits: 1a7e4a1,
 9dd32d4, 3676994, 46e3ed7, this close. Evidence:
 .tmp/m4-wt/out/evidence-m4wt.md (+ sweeps/laws/walk/nmleg logs).
 Commit author: code (MC 12736) via -c flags; git config NEVER touched.
+M4 W-U COMMIT-0 (MC 12739, F-G3 accept-neutral LOUD twin, volume-0 pin):
+the scoped-label USE law becomes a SCOPE WALK, not an innermost-only test,
+at the ONE classifying place `_label_ref` (goto AND `&&label` ride it),
+and the ROOT CAUSE is fixed at the one walk that feeds it: the label
+pre-pass never descended a group's VALUE chain (the parser lifts the final
+expression out of `stmts` into `StmtExpr.value`), so a `__label__`
+declared in a group riding another group's value was NEVER COLLECTED —
+an uncollected declaration is an unenforced scope. Measured own hands at
+the wave REC (gcc 11.4, .tmp/m4-wu/shapes/q1..q6 + a22-class siblings):
+q1 nested use under the declaring group LOUD, q1c the `&&`-address twin
+LOUD, q4 value-chain declaring group LOUD, q6 innermost declaration
+without its definition LOUD — tip read rc0 QUIET on ALL FOUR (gcc LOUD).
+Quiet twins pinned PAIR BY VALUE: q2r (declaring group DOES define; the
+answer is 47, an outward bind would give 0), q3r (no group declares: the
+outward walk stands). §2.4d jump-INTO law untouched. COST ROW: accept-
+neutral — the sims ran this twin as law C over all 706 streams
+(C=153, A+C=153, B+C=159, A+B+C=159 = set-equal to its C-free twins) and
+own census: the corpus declares exactly `__here` (4034) and `__out` (41),
+`goto __here` = 0, every `__here` declaration carries its `&&` use, the 41
+`__out` sites declare AND define inside the same group (the pair posture);
+the F-G3 shape is a gcc ERROR so a gcc-compile-clean corpus cannot hold
+it. RED-first: 4 LOUD legs RED at tip bytes -> 8-green at these bytes;
+plain tier 1790-0-108 (seal 1782 + 8 legs, TOTAL-KIND at-commit bytes).
