@@ -216,9 +216,20 @@ class DataEmitter:
                 off += hit[2]
                 ty = hit[1]
             else:
-                if not isinstance(ty, ast.ArrayType) or ty.size is None:
+                if not isinstance(ty, ast.ArrayType):
                     return None
-                esz = self._size(ty.inner, n)
+                # M4 W-W COMMIT-2 (MC 12753): the tty_ldisc residual
+                # (W-V §6 named). gcc's index-address law needs the
+                # ELEMENT size only — an extern array of unknown
+                # length still answers `&ext[i] = ext + i*elem`
+                # (pin: R_X86_64_64 sysctl_vals+0x4, SAME text as
+                # gcc). KEEP: a non-constant index and an INCOMPLETE
+                # ELEMENT stay None (the §4 LOUD twins stay LOUD —
+                # W-V e28 law).
+                try:
+                    esz = self._size(ty.inner, n)
+                except _DE:
+                    return None
                 off += arg * esz
                 ty = ty.inner
         if off == 0:

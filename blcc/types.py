@@ -464,6 +464,21 @@ class TypeMap(CompatLawMixin):
             v = self._inl_imm.get(n.name)
             if isinstance(v, int):
                 return v
+        if isinstance(n, ast.Call) and getattr(n.callee, "name", "") \
+                in ("__builtin_bswap32", "__builtin_bswap64") \
+                and len(n.args) == 1:
+            # M4 W-W COMMIT-2 (MC 12753): the lib_crc32 residual
+            # (W-V §6 named). gcc-verified at REC: byte-swap of a
+            # constant IS a constant expression — the crc32
+            # polynomial table's swapped literals land in .data as
+            # .longs. NAME + ARITY + CONSTANT argument only: a
+            # runtime operand still raises through _fold_const like
+            # any non-constant (the door's LOUD twin stands).
+            v = self._fold_const(n.args[0], at)
+            w = 32 if n.callee.name.endswith("32") else 64
+            v &= (1 << w) - 1
+            ba = v.to_bytes(w // 8, "big")
+            return int.from_bytes(bytes(reversed(ba)), "big")
         if isinstance(n, ast.Unary) and n.op == "~":
             v = self._fold_const(n.operand, at)
             oty = self._fold_ty(n.operand, at)
