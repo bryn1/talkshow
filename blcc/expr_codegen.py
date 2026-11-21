@@ -54,6 +54,12 @@ def _fp(ty) -> bool:
 
 
 class ExprEmitter(MemFoldMixin, I128Mixin):
+    # M4 W-V COMMIT-V (MC 12747): the VOID-DISCARD context. `_discarding`
+    # is a one-level ASK from the caller to the next dispatch; a handler
+    # that descends further re-arms it explicitly. `_discarded_parent`
+    # is what THIS node's caller asked for (see `_emit_expr`).
+    _discarding = False
+    _discarded_parent = False
             # inner ast.Switch bodies are the inner switch's own chain (§4)
 
     # -- expressions: result lands in %rax --------------------------------------------------------
@@ -62,6 +68,17 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
         m = getattr(self, "_ex_" + type(n).__name__.lower(), None)
         if m is None:
             self._err(n, "cannot emit expression", self._what(n))
+        # M4 W-V COMMIT-V: the DISCARD context is consumed ONE level —
+        # handlers re-arm it before the positions that truly drop a
+        # value (comma LHS, the arms a discarded conditional owes);
+        # every OTHER descent REQUIRES a value, so the context clears
+        # at dispatch and `_discarded_parent` is what this node's
+        # CALLER was asked for. That one-level law is why a void group
+        # as ASSIGN-RHS / CALL-ARG / BINARY-OPERAND (risk seam 3) can
+        # never inherit the context — it never reaches those doors.
+        parent = self._discarding
+        self._discarding = False
+        self._discarded_parent = parent
         m(n)
 
     def _ex_intlit(self, n) -> None:
@@ -1465,7 +1482,14 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
         C `expression` nonterminal opened every other grammar slot
         (each _emit_expr completes before the next — the LEFT-fully-
         BEFORE-RIGHT sequencing law needs no machinery here)."""
+        # M4 W-V COMMIT-V (law row e23): the comma's LEFT value is
+        # ALWAYS dropped (gcc: a void group there is legal); RIGHT
+        # inherits the CAPTURED context (the LHS dispatch consumes the
+        # one-level flag slot).
+        d_keep = self._discarded_parent
+        self._discarding = True
         self._emit_expr(n.left)
+        self._discarding = d_keep
         self._emit_expr(n.right)
 
     def _ex_cond(self, n) -> None:
@@ -1493,6 +1517,9 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
             self._fp_guard(self._decay(self._ty(n.arm2)), ty, n)
         l_arm2 = self._label("tern")
         l_end = self._label("ternend")
+        # M4 W-V COMMIT-V (law row e19): capture the CALLER's context
+        # ONCE (the test dispatch below consumes the one-level slot).
+        d_keep = self._discarded_parent
         self._emit_expr(n.test)
         self._truth(n.test)
         self._e("je {}".format(l_arm2))
@@ -1501,10 +1528,15 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
             # re-intern to the result type may still be owed.
             self._arm_convert(ty, self._decay(self._ty(n.test)), n)
         else:
+            # M4 W-V COMMIT-V: a conditional arm inherits the CALLER's
+            # context (void arms as a DISCARDED statement compile; void
+            # arms in a value context stay LOUD — rows e19/e24, gcc law).
+            self._discarding = d_keep
             self._emit_expr(n.arm1)
             self._arm_convert(ty, self._decay(self._ty(n.arm1)), n)
         self._e("jmp {}".format(l_end))
         self.fn.lines.append("{}:".format(l_arm2))
+        self._discarding = d_keep
         self._emit_expr(n.arm2)
         self._arm_convert(ty, self._decay(self._ty(n.arm2)), n)
         self.fn.lines.append("{}:".format(l_end))

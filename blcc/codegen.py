@@ -326,6 +326,17 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin, InlinerMixin):
         # used AS A VALUE: gcc's "void value not ignored as it ought to
         # be" is the wall (never a silent 0).
         if n.value is None:
+            if self._discarded_parent:
+                # M4 W-V COMMIT-V (MC 12747, law rows e19/e23): THIS
+                # use's value is DISCARDED — gcc runs the group for its
+                # effects and owes no value. The context exists only
+                # where a value is provably dropped (see the ONE
+                # one-level law at `_emit_expr`); the ASSIGN-RHS,
+                # CALL-ARG and BINARY-OPERAND postures of risk seam 3
+                # never open it, so they keep the wall below / the tip
+                # posture exactly as measured (e20-e22 untouched).
+                self._se_run(n, False)
+                return
             self._err(n, "void value not ignored as it ought to be (§2.4c)",
                       "statement expression")
         self._se_run(n, True)
@@ -807,6 +818,10 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin, InlinerMixin):
                 # §2.4(c): a void `({…;})` is legal in STATEMENT position.
                 self._se_run(n.expr, False)
             elif n.expr is not None:
+                # M4 W-V COMMIT-V: the statement DROPS the value — the
+                # discard context opens here and at the comma LHS, and
+                # NOWHERE else (risk seam 3: e20-e22 stay out).
+                self._discarding = True
                 self._emit_expr(n.expr)
         elif isinstance(n, ast.If):
             l_else, l_end = self._label("else"), self._label("endif")
