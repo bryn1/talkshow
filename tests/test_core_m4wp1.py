@@ -417,8 +417,18 @@ def test_wp1_corpus_wall_moved():
     assert "found 'construct'" not in first, \
         "the expression-construct wall (W-S behind-class) must be " \
         "EATEN by W-T COMMIT-1: " + first[:300]
-    assert ":35846:10" in first and "not an addressable l-value" \
-        in first and "statement expression" in first, \
+    # M4 W-U (MC 12739) FLIPPED THIS PIN A FOURTH TIME, exactly as this
+    # docstring predicted ("the 279-stream blocker named as the next
+    # wave's lever"): COMMIT-1's copy-source law eats the
+    # `({...})`-as-lvalue wall — the ":35846:10" SITE and the
+    # "not an addressable l-value / statement expression" CLASS are
+    # asserted GONE — and the stream lands on the extern-local
+    # `zero_pfn` class at clean :36317:16, the row the W-U {A+B+D}
+    # combo sweep (153 → 181, own hands) shows COMMIT-2 eating.
+    assert ":35846:10" not in first \
+        and "not an addressable l-value" not in first, \
+        "the statement-expression l-value wall (W-U's own class) came " \
+        "back: " + first[:300]
+    assert ":36317:" in first and "'zero_pfn' undeclared" in first, \
         "wall must land on the named behind SITE+CLASS (clean " \
-        ":35846:10 = the statement-expression l-value wall): " \
-        + first[:300]
+        ":36317:16 = the extern-local zero_pfn wall): " + first[:300]

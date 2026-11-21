@@ -1854,5 +1854,20 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
             # copy from the temp; `f().m` adds the member offset).
             self._emit_expr(n)
             return
+        if isinstance(n, ast.StmtExpr):
+            # M4 W-U COMMIT-1 (MC 12739) — L3, the SOURCE-ADDRESS arm of
+            # the statement-expression law: `({...})` in copy-SOURCE
+            # position answers the address of what its final expression
+            # names, for ANY body (the cmpxchg/`spinlock` return-value
+            # class, 279 first-wall streams at tip — the tip ran the
+            # group for its side effects and then LOUDed "not an
+            # addressable l-value", which is what stopped init/main.o).
+            # The lvalue POSITION law (L1/L2/L4/L5: transparent body, no
+            # volatile final, final must itself be an lvalue) is decided
+            # where the CONTEXT is known — blcc/expr_parser.py
+            # `_se_lvalue_law`; this arm is deliberately body-blind
+            # because a multi-statement body IS legal as a copy source.
+            self._se_run(n, True, as_addr=True)
+            return
         self._emit_expr(n)                             # rvalue: not addressable
         self._err(n, "not an addressable l-value (§4)", self._what(n))

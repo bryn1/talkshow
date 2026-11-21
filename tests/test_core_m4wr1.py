@@ -156,9 +156,18 @@ def test_wr_stream_cpufeature_wall_flipped():
     assert "found 'construct'" not in first, \
         "the expression-construct wall (W-S behind-class) must be " \
         "EATEN by W-T COMMIT-1: " + first[:300]
-    assert ":35846:10" in first and "not an addressable l-value" \
-        in first and "statement expression" in first, \
-        "wall must land on the W-T behind SITE+CLASS: " + first[:300]
+    # M4 W-U COMMIT-1 (MC 12739) QUEUE FLIP, own hands: this stream's
+    # behind-class — the `({...})`-as-lvalue wall at :35846:10, which W-T
+    # named as the walk's next candidate — is EATEN by the law-A copy-
+    # source arm, and the wall MOVED FORWARD to the extern-local class at
+    # :36317:16 (`'zero_pfn' undeclared`), which is exactly what W-U
+    # COMMIT-2 eats. Re-pinned on the MEASURED land, not the wish.
+    assert ":35846:10" not in first \
+        and "not an addressable l-value" not in first, \
+        "the W-U group-lvalue class must be EATEN here: " + first[:300]
+    assert ":36317:" in first and "'zero_pfn' undeclared" in first, \
+        "wall must land on the W-U behind SITE+CLASS (extern-local " \
+        "zero_pfn): " + first[:300]
 
 
 # corpus spot: streams whose TIP first-wall was the cpufeature 'i'

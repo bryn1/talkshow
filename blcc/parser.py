@@ -111,7 +111,8 @@ class Parser(AsmParseMixin, CompatLawMixin):
                                self.resolve_offsetof,
                                parse_init=self.parse_initializer,
                                norm_init=self._norm_init,
-                               objsize=self.resolve_objsize)
+                               objsize=self.resolve_objsize,
+                               volatile_final=self.volatile_final)
 
     # -- §2.4 GNU statement-expressions (M2-C5 leg 1) ------------------------
 
@@ -1033,6 +1034,55 @@ class Parser(AsmParseMixin, CompatLawMixin):
             return True
         sym = self.lookup(name)
         return sym is not None and sym[0] == "fn"
+
+    def _q_volatile(self, ty) -> bool:
+        """Top-level `volatile` on a type node (the peel `expr_type` does
+        NOT do — this is the qualifier view, so it must not drop it)."""
+        while isinstance(ty, ast.Qualified):
+            if ty.qual == "volatile":
+                return True
+            ty = ty.inner
+        return False
+
+    def _qual_type_of(self, node: ast.Node) -> Optional[ast.Node]:
+        """§2.4e M4 W-U (MC 12739): the QUALIFIER-KEEPING view of the four
+        shapes `_se_lvalue_law` can admit as a final expression. The light
+        `expr_type` mirror `_unqual`s at every arm BY DESIGN (§5 struct
+        checks do not want qualifiers); this is the second host view the
+        CompatLawMixin idiom calls for, deliberately narrow: Ident,
+        `*`-deref, `[]`, and a member select. None = no view = not
+        volatile as far as the law can tell (never a guess)."""
+        if isinstance(node, ast.Ident):
+            sym = self.lookup(node.name)
+            return sym[1] if sym is not None and sym[0] == "var" else None
+        if isinstance(node, ast.Cast):
+            return node.type
+        if isinstance(node, ast.Unary) and node.op == "*":
+            t = self._qual_type_of(node.operand)
+            while isinstance(t, ast.Qualified) and t.qual != "volatile":
+                t = t.inner
+            return t.inner if isinstance(t, (ast.PtrType, ast.ArrayType)) \
+                else None
+        if isinstance(node, ast.Index):
+            t = self._qual_type_of(node.base)
+            while isinstance(t, ast.Qualified) and t.qual != "volatile":
+                t = t.inner
+            return t.inner if isinstance(t, (ast.PtrType, ast.ArrayType)) \
+                else None
+        if isinstance(node, ast.Select):
+            t = self.expr_type(node)     # its member arm answers the RAW
+            return t                     # member type (qualifier kept)
+        return None
+
+    def volatile_final(self, node: ast.Node) -> bool:
+        """§2.4e L5 (M4 W-U, MC 12739): does this final expression name a
+        VOLATILE-qualified object? Measured own hands, all gcc LOUD
+        'lvalue required' where blcc-tip was QUIET: a volatile name
+        (`({ v; }) = 2`), a cast-to-volatile-pointer deref, a
+        `volatile int *p` deref, a volatile MEMBER and a volatile ARRAY
+        element; the rvalue use of the SAME expressions stays legal (gcc
+        rc0) because this leg runs only in lvalue position."""
+        return self._q_volatile(self._qual_type_of(node))
 
     def expr_type(self, node: ast.Node) -> Optional[ast.Node]:
         """Light type-of-expression: only what §5 struct checks need."""

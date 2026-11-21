@@ -127,7 +127,15 @@ def test_wt3_combo_witnesses_own_classes_eaten():
             tu + ": construct wall must be EATEN: " + first[:160]
         assert "undefined struct '<anon@" not in first, \
             tu + ": BUILD_BUG-anon wall must be EATEN: " + first[:160]
-        assert "not an addressable l-value" in first \
-            and "statement expression" in first, \
-            tu + ": behind-wall must be the NAMED carry class: " \
-            + first[:200]
+        assert "not an addressable l-value" not in first \
+            and "statement expression" not in first, \
+            tu + ": the W-U group-lvalue carry must be EATEN here — " \
+            "M4 W-U COMMIT-1 (MC 12739) took this NAMED carry class " \
+            "(the `({...})`-as-lvalue wall) into its own SET: " + first[:200]
+        # QUEUE FLIP, own hands at these bytes: with the carry eaten the
+        # wall MOVED FORWARD onto the extern-local `zero_pfn` class
+        # (entry_common :24792:16, i8259 :36317:16) — the class W-U
+        # COMMIT-2 eats. Re-pinned on the MEASURED land.
+        assert "'zero_pfn' undeclared" in first, \
+            tu + ": behind-wall must land on the W-U extern-local " \
+            "class: " + first[:200]

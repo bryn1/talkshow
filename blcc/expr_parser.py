@@ -43,6 +43,26 @@ _CAST_KW = frozenset(
 _LVALUE_KINDS = (ast.Ident, ast.Index, ast.Select)
 
 
+def se_transparent(n: ast.Node) -> bool:
+    """M4 W-U (MC 12739) L1 — a `({...})` body is TRANSPARENT when it
+    carries ONE expression statement and nothing else: the empty
+    statements (the `;` spelling and the tail the parser leaves where it
+    lifted the value) and the label wrappers around that tail carry no
+    statement of their own. gcc's measured law (W-U rows L1-L5, own hands
+    at the wave REC): only a transparent group is a modifiable lvalue;
+    ANY other statement — a call, a declaration (rows a17-class `__ai_ptr`
+    idiom), an assignment, control flow, an asm, the `(void) x`
+    cast-statement — kills lvalue-ness."""
+    for s in n.stmts:
+        while isinstance(s, ast.Label):
+            s = s.stmt
+        if isinstance(s, ast.ExprStmt) and s.expr is None:
+            continue
+        return False
+    return True
+
+
+
 class ExprParser:
     """Operates on a TokenStream shared with the owning Parser."""
 
@@ -55,7 +75,8 @@ class ExprParser:
                  fold_offset: Optional[Callable] = None,
                  parse_init: Optional[Callable] = None,
                  norm_init: Optional[Callable] = None,
-                 objsize: Optional[Callable] = None):
+                 objsize: Optional[Callable] = None,
+                 volatile_final: Optional[Callable[[ast.Node], bool]] = None):
         self.s = stream
         self.is_typename = is_typename
         self.parse_type = parse_type
@@ -67,6 +88,14 @@ class ExprParser:
         self.parse_init = parse_init              # §1 row 11 brace init
         self.norm_init = norm_init                # §1 row 10 normalization
         self.objsize = objsize                    # §1 row 19 object_size
+        # M4 W-U COMMIT-1 (MC 12739) §2.4e L5: the volatile leg needs the
+        # QUALIFIER view of the final expression, which the light
+        # `expr_type` mirror `_unqual`s by design; the owning Parser
+        # supplies it (the CompatLawMixin two-host idiom — ONE law text
+        # here, the type knowledge on the host side, measured rows
+        # c1..c7: a volatile name, a volatile member, a volatile array
+        # element and a pointer-to-volatile deref all kill the lvalue).
+        self.volatile_final = volatile_final or (lambda n: False)
         self._lenient_calls = False               # inside GNU fold args
 
     def _callable_view(self, ty):
@@ -215,8 +244,15 @@ class ExprParser:
         t = self.s.peek()
         if t.kind == "punct" and t.text in _UNARY_PUNCT:
             self.s.next()
-            return ast.Unary(t.file, t.line, t.col, t.text,
-                             self.parse_unary())
+            operand = self.parse_unary()
+            if t.text == "&" and isinstance(operand, ast.StmtExpr):
+                # M4 W-U COMMIT-1 (MC 12739): `&({...})` is an lvalue
+                # POSITION too — gcc LOUDs "lvalue required as unary '&'
+                # operand" for a non-transparent body (measured row L4d
+                # `&({ f(); v; })`), and the codegen copy-source arm
+                # cannot see the difference (it is the OTHER law, L3).
+                self._se_lvalue_law(operand, t, "unary '&'")
+            return ast.Unary(t.file, t.line, t.col, t.text, operand)
         if t.kind == "punct" and t.text in ("++", "--"):
             self.s.next()
             operand = self.parse_unary()
@@ -688,6 +724,25 @@ class ExprParser:
         return t.kind == "id" and self.is_typename(t.text)
 
     def _check_lvalue(self, node: ast.Node, tok, context: str) -> None:
+        if isinstance(node, ast.StmtExpr):
+            # M4 W-U COMMIT-1 (MC 12739): the group-as-lvalue law lives in
+            # ONE place (below) and this gate routes the form to it — the
+            # tip's blunt `_LVALUE_KINDS` wall answered `({ v; }) = 5`
+            # (gcc rc0) with the same sentence it gives a literal.
+            self._se_lvalue_law(node, tok, context)
+            return
+        base = node
+        while isinstance(base, ast.Select) and not base.arrow:
+            base = base.base
+        if isinstance(base, ast.StmtExpr):
+            # M4 W-U COMMIT-1: a `.`-select FORWARDS the lvalue requirement
+            # to its base (measured own hands: `(({g;}).a) = 4` gcc rc0,
+            # `(({ f(); g; }).a) = 4` gcc LOUD), so the group law runs on
+            # the base and the select itself stays an ordinary lvalue kind
+            # once the base passes. `->` and `[]` do NOT forward it (an
+            # rvalue pointer/array is fine there — rows a23/a24/a25).
+            self._se_lvalue_law(base, tok, context)
+            return
         ok = isinstance(node, _LVALUE_KINDS) or (
             isinstance(node, ast.Unary) and node.op == "*")
         if not ok:
@@ -695,6 +750,55 @@ class ExprParser:
                 "parse", tok.file, tok.line, tok.col,
                 "cannot apply {} to a non-l-value expression".format(context),
                 what(node))
+
+    def _se_lvalue_law(self, n: ast.Node, tok, context: str) -> None:
+        """M4 W-U COMMIT-1 (MC 12739) — THE statement-expression-as-lvalue
+        law, at the ONE place that knows the position IS an lvalue
+        position (assignment / `++--` / unary `&`). gcc 11.4 -Os REC law,
+        measured (W-U sims 22-row table + the ship refinement the sims
+        themselves named, rows L2/L4/L5):
+
+        L1 a TRANSPARENT group is a full lvalue: it ALIASES the object its
+           final expression names (no temp materialization), through any
+           number of nested transparent groups.
+        L2 any OTHER statement in the body kills lvalue-ness — LOUD, never
+           a silent temp copy of a side-effecting body.
+        L4 a final expression that is not itself an lvalue never makes the
+           group one — LOUD.
+        L5 a VOLATILE-qualified final kills it — LOUD (`({ *(volatile int
+           *)&v; }) += 5` is gcc rc1; the row the sims measured).
+        L3 is the OTHER law and is NOT this gate's business: in value and
+           copy-SOURCE position the group answers its source address for
+           ANY body (blcc/expr_codegen.py `_emit_addr`; the 279-stream
+           cmpxchg/spinlock class this wave unlocks).
+
+        Every refusal is gcc's own sentence shape ("lvalue required as …
+        operand") naming the class — REFUSE-LOUD, no silence, no
+        half-legal codegen.
+        """
+        while isinstance(n, ast.StmtExpr):
+            if n.value is None or not se_transparent(n):
+                raise DiagError(
+                    "sema", tok.file, tok.line, tok.col,
+                    "lvalue required as {} operand — '({{...}})' is not "
+                    "an lvalue here: the body must be ONE expression "
+                    "statement whose final expression is modifiable "
+                    "(§2.4e, gcc LOUD twin)".format(context), what(n))
+            if self.volatile_final(n.value):
+                raise DiagError(
+                    "sema", tok.file, tok.line, tok.col,
+                    "lvalue required as {} operand — the final expression "
+                    "of the '({{...}})' is volatile-qualified, which is "
+                    "never an lvalue (§2.4e, gcc LOUD twin)".format(context),
+                    what(n))
+            n = n.value
+        if not (isinstance(n, _LVALUE_KINDS)
+                or (isinstance(n, ast.Unary) and n.op == "*")):
+            raise DiagError(
+                "sema", tok.file, tok.line, tok.col,
+                "lvalue required as {} operand — the final expression of "
+                "the '({{...}})' is not an lvalue (§2.4e, gcc LOUD twin)"
+                .format(context), what(n))
 
     def _struct_type(self, node: ast.Node):
         ty = self.expr_type(node)

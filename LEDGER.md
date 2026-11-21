@@ -473,3 +473,44 @@ own census: the corpus declares exactly `__here` (4034) and `__out` (41),
 the F-G3 shape is a gcc ERROR so a gcc-compile-clean corpus cannot hold
 it. RED-first: 4 LOUD legs RED at tip bytes -> 8-green at these bytes;
 plain tier 1790-0-108 (seal 1782 + 8 legs, TOTAL-KIND at-commit bytes).
+M4 W-U COMMIT-1 (MC 12739, law A, the 279-stream crowd unlock): the
+statement-expression-as-lvalue law at the TWO seams that own it — the
+lvalue-position GATE (blcc/expr_parser.py `_se_lvalue_law`, reached from
+`_check_lvalue`: assignment / `++--` / the `.`-select base chain / unary
+`&`, measured a21 SHIP vs a22 LOUD) and the ADDRESS law (blcc/expr_codegen.py
+`_emit_addr` StmtExpr arm → `Codegen._se_run(as_addr)`), which stays
+BODY-BLUE because the copy-source class is legal for ANY body. MEASURED
+LAW (own hands, 30 rows at the wave REC; sims 22-row table + my a17..a26,
+c1..c7): L1 a TRANSPARENT group (one expression statement; empties and
+label wrappers allowed) is a full lvalue through any nesting and ALIASES
+the object its final names; L2 any other statement (call, declaration,
+assignment, control flow, asm, `(void)` cast) kills lvalue-ness — LOUD;
+L3 value/copy-SOURCE position (struct return, `->`, `[]` over a
+pointer/array final, `*` operand, plain read) answers the source address
+for ANY body; L4 a non-modifiable final (`({1;})`, or no final) — LOUD;
+L5 a VOLATILE-qualified final — LOUD (name, member, array element and
+pointer-to-volatile deref all measured; the SAME expressions in rvalue
+position stay legal, so the leg runs only in lvalue position and reads the
+QUALIFIER view through the one host hook the Parser now supplies — the
+light `expr_type` mirror `_unqual`s by design). REPLACES: the blunt
+`_LVALUE_KINDS` wall answer ('cannot apply assignment to a non-l-value
+expression' for `({ v; }) = 5`, gcc rc0) and the sema 'not an addressable
+l-value' behind a `.`-select; the sims' blanket-open stub posture is
+REFUSED (rows l05/l14d/l05b/a22/l07 are the named overpredicts — the gate
+is the law, not the stub). VERBATIM witnesses ship and PAIR BY VALUE: the
+instrumented `pmdp_establish` return, the `__xchg` size-switch macro, the
+`PageTail`/compound_head `&(({…})->flags)` corpus class, two group lvalues
+in one expression, for-init/control/increment, `&({v;})` aliasing, `+r`
+asm output. LIFETIME: group slots are never freed before the enclosing
+copy lands (the run-pairs prove distinct aliasing; the W-U guard shapes
+plant the corruption). LAND MOVEMENT (own hands at these bytes):
+arch_x86_entry_common :24792:16 and i8259 :36317:16 now wall on the
+extern-local `zero_pfn` class, init_main :32585:2 on the 5-byte splice
+class — the two named queue-behinds of this wave; test_core_m4wr1 /
+test_core_m4wt3 queue pins RE-PINNED on that MEASURED land (2 named
+flips). PRE-WAVE SIM OWN HANDS (corpus sha 22655bf48c05bd7a both ends):
+base 153 SET-EQUAL to the sealed W-T rows (accept set + first-wall
+histogram; only the PID temp-name and the scratch-dir path differ),
+{A}=153 +0/-0, {B}=159, {A+B+D}=181 — my ship law-A lands are BYTE-EQUAL
+to the sim stub's lands on all three probes. RED-first 20-red -> 25-green;
+plain tier 1815-0-108 plain at-commit bytes (seal 1782 + 8 W-U COMMIT-0 legs + 25 law-A legs)

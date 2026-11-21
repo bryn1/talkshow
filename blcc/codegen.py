@@ -275,13 +275,22 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin, InlinerMixin):
 
     # -- §2.4 statement-expression emission (M2-C5 leg 1) --------------------
 
-    def _se_run(self, n, with_value: bool) -> None:
+    def _se_run(self, n, with_value: bool, as_addr: bool = False) -> None:
         """Emit a `({...})`: its statements execute at this point (all
         values live in %rax at statement boundaries, §3 ⇒ the final
         expression's value simply lands in %rax). Names declared inside
         the braced group DIE at `})` (§2.4a) — locals map snapshot; the
         frame slots they used stay allocated, which is harmless.
-        Nesting depth guards the §2.4d jump-INTO reject."""
+        Nesting depth guards the §2.4d jump-INTO reject.
+
+        M4 W-U COMMIT-1 (MC 12739) `as_addr`: the SAME scope law answering
+        the ADDRESS of the final expression — gcc's stmt-expr-as-lvalue
+        law, where the group ALIASES the object its final names (no temp
+        materialization). The slot snapshot above is the corruption seam:
+        names die at `})` but the SLOTS live on, which is exactly what
+        makes the address good for the enclosing copy/store (the W-U
+        lifetime run-pairs and the 4 plant-RED guard shapes measure that
+        claim; a slot reused before the copy lands is the plant)."""
         saved = dict(self.fn.locals)
         saved_lbl = self.fn_labels
         se = self._se_defs.get(id(n))
@@ -293,7 +302,12 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin, InlinerMixin):
         try:                                      # stack for the USE law
             for st in n.stmts:
                 self._stmt(st)
-            if with_value:
+            if as_addr:
+                if n.value is None:
+                    self._err(n, "void value not ignored as it ought to be "
+                              "(§2.4c)", "statement expression")
+                self._emit_addr(n.value)
+            elif with_value:
                 self._emit_expr(n.value)
         finally:
             self._se_chain.pop()
