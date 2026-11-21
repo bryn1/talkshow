@@ -396,14 +396,20 @@ int f(int x){ static int x; return x; }
 """, "param", needle="x")
 
 
-def test_static_local_string_init_loud():
-    # scalar static-local string init rides the shipped file-scope string
-    # wall (gcc gnu89 ACCEPTS `static const char *m = "hi"` — LOUD-DIV,
-    # disclosed): blcc's §4 initializer set is integer/address-only.
-    blcc_loud("""
+def test_static_local_string_init_FLIPPED_by_WVS():
+    # This row's LOUD-DIV disclosure (gcc gnu89 ACCEPTS `static const
+    # char *m = "hi"`; blcc was LOUD) CLOSED under M4 W-V COMMIT-S
+    # (MC 12747): the static-local POINTER slot now rides the SHIPPED
+    # §1 row 11 anon-static address door — the same law as the 37-
+    # stream `.name = "noop"` global family (sims row e29's mirror;
+    # wave leg tests/test_core_m4wv3.py::
+    # test_wv3_static_local_string_slot_same_law). The disclosed
+    # divergence no longer exists; the run-pair proves byte-identical
+    # behavior, so the old blcc_loud pin is history, not instruction.
+    both_run("""
 int m(void){ static const char *msg = "hi"; return msg[0]; }
 int main(void){ return m(); }
-""", "str", needle="string")
+""", "str")
 
 
 def test_static_local_aggregate_nonconst_loud():

@@ -119,12 +119,17 @@ int main(void) { _sys_exit(0); }
 """
 
 
-def test_global_string_initializer_is_loud_sema_reject_no_emit():
+def test_global_string_initializer_FLIPPED_by_WVS():
+    # M4 W-V COMMIT-S (MC 12747) SHIPPED this exact shape: a string in
+    # a POINTER slot of a global initializer is the ADDRESS CONSTANT of
+    # its bytes (the 37-stream `.name = "noop"` family; wave legs in
+    # tests/test_core_m4wv3.py). The old §4-rc2/no-emit pin — F4's
+    # original adjudication — is history, not instruction; what it
+    # guarded at the INTEGER slot survives LOUD on both sides, pinned
+    # at test_core_m4wv3.py::test_wv3_e29_int_slot_stays_loud and by
+    # the 8-byte address door in test_regress_c5.
     r, out = compile_src(SRC_F4, "gstr")
-    # §4 global initializers: integer/char/address-of-global only; §8: the
-    # diagnostic names the construct at file:line:col and nothing is emitted.
-    assert r.returncode == 2, (r.returncode, r.stderr)
-    assert re.search(r"c2_gstr\.\d+\.c:\d+:\d+: sema: .*string literal",
-                     r.stderr), r.stderr
-    assert not os.path.exists(out), "binary emitted for a rejected input"
-    assert not os.path.exists(out + ".s"), ".s emitted for a rejected input"
+    assert r.returncode == 0, (r.returncode, r.stderr)
+    assert os.path.exists(out), "shipped input must emit the binary"
+    p = subprocess.run([out], capture_output=True, timeout=30)
+    assert p.returncode == 0, p.returncode

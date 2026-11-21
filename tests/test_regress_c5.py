@@ -438,16 +438,26 @@ def test_paren_init_diag_names_construct():
 
 
 def test_global_cast_init_diag_and_sealed_exception():
-    """cn08: found names 'cast expression' at the global-init site. The
+    """cn08: found names the construct at the global-init site. The
     former sealed exception for the node-class tokens was RE-SIGNED at the
     §8 adjudication (TEST-c4): test_c2_orch_probes REJECT_CASES and w9/w10
     here now pin the shipped construct names 'call expression' / '+ expression'.
+    M4 W-V COMMIT-G (MC 12747) MOVED this row's door WITHOUT its refusal:
+    a CAST of a constant now FOLDS (law G — `(void *)&fn` ships), so the
+    offending (long)-cast of an array no longer dies as 'cast expression'
+    — the constant it folds to is an ADDRESS, and the INIT-SLOT's 8-byte
+    door refuses it naming 'initializer'. rc2 and no-emit are UNCHANGED;
+    the §8 construct-naming stands at the new door (measured; gcc rc1 on
+    the same shape — postures agree). A 64-bit slot `long g = (long)s;`
+    is gcc rc0 AND blcc rc0 — measured twin, not argued.
     """
     r, out = compile_src('char s[] = "hi";\nint g = (long)s;\n'
                          'int main(void){ _sys_exit(0); }\n', "w8")
     assert r.returncode == 2, r.stderr
     err = r.stderr.strip()
-    assert DIAG_RE.match(err) and err.endswith("found 'cast expression'"), err
+    assert DIAG_RE.match(err) and err.endswith(
+        "address initializer needs an 8-byte pointer type (§4), found "
+        "'initializer'"), err
     assert_nothing_emitted(out)
     # FINDING c2-F3 (T+10b): w10 (`int a = 1 + 1;`) was STRICTER THAN THE
     # ORACLE (gcc gnu89 rc0 — see test_c2_orch_probes.py re-sign note);
