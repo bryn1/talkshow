@@ -2544,19 +2544,16 @@ class Parser(AsmParseMixin, CompatLawMixin):
                 #     re-decl;
                 #   * an extern INCOMPLETE-ARRAY local (`extern char
                 #     __init_begin[], __init_end[];` — 304 corpus streams,
-                #     the #1 first-wall class at the combo bytes) stays
-                #     LOUD HERE and NAMES the class: gcc compiles it, the
-                #     §4 size wall still owns it, and freeing it is the
-                #     W-V lever this wave walks BEHIND (b5: gcc rc0, blcc
-                #     LOUD — accept-neutral).
+                #     the #1 first-wall class at the W-U close bytes)
+                #     BINDS like every other extern reference: M4 W-V
+                #     COMMIT-E DELETES the §4 LOUD that stood here. gcc
+                #     binds the name as a REFERENCE to the object defined
+                #     elsewhere; incompleteness owns only SIZE, and
+                #     sizeof-on-a-never-completed array has been LOUD
+                #     since COMMIT-0 — the REFERENCE shipped while the
+                #     SIZE door stayed shut (law rows e02/e11/e16,
+                #     own-hands ladder .tmp/m4-wv).
                 if self.lookup(name) is None:
-                    if isinstance(ty, ast.ArrayType) and ty.size is None:
-                        self._sema(pos, "extern local array '{}' has no "
-                                   "size in this translation unit (§4 — "
-                                   "the incomplete-array extern "
-                                   "reference is the W-V lever; gcc "
-                                   "compiles it, blcc refuses LOUD)"
-                                   .format(name))
                     self._ext_refs.setdefault(name, (pos, ty))
                 if self.s.accept_punct(","):
                     continue
