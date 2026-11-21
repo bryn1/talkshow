@@ -217,6 +217,9 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
             self._err(n, "cannot emit unary operator", n.op)
 
     def _ex_sizeof(self, n) -> None:
+        # M4 W-V COMMIT-0: the never-completed-extern-array law (ONE
+        # home, `TypeMap._sizeof_obj_law`) rides the codegen door too.
+        self._sizeof_obj_law(n, n)
         self._imm(self._size(n.typ, n) if n.typ is not None
                   else self._size(self._ty(n.arg), n))
 

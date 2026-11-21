@@ -386,6 +386,38 @@ class TypeMap(CompatLawMixin):
                       "function")
         self._err(at or self.tu, "cannot size this type", self._what(ty))
 
+    def _sizeof_obj_law(self, n, at) -> None:
+        """M4 W-V COMMIT-0 (MC 12747): 'sizeof' on an extern INCOMPLETE
+        array whose size NO definition in this TU completes is LOUD.
+        The `_size` incomplete arm answering 8 for such an OBJECT was
+        silent size-laundering (own hands at dc6d94a: `extern char a[];
+        sizeof a` folded `mov $0x8` rc0; gcc 11.4 LOUDS "invalid
+        application of 'sizeof' to incomplete type 'char[]'"). The law
+        closes the sims' risk seam 1 BEFORE the extern-reference lever
+        arms it (loud-before-arming); corpus volume 0 — no stream sizes
+        any of these names (pinned). A COMPLETING definition wins
+        quietly (measured: `extern int t[]; n=sizeof t; int t[5];`
+        folds 20; the later `char y[16]` answers 16), a PARAMETER's
+        decayed array keeps answering 8 (it resolves through fn.locals,
+        never through this file-scope entry), and the flexible-member
+        arm above already LOUDs its own class. BOTH sizeof doors —
+        codegen `_ex_sizeof` and the fold arm in `_fold_const` — call
+        this ONE law."""
+        if n.typ is not None or not isinstance(n.arg, ast.Ident):
+            return
+        gd = self.globals.get(n.arg.name)
+        if gd is None:
+            return
+        ty = self._untype(gd.type)
+        if (isinstance(ty, ast.ArrayType) and ty.size is None
+                and not getattr(ty, "fam", False)):
+            self._err(at or n, "'sizeof' of extern incomplete array "
+                      "'{}' has no definition completing it in this "
+                      "translation unit (§4 — gcc ERROR: invalid "
+                      "application of 'sizeof' to incomplete type; the "
+                      "REFERENCE ships, the SIZE does not)".format(
+                          n.arg.name), "sizeof")
+
     # -- constant-folded array sizes (P1-2: §4 sizes are expressions) ------------
 
     def _fold_ty(self, n, at):
@@ -447,6 +479,10 @@ class TypeMap(CompatLawMixin):
         if isinstance(n, ast.Sizeof):
             # M2-C5 (§2.6 e1 leg): sizeof may ride an array-size /
             # choose_expr control: `char a[sizeof(__typeof__(1L)) - 8]`.
+            # M4 W-V COMMIT-0: the never-completed-extern law stands
+            # at THIS door too (it is the fold door for the corpus
+            # spelling `int n = sizeof z;` — measured QUIET-8 before).
+            self._sizeof_obj_law(n, at or n)
             if n.typ is not None:
                 return self._size(n.typ, at or n)
             return self._size(self._ty(n.arg), at or n)
