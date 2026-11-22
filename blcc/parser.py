@@ -2012,6 +2012,20 @@ class Parser(AsmParseMixin, CompatLawMixin):
             self.s.next()  # tag (constants, not tags, are what §4 pins)
         int_ty = ast.BuiltinType(tok.file, tok.line, tok.col, "int")
         if not self.s.accept_punct("{"):
+            # M4 W-Y COMMIT-ID (MC 12764): the TAG-ONLY declaration
+            # `enum ttu_flags;` — no body, no declarator — is the ONE
+            # arm of the struct twin this door never grew. The corpus
+            # witness is 29 streams deep and identical (sims §3a:
+            # mm/internal.h:617, `enum ttu_flags;` in 28 mm/* TUs +
+            # arch/x86/mm/pat/memtype.c.i); gcc accepts it at REC (row
+            # y25 rc0 exit=3), blcc refused with `expected an identifier,
+            # found ';'` because the declaration layer, finding no
+            # declarator, met the ';' — the STRUCT arm's
+            # `_bare_type_ok` + the `;`-swallow at the declaration layer
+            # is the shipped twin (and a bare enum body already marks
+            # itself below), so THIS is that home, not a new mechanism.
+            if self.s.at_punct(";"):
+                self._bare_type_ok = True
             return int_ty
         consts: List[Tuple[str, int]] = []
         prev = 0
