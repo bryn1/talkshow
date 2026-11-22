@@ -179,6 +179,30 @@ static inline __attribute__((always_inline)) int read_through(union V *kp)
 int answer(void) { union V *v = &slot; return read_through(v) % 97; }
 """
 
+# Two rows the wave's own TOOTH PLANT forced into the battery (the plant
+# law: a check that has never gone RED is not a check). The brief's
+# label-window mutant `mo + pos -> pos` turned out to be an EQUIVALENT
+# mutant — under this layout law EVERY union member starts at offset 0,
+# so `mo` is 0 in every slot and no row can tell the two apart (measured:
+# 16/16 rows kept their answers). The killable shape is the window SHIFT
+# (write at +1), and THAT needs rows whose member carries more than one
+# item after the label: `YSPAN` goes RED (the shipped overlap refusal
+# fires at the wrong byte), and `YDES` pins a designated member slot
+# read-back. Named here because a battery that cannot kill the mutant is
+# a finding, not a detail.
+YDES = """
+union U { long a; int mode; const char *name; };
+static union U u = { .name = "zz" };
+static union U v = { .a = 5 };
+int answer(void){ return (int)(u.name[0]=='z')*40 + (int)(u.name[1]=='z')*2
+  + (int)v.a; }
+"""
+YSPAN = """
+struct Inner { const char *n; int m; };
+union W { struct Inner s; long pad; };
+static union W w = { .s = { "q", 7 } };
+int answer(void){ return (int)w.s.n[0] + (int)w.s.m; }
+"""
 ROWS = [("y01_walk_verbatim", Y01, 11), ("y02_designated_alias", Y02, 42),
         ("y03_string_in_slot", Y03, 98), ("y04_cl_address_expr", Y04, 7),
         ("y06_addr_nonzero_off", Y06, 9), ("y07_union_array_addr", Y07, 123),
@@ -186,6 +210,8 @@ ROWS = [("y01_walk_verbatim", Y01, 11), ("y02_designated_alias", Y02, 42),
         ("y19_two_scalars_last_wins", Y19, 4), ("y20_cl_static_scope", Y20, 67),
         ("y28_rodata_section", Y28, 16), ("y29_bytes_then_addr", Y29, 3),
         ("y32_two_cl_distinct", Y32, 62),
+        ("ydes_designated_member_slot", YDES, 47),
+        ("yspan_addr_then_scalar_in_member", YSPAN, 120),
         ("x_splice_post_rename", SPLICE, 77)]
 
 
