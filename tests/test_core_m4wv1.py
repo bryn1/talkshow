@@ -279,8 +279,17 @@ def test_wv1_init_main_walks_to_the_named_land():
         + first[:200]
     assert "bi_size" not in first, \
         "the W-W COMMIT-3 capture class must be EATEN: " + first[:200]
-    assert ":60018:29" in first and "passed by value" in first, \
-        "walk-land MOVED per W-W COMMIT-3 measurement: " + first[:200]
+    # M4 W-X COMMIT-X (MC 12756) ate the by-value door: the land MOVED
+    # again, re-measured on THIS instrument at the ship bytes: the §5
+    # union-address-initializer class at :69740:1061 — the SAME class+
+    # construct the close walk reports in real kcopy shape (init/
+    # main.c:757:1134, own hands). by-value asserted EATEN below.
+    assert ":69740:1061" in first and "address initializer inside a " \
+        "union" in first, \
+        "walk-land MOVED per W-X measurement: " + first[:200]
+    assert "passed by value" not in first, \
+        "the W-X MEMORY-class door must be EATEN (COMMIT-X, " \
+        "MC 12756): " + first[:200]
     # NOTE: THIS leg's cleaner is the legacy W-V instrument (it also
     # normalizes integer suffixes and drops every '#' line). At the
     # BASE bytes both instruments read the same wall line (:45311:9,
