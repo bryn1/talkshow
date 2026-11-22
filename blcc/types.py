@@ -443,6 +443,47 @@ class TypeMap(CompatLawMixin):
         v &= m
         return v if unsigned else ((v + 2 ** 127) % 2 ** 128) - 2 ** 127
 
+    def _fold_w(self, ty):
+        """M4 WHG-B COMMIT-2 (MC 12765): the (width, signedness) a folded
+        scalar answers with — None when the type is not a named scalar, in
+        which case the legacy 64-bit law rides, EXACTLY as before this
+        commit (a width the fold cannot name is never a width the fold
+        guesses)."""
+        if not isinstance(ty, ast.BuiltinType) or ty.name not in TYPE_SIZE:
+            return None
+        if is_i128(ty):
+            return 128, not is_unsigned(ty)
+        return 8 * TYPE_SIZE[ty.name], not is_unsigned(ty)
+
+    def _fold_carry(self, n):
+        """THE ONE common-arithmetic-type law the fold was missing: the
+        SHIPPED emitter brings BOTH operands to `_common_ty` (§2.2 usual
+        arithmetic conversions), converts, operates and re-wraps the result
+        (ExprEmitter._ex_binary). The fold now answers with the SAME type, so
+        a folded value is the value the emitted code would have produced —
+        which is what makes a folded branch a BRANCH and not a guess.
+        None (pointer operand, no named scalar) keeps the legacy law."""
+        fn = getattr(self, "_common_ty", None)
+        if fn is None:
+            return None
+        try:
+            ct = self._decay(self._untype(fn(n)))
+        except DiagError:
+            return None
+        return self._fold_w(ct)
+
+    def _fold_promo_w(self, n, at):
+        """The (width, signedness) a UNARY answers with: the promoted operand
+        type (§2.2 integer promotion — `_ex_unary`'s `nty` law, same home)."""
+        ty = self._fold_ty(n, at)
+        if ty is None:
+            return None
+        try:
+            ty = self._promote(ty)
+        except DiagError:
+            return None
+        return self._fold_w(self._decay(self._untype(ty)))
+
     def _fold_const(self, n, at) -> int:
         """Constant-fold an array-size expression (§4: integer literals, enum
         constants, + - * / % and parentheses; gcc's C rules)."""
@@ -484,11 +525,22 @@ class TypeMap(CompatLawMixin):
             oty = self._fold_ty(n.operand, at)
             if is_i128(oty):           # M4 W-B: 128-wide wrap (measured)
                 return self._wrap128(~v, is_unsigned(oty))
+            car = self._fold_promo_w(n.operand, at)   # M4 WHG-B COMMIT-2
+            if car is not None:
+                return self._wrapw(~v, *car)
             v = ~v & 0xFFFFFFFFFFFFFFFF
             return ((v + 2 ** 63) % 2 ** 64) - 2 ** 63
         if isinstance(n, ast.Unary) and n.op in ("-", "+"):
             v = self._fold_const(n.operand, at)
-            return -v if n.op == "-" else v
+            v = -v if n.op == "-" else v
+            # M4 WHG-B COMMIT-2 (MC 12765): `-1U` IS 0xFFFFFFFF — the sign
+            # flip happens INSIDE the promoted operand's width, which is the
+            # law the emitter's `_convert` applies. Before this row the fold
+            # answered -1 and the value was WRONG wherever the fold chose a
+            # branch (test_core_m2_lex.py::test_wrap_and_signcompare_run_pairs
+            # is the pin: it went RED on the dead-branch fold's first CI run).
+            car = self._fold_promo_w(n.operand, at)
+            return self._wrapw(v, *car) if car is not None else v
         if isinstance(n, ast.Unary) and n.op == "!":
             return 0 if self._fold_const(n.operand, at) else 1
         if isinstance(n, ast.Sizeof):
@@ -518,6 +570,18 @@ class TypeMap(CompatLawMixin):
             if n.op in ("<", "<=", ">", ">=", "==", "!="):
                 a = self._fold_const(n.left, at)
                 b = self._fold_const(n.right, at)
+                # M4 WHG-B COMMIT-2: the comparison happens in the COMMON
+                # type (`_common_ty` again — `_ex_binary` sets `uns` from it
+                # and picks the `_SETCC_U` family), so `0U < -1` is TRUE and
+                # `-1 < 0U` is FALSE exactly as gcc answers them; the
+                # unsigned re-interpretation of the wrapped negative is what
+                # makes the sign-compare class answer right.
+                car = self._fold_carry(n)
+                if car is not None:
+                    w, sgn = car
+                    a, b = self._wrapw(a, w, sgn), self._wrapw(b, w, sgn)
+                    if not sgn:
+                        a, b = a & ((1 << w) - 1), b & ((1 << w) - 1)
                 return {
                     "<": lambda: a < b, "<=": lambda: a <= b,
                     ">": lambda: a > b, ">=": lambda: a >= b,
@@ -525,6 +589,12 @@ class TypeMap(CompatLawMixin):
             if n.op in ("&", "|", "^"):
                 a = self._fold_const(n.left, at)
                 b = self._fold_const(n.right, at)
+                car = self._fold_carry(n)          # M4 WHG-B COMMIT-2
+                if car is not None:
+                    a, b = self._wrapw(a, *car), self._wrapw(b, *car)
+                    v = {"&": lambda: a & b, "|": lambda: a | b,
+                         "^": lambda: a ^ b}[n.op]()
+                    return self._wrapw(v, *car)
                 return {"&": lambda: a & b, "|": lambda: a | b,
                         "^": lambda: a ^ b}[n.op]()
             if n.op in ("<<", ">>"):
@@ -542,6 +612,16 @@ class TypeMap(CompatLawMixin):
                 if b < 0 or b > 63:
                     self._err(at or n, "shift amount must be a constant in "
                               "0..63 (§4)", n.op)
+                # M4 WHG-B COMMIT-2: the shift happens in the promoted LEFT
+                # type (`_ex_binary`'s `shlq/sarq` + `_convert(ct)` arm):
+                # `1u << 40` wraps to 0 at 32 bits instead of riding 64.
+                car = self._fold_promo_w(n.left, at)
+                if car is not None and car[0] < 64:
+                    w, sgn = car
+                    m = (1 << w) - 1
+                    v = ((a & m) << b) & m if n.op == "<<" \
+                        else (a & m) >> b if not sgn else self._wrapw(a, w, True) >> b
+                    return self._wrapw(v, w, sgn)
                 v = (a << b) & 0xFFFFFFFFFFFFFFFF if n.op == "<<" else a >> b
                 return ((v + 2 ** 63) % 2 ** 64) - 2 ** 63
         if isinstance(n, ast.Cast):
@@ -578,19 +658,37 @@ class TypeMap(CompatLawMixin):
         if isinstance(n, ast.Binary) and n.op in ("+", "-", "*", "/", "%"):
             a = self._fold_const(n.left, at)
             b = self._fold_const(n.right, at)
+            # M4 WHG-B COMMIT-2 (MC 12765): THE FOLD WIDTH LAW. The shipped
+            # emitter converts BOTH operands to the common type, operates and
+            # re-wraps (`_ex_binary`); the fold now does the same, so
+            # `0xFFFFFFFFU + 1U` answers 0 (32-bit wrap), `*` wraps, and
+            # `/`/`%` divide in the UNSIGNED common type (the emitter's
+            # `divq` arm) instead of the signed one. A fold that answers a
+            # different value than the code it replaces is not a fold, it is
+            # a wrong answer — and since this commit the fold CHOOSES
+            # BRANCHES, so the wrong answer would pick a branch.
+            car = self._fold_carry(n)
+            if car is not None:
+                a, b = self._wrapw(a, *car), self._wrapw(b, *car)
+            res = None
             if n.op == "+":
-                return a + b
-            if n.op == "-":
-                return a - b
-            if n.op == "*":
-                return a * b
-            if b == 0:
-                self._err(at or n, "array size expression divides by zero (§4)",
-                          n.op)
-            q = abs(a) // abs(b)                 # C: truncate toward zero
-            if (a < 0) != (b < 0):
-                q = -q
-            return q if n.op == "/" else a - b * q
+                res = a + b
+            elif n.op == "-":
+                res = a - b
+            elif n.op == "*":
+                res = a * b
+            else:
+                if b == 0:
+                    self._err(at or n, "array size expression divides by "
+                              "zero (§4)", n.op)
+                if car is not None and not car[1]:      # unsigned common type
+                    res = (a // b) if n.op == "/" else (a % b)
+                else:
+                    q = abs(a) // abs(b)               # C: truncate toward zero
+                    if (a < 0) != (b < 0):
+                        q = -q
+                    res = q if n.op == "/" else a - b * q
+            return self._wrapw(res, *car) if car is not None else res
         self._err(at or n, "array size must be a compile-time constant "
                   "expression (§4: literals, enum constants, + - * /)",
                   self._what(n))
