@@ -221,10 +221,16 @@ def test_wv4_the_other_three_rewall_named():
     rc, first = _first_wall("drivers_tty_serial_8250_8250_port.c.i")
     assert rc == 0, "8250_port must ACCEPT once the capture is renamed " \
         "(COMMIT-3, MC 12753): " + first[:170]
-    for s, needle in (
-            ("kernel_panic.c.i", "address initializer inside a union"),):
-        rc, first = _first_wall(s)
-        assert "void value not ignored" not in first, \
-            s + ": the V-class wall must be EATEN: " + first[:150]
-        assert needle in first, s + ": must re-wall on the NAMED " \
-            "behind-class %r: " % needle + first[:170]
+    # M4 W-Y COMMIT-Y (MC 12764) FLIPS this arm: kernel_panic's
+    # union-address land was the `module_param` `{ &panic_timeout }`
+    # slot — the exact construct the W-Y union-address law ships — and
+    # the stream now ACCEPTS outright (measured own hands, {Y} sweep:
+    # one of the 10 gained witnesses, LOST 0). The witness that does
+    # NOT accept is kernel_printk_printk.c.i, re-walled BEHIND the
+    # lever on the typeof-typed static brace-init class at
+    # printk/printk.c:3090 (NAMED in the W-Y LEDGER row, not hidden).
+    rc, first = _first_wall("kernel_panic.c.i")
+    assert "void value not ignored" not in first, \
+        "kernel_panic: the V-class wall must be EATEN: " + first[:150]
+    assert rc == 0, "kernel_panic must ACCEPT once the union-address " \
+        "law ships (COMMIT-Y, MC 12764): " + first[:170]

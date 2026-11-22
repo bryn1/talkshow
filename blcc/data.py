@@ -272,6 +272,36 @@ class DataEmitter:
             return 1 if v else 0
         return v
 
+    def _entries_from_maps(self, total, vals, labs):
+        """THE rebuild law, one home for both materializers that carry a
+        label window over a byte map: ('q', lab) where a label starts,
+        ('b', byte) where a byte is set, and the '.zero'-compressed run
+        beneath. Address order is the emission order, so a last-wins init
+        stays last-wins and a label never floats ahead of the bytes that
+        follow it (W-Y sims plant p_order: label-entries-first breaks
+        y06/y07/y29 — this walk is what keeps them green).
+
+        M4 W-Y COMMIT-Y (MC 12764): extracted from `_bf_merge` verbatim
+        (byte-identical output, corpus-proved at the close leg) because
+        the union address arm needs exactly this law and nothing else —
+        a second copy beside it is the defect this repo names."""
+        rebuilt = []
+        i = 0
+        while i < total:
+            if labs[i] is not None:
+                rebuilt.append(("q", labs[i]))
+                i += 8
+            elif vals[i]:
+                rebuilt.append(("b", vals[i]))
+                i += 1
+            else:
+                j = i
+                while j < total and not vals[j] and labs[j] is None:
+                    j += 1
+                rebuilt.append(("z", j - i))   # the .zero compression
+                i = j
+        return rebuilt
+
     def _bf_merge(self, total, out, bsup, init):
         """Fold bitfield bit-contributions into the entry stream. Unit
         bytes are little-endian (x86, W-F layout law); a ('q') label
@@ -303,22 +333,7 @@ class DataEmitter:
                    | (v & ((1 << w) - 1)) << bit) & ((1 << (8 * ub)) - 1)
             for p in range(uoff, uoff + ub):
                 vals[p] = (cur >> (8 * (p - uoff))) & 255
-        rebuilt = []
-        i = 0
-        while i < total:
-            if labs[i] is not None:
-                rebuilt.append(("q", labs[i]))
-                i += 8
-            elif vals[i]:
-                rebuilt.append(("b", vals[i]))
-                i += 1
-            else:
-                j = i
-                while j < total and not vals[j] and labs[j] is None:
-                    j += 1
-                rebuilt.append(("z", j - i))   # the .zero compression
-                i = j
-        return rebuilt
+        return self._entries_from_maps(total, vals, labs)
 
     def _bytes_of(self, ty: ast.Node, init, at,
                   ctx: str = "global") -> List[Tuple[str, int]]:
@@ -344,8 +359,26 @@ class DataEmitter:
             # union slots OVERLAP: a sequential byte stream cannot carry
             # them; materialize (unions are object-sized, the .zero
             # compression rule protects .bss ARRAYS, not these).
+            #
+            # M4 W-Y COMMIT-Y (MC 12764) — THE UNION ADDRESS LAW: an
+            # address inside a union initializer materializes as an
+            # 8-byte label window at the MEMBER'S OWN offset. The walk
+            # stopper is this one sentence at init/main.c:757 (sims §2:
+            # 11 witnesses, all the `module_param` expansion
+            # `…, -1, 0, { &sym } };`), and the read-back that makes it
+            # a walk stopper DEREFERENCES the stored pointer — so a
+            # zero-filled slot would compile and answer 0: every law row
+            # is exit-encoded through a real read-back (y01=11, y02=42,
+            # y06=9, y07=123, y20=67, y28=16, y29=3, y32=62).
+            # Loud, never silent: a window that is NOT 8-aligned or runs
+            # past the extent keeps the shipped §5 refusal (there is no
+            # honest object to build), and a label that collides with
+            # another label or with a live byte refuses too (sims y31:
+            # gcc truncates a relocation there — volume 0 in this
+            # corpus, NAMED rather than copied).
             total, slots = self._struct_layout(ty, at)[1:]
             buf = bytearray(total)
+            labs = [None] * total       # the §Y label carrier
             for i, (sname, sty, mo, ssz, bfx) in enumerate(slots):
                 if i < len(init.items) and \
                         not isinstance(init.items[i], ast.ZeroFill):
@@ -369,15 +402,28 @@ class DataEmitter:
                     pos = 0
                     for kind, val in sub:
                         if kind == "b":
+                            if labs[mo + pos] is not None:
+                                self._err(init, "address initializer "
+                                          "overlap in a union (§Y)",
+                                          "initializer")
                             buf[mo + pos] = val
                             pos += 1
                         elif kind == "z":
                             pos += val
                         else:
-                            self._err(init, "address initializer inside a "
-                                      "union initializer is not in the "
-                                      "subset (§5)", "initializer")
-            return [("b", b) for b in buf]
+                            if (mo + pos) % 8 or mo + pos + 8 > total:
+                                self._err(init, "address initializer "
+                                          "inside a union initializer is "
+                                          "not in the subset (§5)",
+                                          "initializer")
+                            for p in range(mo + pos, mo + pos + 8):
+                                if labs[p] is not None or buf[p]:
+                                    self._err(init, "address initializer "
+                                              "overlap in a union (§Y)",
+                                              "initializer")
+                                labs[p] = val
+                            pos += 8
+            return self._entries_from_maps(total, buf, labs)
         if isinstance(ty, (ast.BuiltinType, ast.PtrType)):
             sz = self._size(ty, at)
             if isinstance(init, ast.FloatLit):

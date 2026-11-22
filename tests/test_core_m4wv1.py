@@ -273,20 +273,23 @@ def test_wv1_init_main_walks_to_the_named_land():
     # MEASURED :59876:36 (own hands, {W} sweep; the sims' W-tree walk-
     # leg row names the same wall). The lever-EAT assertion stands.
     rc, first = _first_wall("init_main.c.i")
-    assert rc != 0, "init_main still walls (behind class, by design)"
+    # M4 W-Y COMMIT-Y (MC 12764) SHIPPED the union-address law: the wall
+    # this leg pinned is GONE and the stream COMPILES — the first object
+    # this project has ever produced for init/main.c. The retired cite is
+    # rewritten here BY NAME rather than left standing: the sealed land
+    # was `:69740:1061` on THIS instrument (W-X own hands; original
+    # init/main.c:757:1134 — the W-Y sims' own-hands read of the same
+    # wall on the sweep's clean stream is `:69750:1061`, a +10-line
+    # instrument drift the W-Y LEDGER row names). The EAT assertions
+    # below stand: their sentences simply never appear now.
+    assert rc == 0, "init/main.c ACCEPTS at ship bytes; got: " + first[:200]
+    assert "address initializer inside a " not in first, \
+        "the W-Y union-address law must be live (COMMIT-Y, MC 12764)"
     assert "bitfield member initializer" not in first, \
         "the W-W lever wall must be EATEN (COMMIT-1, MC 12753): " \
         + first[:200]
     assert "bi_size" not in first, \
         "the W-W COMMIT-3 capture class must be EATEN: " + first[:200]
-    # M4 W-X COMMIT-X (MC 12756) ate the by-value door: the land MOVED
-    # again, re-measured on THIS instrument at the ship bytes: the §5
-    # union-address-initializer class at :69740:1061 — the SAME class+
-    # construct the close walk reports in real kcopy shape (init/
-    # main.c:757:1134, own hands). by-value asserted EATEN below.
-    assert ":69740:1061" in first and "address initializer inside a " \
-        "union" in first, \
-        "walk-land MOVED per W-X measurement: " + first[:200]
     assert "passed by value" not in first, \
         "the W-X MEMORY-class door must be EATEN (COMMIT-X, " \
         "MC 12756): " + first[:200]
