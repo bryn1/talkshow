@@ -871,6 +871,28 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin, InlinerMixin):
                 self._discarding = True
                 self._emit_expr(n.expr)
         elif isinstance(n, ast.If):
+            # M4 WHG-B COMMIT-1 (MC 12765): THE DEAD-BRANCH FOLD — a control
+            # that folds at the ONE fold-entry law (`_asm_const`, the SAME
+            # home the W-O constant-switch dispatch ships on, LEDGER W-O
+            # COMMIT-2) keeps the TAKEN arm on the shipped emitter and
+            # DISCARDS the other arm ENTIRELY: no test, no body, no symbol
+            # reference. Measured gcc -Os REC posture, fold-law table rows
+            # f01-f04/f09-f12/f15-f19 (.tmp/evidence/whgb-sims.md §DoD-3):
+            # a dead call, write, volatile read, extern-address and
+            # compiletime_assert name all emit NOTHING, so the reference
+            # vanishes WITH the branch — the 385-name compiletime_assert and
+            # 4-name fortify link-blocking classes ride out with it. NO
+            # second fold entry: the sizeof-chain, enum, `&&/||` and folded-
+            # `?:` spellings all answer at this one entry, and the parse-side
+            # §2.11 `__builtin_constant_p` table already lands its 0/1 here.
+            # CONSERVATIVE fallbacks (NAMED, the shipped posture rides — the
+            # W-O `_SwitchFallback`/bare-decl family mirrored): see `_fold_ok`.
+            k = self._asm_const(n.cond)
+            if k is not None and _fold_ok(n, k):
+                keep = n.then if k != 0 else n.orelse
+                if keep is not None:
+                    self._stmt(keep)
+                return
             l_else, l_end = self._label("else"), self._label("endif")
             self._emit_expr(n.cond)
             self._truth(n.cond)
@@ -882,6 +904,13 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin, InlinerMixin):
                 self._stmt(n.orelse)
             self.fn.lines.append("{}:".format(l_end))
         elif isinstance(n, ast.While):
+            # M4 WHG-B COMMIT-1: `while (0) body` — gcc emits NOTHING (row
+            # f17). ONLY the FALSE-folded control folds; a TRUE one is an
+            # infinite loop, and a `do … while (0)` body runs ONCE — neither
+            # is reachable here (named limit, pinned).
+            k = self._asm_const(n.cond)
+            if k is not None and k == 0 and not _fold_unsafe(n.body):
+                return
             l_top, l_end = self._label("while"), self._label("endwhile")
             self.fn.lines.append("{}:".format(l_top))
             self._emit_expr(n.cond)
@@ -905,6 +934,14 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin, InlinerMixin):
             self._e("jne {}".format(l_top))
             self.fn.lines.append("{}:".format(l_end))
         elif isinstance(n, ast.For):
+            # M4 WHG-B COMMIT-1: `for (; 0;) body` with NO init clause —
+            # gcc emits NOTHING (row f18). An init/step clause carries
+            # side effects, so the shipped emitter keeps it (conservative,
+            # named): the fold never eats a loop's own evaluation.
+            if n.init is None and n.cond is not None:
+                k = self._asm_const(n.cond)
+                if k is not None and k == 0 and not _fold_unsafe(n.body):
+                    return
             self._stmt_for(n)
         elif isinstance(n, ast.Return):
             if self._sret is not None:
@@ -1622,3 +1659,73 @@ def compile_tu(tu: ast.TranslationUnit) -> str:
     """Translation unit -> module asm text (runtime blob is the driver's
     prefix; §3: runtime.py feeds codegen, codegen never imports it back)."""
     return Codegen(tu).compile()
+
+
+# ---------------------------------------------------------------------------
+# M4 WHG-B (MC 12765): THE DEAD-BRANCH-FOLD GUARD — the ONE question the
+# fold asks before it drops an arm, modelled on the W-O `_SwitchFallback`.
+# A refusal is NOT a failure: it is the shipped posture, which is what the
+# corpus accepted at, so a STRICTER guard can only refuse MORE folds than
+# the sims' retained stub — never fewer (the acceptance-neutral law's whole
+# argument; the 706-stream sweep measures it, LEDGER WHG-B rows).
+
+
+_FOLD_UNSAFE = (ast.AsmStmt, ast.Goto, ast.Label, ast.LabelDecl,
+                ast.LabelAddr, ast.Switch, ast.Case, ast.CaseRange,
+                ast.Default, ast.StructDecl, ast.EnumDecl, ast.TypedefDecl)
+#   AsmStmt/Goto/Label/LabelDecl/LabelAddr — the §2A M2-C1 pre-pass minted
+#     the name universe BEFORE any statement is emitted, and the W-R/W-W
+#     splice law owns asm-goto label clones per site: a live `goto`/`&&label`
+#     may target a definition that sits inside the arm, and a dead arm that
+#     EXECUTES asm is the sims' corruption class B.
+#   Switch/Case/CaseRange/Default — the enclosing switch's `_collect_cases`
+#     pre-pass minted the `.Lcase_*`/`.Ldeflt_*` labels and wired them into
+#     the compare chain BEFORE emission; dropping a marker's arm dangles the
+#     chain's `je` (measured on the sims' stub, probe p02: `nm` answers
+#     UNDEF `.Lcase_4` — class C, the relocation the sims' list missed).
+#   StructDecl/EnumDecl/TypedefDecl — the W-T OWNERSHIP STACK interplay:
+#     the emitter registers a layout/enum fact when it MEETS the
+#     declaration, so a name a LIVE statement reads after the folded arm
+#     would answer LOUD ("undefined").
+
+_FOLD_BARE_DECL = (ast.VarDecl, ast.StructDecl, ast.EnumDecl, ast.TypedefDecl)
+#   the W-O bare-decl family, generalized: an UNBRACED declaration arm keeps
+#   its names in the enclosing scope for the LIVE region, so the fold may not
+#   decide which of its two arms — kept or dropped — owns the declaration.
+
+
+def _fold_unsafe(node) -> bool:
+    """True when a subtree the fold would DISCARD carries a shape the fold
+    refuses to drop. The walk is a stack over the dataclass fields (the
+    sims' retained-stub reach: it must see the asm operand and `({...})`
+    positions the statement walkers `stmt_children`/`stmtexprs_in_expr` own
+    for OTHER questions, and it must not re-own either one's scope law) over
+    the NAMED guard list above."""
+    if node is None:
+        return False
+    stack = [node]
+    while stack:
+        cur = stack.pop()
+        if isinstance(cur, (list, tuple)):
+            stack.extend(cur)
+            continue
+        if not isinstance(cur, ast.Node):
+            continue
+        if isinstance(cur, _FOLD_UNSAFE):
+            return True
+        for fld in cur.__dataclass_fields__:
+            v = getattr(cur, fld, None)
+            if v is not None and v is not cur:
+                stack.append(v)
+    return False
+
+
+def _fold_ok(n, k) -> bool:
+    """May the constant control `k` (non-None) fold the `ast.If` `n` away —
+    i.e. emit ONLY the arm `k` selects and discard the other? NAMED
+    conservative refusals, all of them: the shipped emission rides."""
+    keep = n.then if k != 0 else n.orelse
+    drop = n.orelse if k != 0 else n.then
+    if isinstance(keep, _FOLD_BARE_DECL) or isinstance(drop, _FOLD_BARE_DECL):
+        return False
+    return not _fold_unsafe(drop)
