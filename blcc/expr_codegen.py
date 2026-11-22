@@ -1230,9 +1230,15 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
         BASE ADDRESS is stashed in that slot (E1 evaluated exactly once,
         shared by the read and the RMW); both default to the plain-assign
         behaviour, untouched."""
-        self._bf_access_guard(n.target, d)  # int128-unit LOUD twin
+        # M4 W-Y COMMIT-BF (MC 12764): the §BF read-modify-write arm
+        # (`X++`, `X--`) hands THIS the member select itself; the shipped
+        # compound-assign shape hands it an AssignOp with `.target`. Both
+        # name the SAME member and position, so the RMW law below runs
+        # verbatim for either — one law, one body, no second copy.
+        tgt = getattr(n, "target", n)
+        self._bf_access_guard(tgt, d)       # int128-unit LOUD twin
         boff, bit, w, un = d
-        if self._bf_is_packed(n.target):
+        if self._bf_is_packed(tgt):
             # M4 W-X COMMIT-PACKED STORE arm (MC 12756, l20/l10
             # paired): READ the field's OWN byte window, clear its
             # bits, land (v mod 2^w) << bit, write back THE SAME bytes
@@ -1252,7 +1258,7 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
             t = self._t()
             self._e("movq %rax, {}".format(t))
             if base_slot is None:
-                self._bf_addr(n.target)
+                self._bf_addr(tgt)
                 self._e("movq %rax, %rdx")
             else:
                 self._e("movq {}, %rdx".format(base_slot))
@@ -1298,7 +1304,7 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
         t = self._t()
         self._e("movq %rax, {}".format(t))
         if base_slot is None:
-            self._bf_addr(n.target)
+            self._bf_addr(tgt)
             self._e("movq %rax, %rdx")
         else:
             self._e("movq {}, %rdx".format(base_slot))
@@ -1325,38 +1331,21 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
             self._e(("sarq" if signed else "shrq") + " ${}, %rax".format(left))
         self._unt()
 
-    def _bf_assignop(self, n, d: Tuple) -> None:
-        """M2 fix-g2 (MC 12460): bitfield compound assign — the §5
-        &bitfield wall is replaced by the MEASURED gcc law (bfc.O0.out,
-        -O0 == -Os): read the field at its own sign, arithmetic at the
-        PROMOTED type (the scalar _ex_assignop law), then the SAME masked
-        unit-RMW of _bf_store (neighbour bits survive — byte-window leg);
-        the expression value is the converted STORED value (gcc: 3 += 1
-        in int:3 reads back -4). Base evaluated EXACTLY once: t1 holds
-        the unit base for both the read and the merge."""
-        self._bf_access_guard(n.target, d)  # int128-unit LOUD twin
+    def _bf_field_at_base(self, n, d: Tuple, base_slot: str) -> None:
+        """THE §BF read half, ONE home (M4 W-Y COMMIT-BF extraction out of
+        `_bf_assignop`, emission byte-identical — corpus-proved at the
+        close leg): the unit base is already evaluated and parked in
+        `base_slot`; the field lands in %rax at its own sign and width.
+
+        M4 W-X COMMIT-PACKED rides the packed window here (byte LE join
+        of the field's OWN ceil((bit+w)/8) bytes, never a wide load); the
+        unpacked arm rides the shipped `_ex_bitfield` shift law. Both
+        `_bf_assignop` and the W-Y `++/--` arm call THIS, so the read
+        cannot drift into a second copy and the base is evaluated
+        EXACTLY ONCE by either law (E1)."""
         boff, bit, w, un = d
-        pk = self._bf_is_packed(n.target)   # M4 W-X COMMIT-PACKED:
-        # compound assign rides the SAME window law — read through the
-        # packed window (byte LE join), merge through the shipped RMW
-        # (the _bf_store packed arm, value_ready + base_slot as below).
-        op = n.op[:-1]
-        vt = self._decay(self._ty(n.value))
-        if isinstance(vt, ast.PtrType):
-            # gcc rc1 "invalid operands" (measured) — the _binary_ty law,
-            # LOUD like every other pointer-with-bitwise shape.
-            self._err(n, "'{}' with a pointer operand is not in the subset "
-                      "(§4)".format(op), op)
-        nty = self._promote(self._ty(n))
-        self._fp_guard(vt, nty, n)               # row 14 posture, as _bf_store
-        self._emit_expr(n.value)
-        self._convert(nty, n)                    # E2 at the promoted type
-        t0 = self._t()
-        self._e("movq %rax, {}".format(t0))
-        t1 = self._t()
-        self._bf_addr(n.target)                  # the ONE base evaluation
-        self._e("movq %rax, {}".format(t1))
-        # read the OLD field through t1 — the _ex_bitfield shift law:
+        pk = self._bf_is_packed(n)
+        self._e("movq {}, %rax".format(base_slot))
         if boff:
             self._e("addq ${}, %rax".format(boff))
         if pk:
@@ -1380,6 +1369,74 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
             if right:
                 self._e(("sarq" if self._bf_signed(un) else "shrq") +
                         " ${}, %rax".format(right))
+
+    def _bf_incdec(self, n, d: Tuple) -> None:
+        """M4 W-Y COMMIT-BF (MC 12764) — `skb->csum_level++;` is NOT
+        address-of-bitfield. The whole 19-stream crowd is a
+        read-modify-write with NO `&` in the source (sims §3b: 19/19
+        identical at include/linux/skbuff.h:4045; gcc rc0 exit=90 at REC,
+        while the genuine `&s.bf` is gcc rc1 — the true twin, still LOUD
+        below). It is the shape the shipped `_bf_assignop` law already
+        owns, so `++/--` rides THAT law: ONE base evaluation, the field
+        read at its own sign by the shared read half, arithmetic at the
+        promoted width, the masked unit-RMW merge with the neighbour bits
+        intact.
+
+        The value the expression YIELDS is the half a desugar cannot
+        express, so it is pinned here: POSTFIX answers the value READ (the
+        W-Y sims' own stub desugared `++` into `+= 1` and answered the
+        NEW value — exit 59 where gcc answers 58 on `wy2_postfix_value`,
+        a SILENT the sims named and this commit fixes), so the old value
+        is parked and restored; PREFIX answers the value STORED, which is
+        exactly what `_bf_store(value_ready=True)` leaves in %rax."""
+        sel = n.operand
+        self._bf_access_guard(sel, d)            # int128-unit LOUD twin
+        self._bf_addr(sel)
+        t1 = self._t()
+        self._e("movq %rax, {}".format(t1))
+        self._bf_field_at_base(sel, d, t1)       # %rax = OLD, promoted
+        t2 = ""
+        if not n.prefix:
+            t2 = self._t()
+            self._e("movq %rax, {}".format(t2))  # the value POSTFIX yields
+        self._e("addq ${}, %rax".format(1 if n.op == "++" else -1))
+        self._bf_store(sel, d, value_ready=True, base_slot=t1)
+        if t2:
+            self._e("movq {}, %rax".format(t2))
+            self._unt(2)
+        else:
+            self._unt()
+        self._narrow_int(self._ty(n.operand))
+
+    def _bf_assignop(self, n, d: Tuple) -> None:
+        """M2 fix-g2 (MC 12460): bitfield compound assign — the §5
+        &bitfield wall is replaced by the MEASURED gcc law (bfc.O0.out,
+        -O0 == -Os): read the field at its own sign, arithmetic at the
+        PROMOTED type (the scalar _ex_assignop law), then the SAME masked
+        unit-RMW of _bf_store (neighbour bits survive — byte-window leg);
+        the expression value is the converted STORED value (gcc: 3 += 1
+        in int:3 reads back -4). Base evaluated EXACTLY once: t1 holds
+        the unit base for both the read and the merge."""
+        self._bf_access_guard(n.target, d)  # int128-unit LOUD twin
+        boff, bit, w, un = d
+        op = n.op[:-1]
+        vt = self._decay(self._ty(n.value))
+        if isinstance(vt, ast.PtrType):
+            # gcc rc1 "invalid operands" (measured) — the _binary_ty law,
+            # LOUD like every other pointer-with-bitwise shape.
+            self._err(n, "'{}' with a pointer operand is not in the subset "
+                      "(§4)".format(op), op)
+        nty = self._promote(self._ty(n))
+        self._fp_guard(vt, nty, n)               # row 14 posture, as _bf_store
+        self._emit_expr(n.value)
+        self._convert(nty, n)                    # E2 at the promoted type
+        t0 = self._t()
+        self._e("movq %rax, {}".format(t0))
+        t1 = self._t()
+        self._bf_addr(n.target)                  # the ONE base evaluation
+        self._e("movq %rax, {}".format(t1))
+        # read the OLD field through t1 — the shared §BF read half:
+        self._bf_field_at_base(n.target, d, t1)
         self._e("movq {}, %rcx".format(t0))      # E2
         if op in ("/", "%"):
             if is_unsigned(nty):
@@ -1642,6 +1699,15 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
         if isinstance(ty, ast.StructType):
             self._err(n, "'{}' on a struct is 'struct assignment' (§5)"
                       .format(n.op), n.op, "asm")
+        if isinstance(n.operand, ast.Select):
+            # M4 W-Y COMMIT-BF (MC 12764): the §BF RMW arm BEFORE the
+            # address path — `++/--` never needed an address, and routing
+            # it through `_emit_addr` is what let the §1-row-12 gcc-ERROR
+            # sentence count a gcc-LEGAL crowd.
+            d = self._bitfield(n.operand)
+            if d is not None:
+                self._bf_incdec(n, d)
+                return
         step = self._size(ty.inner, n) if isinstance(ty, ast.PtrType) else 1
         delta = step if n.op == "++" else -step
         self._emit_addr(n.operand)

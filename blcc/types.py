@@ -1444,9 +1444,19 @@ class TypeMap(CompatLawMixin):
                 # §1 row 12 (M45): a bitfield has NO address — gcc ERROR
                 # "cannot take address of bit-field"; §2.13's offsetof
                 # mirror above is the fold sibling of this wall.
+                # M4 W-Y COMMIT-BF (MC 12764) says what this sentence
+                # ALWAYS meant, now that it is true again: this wall
+                # counts the ADDRESS-OF crowd ONLY. Before W-Y the
+                # `X++`/`X--` crowd was routed through `_emit_addr` into
+                # this gcc-ERROR sentence although gcc ACCEPTS it (19/19
+                # corpus witnesses `skb->csum_level++`, sims §3b) — the
+                # RMW forms ride §BF (`_bf_incdec`) and never reach here.
                 self._err(n, "address of 'bit-field' member '{}' is not in "
-                          "the subset (§1 row 12 — a gcc ERROR)".format(
-                              n.field), n.field)
+                          "the subset (§1 row 12 — taking a bit-field's "
+                          "ADDRESS is a gcc ERROR; `{}++`, `{}--` and "
+                          "`{} += v` are the §BF read-modify-write, not "
+                          "this wall)".format(n.field, n.field, n.field,
+                                              n.field), n.field)
             self._err(n, "no member '{}' in struct '{}'".format(n.field, base.tag),
                       n.field)
         return offsets[n.field]
