@@ -97,6 +97,13 @@ class ExprParser:
         # element and a pointer-to-volatile deref all kill the lvalue).
         self.volatile_final = volatile_final or (lambda n: False)
         self._lenient_calls = False               # inside GNU fold args
+        # M4 W-Y COMMIT-0 (MC 12764): set while a nested
+        # '__builtin_choose_expr' FOLDS, so the '__builtin_constant_p'
+        # door knows its argument's constant-ness hung on WHICH ARM was
+        # selected — the typing-order seam (§3c of the W-Y sims). The
+        # window is save/restore and PROPAGATES outward, so a choose
+        # nested inside a bcp-arg inside a bcp-arg is still seen.
+        self._choose_folded = False
 
     def _callable_view(self, ty):
         """M4 W3 (MC 12563) commit-2: the callable view OF A TYPE —
@@ -368,7 +375,27 @@ class ExprParser:
                     # constant closure (fold_truthy answers) plus string
                     # literals; EVERYTHING else answers 0 — the safe
                     # direction that selects the runtime arm.
-                    args = self._parse_call_args(t)
+                    #
+                    # M4 W-Y COMMIT-0 (MC 12764) closes the ONE way that
+                    # safe direction goes SILENTLY WRONG (sims law row
+                    # y27, gcc rc0 exit=3 vs blcc rc0 exit=2, no wall):
+                    # an argument whose constant-ness hangs on WHICH ARM
+                    # a nested '__builtin_choose_expr' selected. The
+                    # control folds in the parser, which has no type map
+                    # (§3c root cause), so the arm it hands back may
+                    # still be untyped and the 0 below is then a WRONG 0
+                    # that changes the answer. REFUSE-LOUD at that door
+                    # — the typing-order fold that answers it honestly
+                    # is the W-Z lever, and a fold stub here would arm
+                    # the same silence wider (sims §6 risk seam 1).
+                    old_cf = self._choose_folded
+                    saw_choose = False
+                    self._choose_folded = False
+                    try:
+                        args = self._parse_call_args(t)
+                        saw_choose = self._choose_folded
+                    finally:
+                        self._choose_folded = old_cf or saw_choose
                     if len(args) != 1:
                         raise DiagError(
                             "sema", t.file, t.line, t.col,
@@ -377,6 +404,15 @@ class ExprParser:
                     known = isinstance(args[0], ast.StrLit) or (
                         self.fold_truthy is not None
                         and self.fold_truthy(args[0]) is not None)
+                    if not known and saw_choose:
+                        raise DiagError(
+                            "sema", t.file, t.line, t.col,
+                            "'__builtin_constant_p' control is constant "
+                            "only after a '__builtin_choose_expr' arm is "
+                            "typed, which the parse-time fold cannot do "
+                            "(§2.11 x §2.6 — the typing-order seam; "
+                            "REFUSING LOUD, not answering 0)",
+                            "__builtin_constant_p")
                     node = ast.IntLit(t.file, t.line, t.col, 1 if known
                                       else 0, "int")
                     continue
@@ -670,6 +706,7 @@ class ExprParser:
                 "sema", t.file, t.line, t.col,
                 "'__builtin_choose_expr' control is not a compile-time "
                 "constant expression (§2.6)", "__builtin_choose_expr")
+        self._choose_folded = True                # W-Y COMMIT-0 marker
         return args[1] if ctrl != 0 else args[2]
 
     def parse_generic(self, t) -> ast.Node:
