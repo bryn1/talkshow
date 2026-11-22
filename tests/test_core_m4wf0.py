@@ -300,11 +300,12 @@ def test_wf_family_byte_access(tmp_path):
 
 
 def test_wf_packed_bitfield_access_loud(tmp_path):
-    # The LOUD twins: the LAYOUT law ships, the packed CODEGEN does not
-    # (unit-window extraction reads/writes past the shrunk unit). Read,
-    # write, and compound-assign each LOUD by NAME. (At tip all three
-    # died on the generic §5 DEFER; the NAME is the pin — a plant that
-    # drops the guard turns this RED, tooth-plant (a).)
+    # POSTURE FLIPPED by M4 W-X COMMIT-PACKED (MC 12756, NAMED): the
+    # unit-window codegen that W-F deferred now SHIPS (byte-window LE
+    # load + window RMW) — read, write and compound-assign compile
+    # rc0; their VALUES are run-PAIRED against gcc in
+    # tests/test_core_m4wx2.py (l19/l20/l20c + the l10 flip). The
+    # __int128-unit twin below stays LOUD untouched.
     srcs = [
         (_HDR + "struct P{u16 x:12,y:4;}__attribute__((packed));"
          "struct P p;\nint main(void){return (int)p.x;}", "wfbr"),
@@ -315,8 +316,7 @@ def test_wf_packed_bitfield_access_loud(tmp_path):
     ]
     for src, tag in srcs:
         r = _compile(tmp_path, tag, src)
-        assert r.returncode == 2, (tag, r.stderr)
-        assert "packed bitfield access" in r.stderr, (tag, r.stderr)
+        assert r.returncode == 0, (tag, r.stderr)
 
 
 def test_wf_int128_access_loud(tmp_path):

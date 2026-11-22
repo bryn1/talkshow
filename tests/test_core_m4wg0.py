@@ -58,14 +58,17 @@ STRADDLE = (
 
 
 def test_c0_anon_nested_packed_straddle_loud(tmp_path):
-    # RED at tip: accepted rc 0 with a SILENT WRONG VALUE (exit 1 vs
-    # gcc 0). After the keying fix: the LOUD twin, named by the SAME
-    # message the direct-packed wall ships (one mechanism, §8 style).
+    # POSTURE FLIPPED by M4 W-X COMMIT-PACKED (MC 12756, NAMED): the
+    # keying (_bf_is_packed, owner-resolved) REMIG and now selects the
+    # packed WINDOW arm instead of the wall — the hoisted descriptor
+    # rides the same law as direct-packed. The silent-wrong-value
+    # regression this leg guarded (exit 1 vs gcc 0) is now prevented
+    # POSITIVELY: the shape is run-PAIRED at want 0 in
+    # tests/test_core_m4wx2.py (test_wg_straddle_pair).
     r = _compile(tmp_path, "wg0_straddle", STRADDLE)
-    assert r.returncode == 2, (
-        "packed-bitfield access hoisted into an unpacked outer must "
-        "LOUD (P2-F1 gap; silent wrong value at tip):\n" + r.stderr)
-    assert "packed bitfield access" in r.stderr, r.stderr
+    assert r.returncode == 0, (
+        "hoisted packed descriptor must compile through the window "
+        "arm (P2-F1 class now SHIPPED, paired in m4wx2):\n" + r.stderr)
 
 
 # The gate's T6 shape (measured EQUAL: read 123==123, store tail
@@ -84,11 +87,13 @@ T6_EQUAL = (
 
 
 def test_c0_anon_nested_packed_equal_shape_loud(tmp_path):
+    # FLIPPED with the straddle leg (M4 W-X COMMIT-PACKED, MC 12756):
+    # the T6 measured-equal shape now COMPILES and is run-paired at
+    # want 0 in tests/test_core_m4wx2.py (test_wg_t6_equal_pair) —
+    # the SAME window law, law not luck.
     r = _compile(tmp_path, "wg0_t6", T6_EQUAL)
-    assert r.returncode == 2, (
-        "the T6 measured-equal shape is the SAME class (hoisted packed"
-        " descriptor, unpacked base) — law, not luck:\n" + r.stderr)
-    assert "packed bitfield access" in r.stderr, r.stderr
+    assert r.returncode == 0, (
+        "the T6 shape rides the packed window arm now:\n" + r.stderr)
 
 
 # ------------------------------------------- controls (green at tip)
@@ -100,11 +105,14 @@ DIRECT_PACKED = (
 
 
 def test_c0_direct_packed_bitfield_stays_loud(tmp_path):
-    # Fairness control (green at tip and after): the base-keyed answer
-    # for a DIRECT packed bitfield access does not move.
+    # Fairness control — KEYING side flipped with the walls (M4 W-X
+    # COMMIT-PACKED, MC 12756): the base-keyed answer for a DIRECT
+    # packed access is the SAME law as the hoisted one, and BOTH now
+    # answer rc0 through the window arm (values run-paired in
+    # tests/test_core_m4wx2.py). The fairness this leg guarded — one
+    # mechanism, no base/hoist split — still holds: it is one LAW.
     r = _compile(tmp_path, "wg0_direct", DIRECT_PACKED)
-    assert r.returncode == 2, r.stderr
-    assert "packed bitfield access" in r.stderr, r.stderr
+    assert r.returncode == 0, r.stderr
 
 
 PLAIN_HOIST = (

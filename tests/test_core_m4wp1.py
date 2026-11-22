@@ -385,60 +385,12 @@ def test_wp1_corpus_wall_moved():
             if not lm.match(ln):
                 oh.write(ln)
     r = blcc(["-c", clean, "-o", "/dev/shm/wp1_i8259.o"])
-    assert r.returncode != 0            # still a honest RED…
-    assert "struct declaration in block scope" not in r.stderr, \
-        "the W-Q wall came back: " + r.stderr[:200]
-    first = next(ln for ln in r.stderr.splitlines() if ln.strip())
-    # W-R (MC 12714) FLIPPED SITE PIN with the wave (same precedent as
-    # W-Q's "4 wall pins FLIPPED"): the asm-goto splice eats the
-    # cpufeature copy-posture — the COMMIT-0 pins (":10493:" standing,
-    # class "'i' operand") are asserted GONE — and the stream lands on
-    # the NAMED behind-class, the `__here` label wall (the 193-stream
-    # crowd; F-4 WALL-IS-A-QUEUE), clean-stream :11342:.
-    # M4 W-S (MC 12716) FLIPPED THIS PIN AGAIN: COMMIT-2's scoped
-    # `__label__` law eats the `__here` wall — the ":11342:" SITE and
-    # the "used but not defined" CLASS are asserted GONE — and the
-    # stream lands on the next behind-class, the expression-'construct'
-    # wall at clean :22228:70 (a NEW top-class row of the W-S close
-    # sweep, named there).
-    # M4 W-T (MC 12736) FLIPPED THIS PIN A THIRD TIME: COMMIT-1 eats
-    # the expression-'construct' wall — the ":22228:70" SITE and the
-    # "'construct'" CLASS are asserted GONE (queue law, W-T combo
-    # sweep numbers) — and the stream lands on the combo sweep's NEW
-    # top-class behind-row, `not an addressable l-value` (the
-    # ({...})-as-lvalue class) at clean :35846:10 — the 279-stream
-    # blocker named as the next wave's lever.
-    assert ":10493:" not in first and "constraint 'i' operand is not a " \
-        "compile-time" not in first, "the cpufeature wall came back: " \
-        + first[:300]
-    assert ":11342:" not in first and "label '__here' used but not " \
-        "defined" not in first, "the __label__ wall came back: " \
-        + first[:300]
-    assert "found 'construct'" not in first, \
-        "the expression-construct wall (W-S behind-class) must be " \
-        "EATEN by W-T COMMIT-1: " + first[:300]
-    # M4 W-U (MC 12739) FLIPPED THIS PIN A FOURTH TIME, exactly as this
-    # docstring predicted ("the 279-stream blocker named as the next
-    # wave's lever"): COMMIT-1's copy-source law eats the
-    # `({...})`-as-lvalue wall — the ":35846:10" SITE and the
-    # "not an addressable l-value / statement expression" CLASS are
-    # asserted GONE — and the stream lands on the extern-local
-    # `zero_pfn` class at clean :36317:16, the row the W-U {A+B+D}
-    # combo sweep (153 → 181, own hands) shows COMMIT-2 eating.
-    assert ":35846:10" not in first \
-        and "not an addressable l-value" not in first, \
-        "the statement-expression l-value wall (W-U's own class) came " \
-        "back: " + first[:300]
-    # M4 W-U COMMIT-2 (MC 12739) FLIPPED IT A FIFTH TIME, measured at
-    # the COMMIT-2 bytes: COMMIT-2's extern-local binding eats the
-    # `zero_pfn` wall (":36317:" + "'zero_pfn' undeclared" asserted GONE)
-    # and the stream lands on the packed-bitfield unit-window class at
-    # clean :36560:6 (the sweep's named behind-row; law D moves it no
-    # further — re-measured identical at the COMMIT-3 bytes).
-    assert ":36317:" not in first and "'zero_pfn' undeclared" not in first, \
-        "the extern-local wall (W-U COMMIT-2's own class) came back: " \
-        + first[:300]
-    assert ":36560:6" in first and "packed bitfield access is not in " \
-        "the subset" in first, \
-        "wall must land on the named behind SITE+CLASS (clean " \
-        ":36560:6 = the packed-bitfield unit-window wall): " + first[:300]
+    # M4 W-X COMMIT-PACKED (MC 12756) FLIPS THIS PIN TO ACCEPT: the
+    # behind-chain above ended at the packed-bitfield unit-window wall
+    # (clean :36560:6, W-U COMMIT-2's land) — COMMIT-PACKED SHIPS that
+    # law (window LE load + window RMW, battery-run-paired in
+    # tests/test_core_m4wx2.py), so the FULL TU now COMPILES (own hands
+    # at these bytes; the historical land pins above were the RED-leg
+    # contract and retire with the wall, W-W 8250_port precedent).
+    assert r.returncode == 0, (
+        "i8259 must FULL-ACCEPT at W-X bytes; wall seen: " + r.stderr[:400])

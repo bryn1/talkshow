@@ -261,15 +261,12 @@ def test_keep_fp_member_stays_loud():
     assert b.returncode == 2 and "struct" in b.stderr
 
 
-def test_keep_packed_byval_loud_until_packed(tmp_path):
-    # l10 at X bytes: the by-value COPY would ride MEMORY fine, but the
-    # callee READS packed bitfields — the shipped W-F packed-access wall
-    # answers LOUD (silent half-law is forbidden). The PACKED commit
-    # FLIPS this row to a pair (want 18) — named in that commit.
-    c = _w("l10", S["l10"])
-    b = subprocess.run([sys.executable, "-m", "blcc", "-c", c, "-o", c + ".o"],
-                       capture_output=True, text=True, cwd=REPO, env=ENV)
-    assert b.returncode == 2 and "packed" in b.stderr
+def test_packed_byval_flips_at_packed(tmp_path):
+    # l10 at COMMIT-X stood LOUD (packed access guard); COMMIT-PACKED
+    # FLIPPED this row, as NAMED: the by-value copy rides the plain
+    # MEMORY byte copy and the callee reads members through the
+    # unit-window law — now a run-PAIR (battery want 18, gcc-equal).
+    _pair("l10", S["l10"], 18, str(tmp_path))
 
 
 def test_gp_ladder_past_memory_generalization(tmp_path):

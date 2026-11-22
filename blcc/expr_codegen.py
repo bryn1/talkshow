@@ -1124,34 +1124,46 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
         shift sites ride it."""
         return un != "_Bool" and self._BF_UNS[un] != un
 
-    def _bf_access_guard(self, n: ast.Select, d) -> None:
-        """M4 W-F COMMIT-1 (MC 12621): the LAYOUT law for packed
-        bitfields ships; their CODEGEN does not. The extraction/RMW
-        below loads/stores the DECLARED unit — under packed the unit
-        has shrunk (measured law table, .tmp/m4-wf/probes/shapes.c),
-        so the unit-window law would read/write PAST the shrunk extent
-        and clobber neighbours: a packed bitfield SELECT LOUDs by name
-        (never a silent wrong-width window). The same arm gives the
-        __int128-unit twin a NAME: tip crashed with a raw
-        `KeyError: unsigned __int128` ICE on `{u128 x:4;}` access —
-        now a named LOUD (probe .tmp/m4-wf/probes/i128bf2.c).
-
-        M4 W-G COMMIT-0 (MC 12633, gate P2-F1/T6): the key is the
-        access-resolved OWNER, not the access base — a packed
-        descriptor hoisted from an ANON nested packed struct into an
-        UNPACKED outer carries the shrunk-unit form too, and the
-        window then silently mis-reads a straddling field
-        (_bf_owner_packed, types.py; measured t6gap2.c at 9c84499)."""
+    def _bf_is_packed(self, n: ast.Select) -> bool:
+        """M4 W-G COMMIT-0 (MC 12633, gate P2-F1/T6) KEYING, now the
+        LAW KEY of M4 W-X COMMIT-PACKED: the OWNER resolved through the
+        access, not the access base — a packed descriptor hoisted from
+        an ANON nested packed struct into an UNPACKED outer carries the
+        shrunk-unit form too (_bf_owner_packed, types.py; measured
+        t6gap2.c at 9c84499)."""
         base = self._struct_of(n)
-        if self._attr_packed(base) or self._bf_owner_packed(n):
-            self._err(n, "packed bitfield access is not in the subset "
-                      "(W-F: the packed LAYOUT law ships, the unit-"
-                      "window codegen stays LOUD — gcc's shrunk-unit "
-                      "extraction is not modelled)", "packed")
+        return bool(self._attr_packed(base) or self._bf_owner_packed(n))
+
+    def _bf_access_guard(self, n: ast.Select, d) -> None:
+        """M4 W-F COMMIT-1 (MC 12621) shipped the packed bitfield
+        LAYOUT law and named the unit-window codegen LOUD. M4 W-X
+        COMMIT-PACKED (MC 12756) SHIPS that codegen: the field's OWN
+        byte-window LE load + window-RMW (_ex_bitfield/_bf_store/
+        _bf_assignop packed arms; battery l19/l20/l10 + the W-G
+        straddle shapes, run-paired) — the LOUD sentence retires with
+        this commit (its W-F/W-G pins FLIP there, named). What remains
+        LOUD here by NAME: the __int128-unit twin — tip crashed with a
+        raw `KeyError: unsigned __int128` ICE on `{u128 x:4;}` access
+        (probe .tmp/m4-wf/probes/i128bf2.c); a 16-byte window would
+        need a two-word join, the 64-bit shift law's ceiling, so the
+        NAMED LOUD stands (never a silent half-window)."""
         if d[3] not in self._BF_UNS:
             self._err(n, "bitfield unit type '{}' has no extraction "
                       "model (§1 row 12 LOUD twin)".format(d[3]),
                       "bitfield")
+
+    def _bf_win_load(self, base: str, dst: str, sc: str, nb: int) -> None:
+        """The W-X packed window law (MC 12756): assemble the field's
+        OWN nb bytes LITTLE-endian into dst — byte loads ONLY (the
+        field may sit at any alignment; gcc emits the same self-align
+        shape, never a relocating wide load), joined `dst |= byte<<8i`.
+        p_p3 tooth: assembling BIG-endian turns l19 74≠114 RED — the
+        battery is the proof the order is pinned."""
+        self._e("movzbq ({}), {}".format(base, dst))
+        for i in range(1, nb):
+            self._e("movzbq {}({}), {}".format(i, base, sc))
+            self._e("shlq ${}, {}".format(8 * i, sc))
+            self._e("orq {}, {}".format(sc, dst))
 
     def _bf_addr(self, n: ast.Select) -> None:
         """Struct base ADDRESS in %rax for a member select."""
@@ -1164,8 +1176,28 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
         return ("{}(%rdx)".format(d[0]) if d[0] else "(%rdx)")
 
     def _ex_bitfield(self, n, d: Tuple) -> None:
-        self._bf_access_guard(n, d)         # W-F: packed/int128 LOUD
+        self._bf_access_guard(n, d)         # int128-unit LOUD twin
         boff, bit, w, un = d
+        if self._bf_is_packed(n):
+            # M4 W-X COMMIT-PACKED READ arm (MC 12756, l19/l10 paired):
+            # the W-F descriptor is (first byte, bit-in-byte, w) and the
+            # bit-contiguous layout keeps the field INSIDE the object —
+            # the span is EXACTLY ceil((bit+w)/8) bytes, byte-loaded LE,
+            # >> bit, mask/sign-extend by the shipped E2 law.
+            nb = (bit + w + 7) // 8
+            self._bf_addr(n)
+            if boff:
+                self._e("addq ${}, %rax".format(boff))
+            self._bf_win_load("%rax", "%rdx", "%rcx", nb)
+            self._e("movq %rdx, %rax")
+            if bit:
+                self._e("shrq ${}, %rax".format(bit))
+            left = 64 - w
+            if left:
+                self._e("shlq ${}, %rax".format(left))
+                self._e(("sarq" if self._bf_signed(un) else "shrq") +
+                        " ${}, %rax".format(left))
+            return
         self._bf_addr(n)
         if boff:
             self._e("addq ${}, %rax".format(boff))
@@ -1198,8 +1230,59 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
         BASE ADDRESS is stashed in that slot (E1 evaluated exactly once,
         shared by the read and the RMW); both default to the plain-assign
         behaviour, untouched."""
-        self._bf_access_guard(n.target, d)  # W-F: packed/int128 LOUD
+        self._bf_access_guard(n.target, d)  # int128-unit LOUD twin
         boff, bit, w, un = d
+        if self._bf_is_packed(n.target):
+            # M4 W-X COMMIT-PACKED STORE arm (MC 12756, l20/l10
+            # paired): READ the field's OWN byte window, clear its
+            # bits, land (v mod 2^w) << bit, write back THE SAME bytes
+            # (movb per byte — no wide store, so no self-align fault,
+            # no neighbour byte touched — l20's raw-view canary pins
+            # pre/post survive; window-inside neighbours survive by
+            # the RMW). Scratch discipline mirrors the shipped
+            # _bf_store below (%rdx base, %rcx value, %rsi scratch):
+            # no new live-range claims.
+            nb = (bit + w + 7) // 8
+            unit_bt = ast.BuiltinType(n.file, n.line, n.col, un)
+            if not value_ready:
+                self._fp_guard(self._ty(n.value), unit_bt, n)
+                self._emit_expr(n.value)
+            if un == "_Bool":
+                self._convert(unit_bt, n)   # shipped normalize law
+            t = self._t()
+            self._e("movq %rax, {}".format(t))
+            if base_slot is None:
+                self._bf_addr(n.target)
+                self._e("movq %rax, %rdx")
+            else:
+                self._e("movq {}, %rdx".format(base_slot))
+            if boff:
+                self._e("addq ${}, %rdx".format(boff))
+            self._e("movq {}, %rcx".format(t))
+            left = 64 - w
+            if left:
+                self._e("shlq ${}, %rcx".format(left))
+                self._e("shrq ${}, %rcx".format(left))  # low w bits
+            if bit:
+                self._e("shlq ${}, %rcx".format(bit))  # position
+            self._bf_win_load("%rdx", "%rax", "%rsi", nb)
+            keep = ~(((1 << w) - 1) << bit) & 0xFFFFFFFFFFFFFFFF
+            if keep >= 1 << 63:
+                keep -= 1 << 64
+            self._e("movabsq ${}, %rsi".format(keep))
+            self._e("andq %rsi, %rax")
+            self._e("orq %rcx, %rax")
+            for i in range(nb):
+                self._e("movb %al, {}(%rdx)".format(i))
+                if i < nb - 1:
+                    self._e("shrq $8, %rax")
+            self._e("movq {}, %rax".format(t))   # stored-value law:
+            if left:
+                self._e("shlq ${}, %rax".format(left))
+                self._e(("sarq" if self._bf_signed(un) else "shrq") +
+                        " ${}, %rax".format(left))
+            self._unt()
+            return
         left = 64 - w
         unit_bt = ast.BuiltinType(n.file, n.line, n.col, un)
         uns_bt = ast.BuiltinType(n.file, n.line, n.col, self._BF_UNS[un])
@@ -1251,8 +1334,12 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
         the expression value is the converted STORED value (gcc: 3 += 1
         in int:3 reads back -4). Base evaluated EXACTLY once: t1 holds
         the unit base for both the read and the merge."""
-        self._bf_access_guard(n.target, d)  # W-F: packed/int128 LOUD
+        self._bf_access_guard(n.target, d)  # int128-unit LOUD twin
         boff, bit, w, un = d
+        pk = self._bf_is_packed(n.target)   # M4 W-X COMMIT-PACKED:
+        # compound assign rides the SAME window law — read through the
+        # packed window (byte LE join), merge through the shipped RMW
+        # (the _bf_store packed arm, value_ready + base_slot as below).
         op = n.op[:-1]
         vt = self._decay(self._ty(n.value))
         if isinstance(vt, ast.PtrType):
@@ -1272,15 +1359,27 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
         # read the OLD field through t1 — the _ex_bitfield shift law:
         if boff:
             self._e("addq ${}, %rax".format(boff))
-        self._load(ast.BuiltinType(n.file, n.line, n.col,
-                                   self._BF_UNS[un]), "(%rax)", at=n)
-        left = 64 - bit - w
-        if left:
-            self._e("shlq ${}, %rax".format(left))
-        right = 64 - w
-        if right:
-            self._e(("sarq" if self._bf_signed(un) else "shrq") +
-                    " ${}, %rax".format(right))
+        if pk:
+            nb = (bit + w + 7) // 8
+            self._bf_win_load("%rax", "%rdx", "%rcx", nb)
+            self._e("movq %rdx, %rax")
+            if bit:
+                self._e("shrq ${}, %rax".format(bit))
+            lft = 64 - w
+            if lft:
+                self._e("shlq ${}, %rax".format(lft))
+                self._e(("sarq" if self._bf_signed(un) else "shrq") +
+                        " ${}, %rax".format(lft))
+        else:
+            self._load(ast.BuiltinType(n.file, n.line, n.col,
+                                       self._BF_UNS[un]), "(%rax)", at=n)
+            left = 64 - bit - w
+            if left:
+                self._e("shlq ${}, %rax".format(left))
+            right = 64 - w
+            if right:
+                self._e(("sarq" if self._bf_signed(un) else "shrq") +
+                        " ${}, %rax".format(right))
         self._e("movq {}, %rcx".format(t0))      # E2
         if op in ("/", "%"):
             if is_unsigned(nty):

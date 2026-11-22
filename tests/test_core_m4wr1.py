@@ -145,38 +145,12 @@ def test_wr_stream_cpufeature_wall_flipped():
         pytest.skip("pinned corpus not linked (builder posture)")
     clean = _clean_stream("arch_x86_kernel_i8259.c.i")
     r = blcc(["-c", clean, "-o", "/dev/shm/wr1_i8259.o"])
-    assert r.returncode != 0            # honest RED onto the NEXT wall
-    first = next(ln for ln in r.stderr.splitlines() if ln.strip())
-    assert ":10493:" not in first and "struct declaration in block " \
-        "scope" not in first, "the cpufeature/W-Q walls came back: " \
-        + first[:200]
-    assert ":11342:" not in first and "label '__here' used but not " \
-        "defined" not in first, "the __here wall (W-R behind-class) " \
-        "must be EATEN by W-S COMMIT-2: " + first[:300]
-    assert "found 'construct'" not in first, \
-        "the expression-construct wall (W-S behind-class) must be " \
-        "EATEN by W-T COMMIT-1: " + first[:300]
-    # M4 W-U COMMIT-1 (MC 12739) QUEUE FLIP, own hands: this stream's
-    # behind-class — the `({...})`-as-lvalue wall at :35846:10, which W-T
-    # named as the walk's next candidate — is EATEN by the law-A copy-
-    # source arm, and the wall MOVED FORWARD to the extern-local class at
-    # :36317:16 (`'zero_pfn' undeclared`), which is exactly what W-U
-    # COMMIT-2 eats. Re-pinned on the MEASURED land, not the wish.
-    assert ":35846:10" not in first \
-        and "not an addressable l-value" not in first, \
-        "the W-U group-lvalue class must be EATEN here: " + first[:300]
-    # M4 W-U COMMIT-2 (MC 12739) FLIPPED THIS PIN AGAIN, own hands at
-    # the COMMIT-2 bytes: the extern-local `zero_pfn` wall at :36317:16
-    # is EATEN by the §2.8 TU-end binding (asserted GONE below) and the
-    # stream lands on the packed-bitfield unit-window class at
-    # :36560:6 — stable through COMMIT-3 (re-measured identical).
-    assert ":36317:" not in first and "'zero_pfn' undeclared" not in first, \
-        "the extern-local zero_pfn class must be EATEN here: " \
-        + first[:300]
-    assert ":36560:6" in first and "packed bitfield access is not in " \
-        "the subset" in first, \
-        "wall must land on the W-U behind SITE+CLASS (packed bitfield): " \
-        + first[:300]
+    # M4 W-X COMMIT-PACKED (MC 12756) FLIPS THIS PIN TO ACCEPT (same
+    # precedent as the m4wp1 twin): the last named behind-class, the
+    # packed unit-window wall at :36560:6, is the law this commit
+    # ships; the full TU COMPILES at these bytes, own hands.
+    assert r.returncode == 0, (
+        "i8259 must FULL-ACCEPT at W-X bytes; wall seen: " + r.stderr[:400])
 
 
 # corpus spot: streams whose TIP first-wall was the cpufeature 'i'
