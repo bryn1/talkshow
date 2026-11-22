@@ -173,6 +173,12 @@ def test_wt3_combo_witnesses_own_classes_eaten():
         # :46256:29 (own hands, {W+FOLD+RENAME} sweep row — the walk's
         # NAMED carry, outside this wave's SET). The bi_size sentence
         # must be GONE from the corpus (census leg, m4ww4).
+        # M4 W-X COMMIT-X (MC 12756) eats the BY-VALUE door: entry_common
+        # moves FORWARD to the packed bitfield unit-window class at the
+        # MEASURED land :55585:6 (own hands: the {X} sweep row AND this
+        # leg's own instrument at 0ef8e51 agree on site+class; the wall
+        # is COMMIT-PACKED's set, the QUEUE-BEHIND named carry until
+        # then). i8259's land :36560:6 UNCHANGED at X.
         assert "'zero_pfn' undeclared" not in first, \
             tu + ": the W-U extern-local class must be EATEN: " \
             + first[:200]
@@ -185,10 +191,13 @@ def test_wt3_combo_witnesses_own_classes_eaten():
         assert "bi_size" not in first, \
             tu + ": the W-W COMMIT-3 capture class must be EATEN: " \
             + first[:200]
+        assert "passed by value" not in first, \
+            tu + ": the W-X MEMORY-class door must be EATEN (COMMIT-X, " \
+            "MC 12756): " + first[:200]
         land = {"arch_x86_entry_common.c.i":
-                (":46256:29", "passed by value"),
+                (":55585:6", "packed bitfield access"),
                 "arch_x86_kernel_i8259.c.i":
                 (":36560:6", "packed bitfield access")}[tu]
         assert land[0] in first and land[1] in first, \
-            tu + ": behind-wall must land on the measured W-W " \
+            tu + ": behind-wall must land on the measured W-X " \
             "SITE+CLASS %r: " % (land,) + first[:220]

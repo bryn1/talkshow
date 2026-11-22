@@ -326,15 +326,15 @@ def test_wl1_alignment_invariant_leg(tmp_path):
 
 # --------------------------------- LOUD twins that MUST survive the flip
 
-def test_wl1_struct_by_value_stays_loud_all_classes(tmp_path):
-    # M4 W-M COMMIT-4 (MC 12670) MOVED the boundary this pin guarded:
-    # the INTEGER classes ≤16 now PASS (bp2 arrivals; the m08 gcc table
-    # was the measured basis of BOTH rows — it puts 1..16 in GP/PAIR
-    # form and 24 in memory form). The pin keeps its full 7×3 matrix
-    # and flips by class: sizes 1..16 build (the 7-arg spellings now
-    # ALSO cover the stack-pair/no-split paths through the W-L push
-    # block), size 24 stays LOUD with the §5 wording — the exact
-    # measured boundary, pinned in both directions.
+def test_wl1_struct_by_value_all_classes_build(tmp_path):
+    # M4 W-M COMMIT-4 (MC 12670) moved the ≤16 boundary; M4 W-X
+    # COMMIT-X (MC 12756) shipped the MEMORY class (>16) — the whole
+    # 7×3 matrix now BUILDS (sizes 1..16 ride the pair law UNCHANGED,
+    # size 24 rides the ascending incoming words; the 7-arg spellings
+    # cover the stack-pair/no-split paths through the W-L push block
+    # for BOTH classes). The former size-24 LOUD arm was W-M's named
+    # KEEP, retired BY NAME at COMMIT-X; its values are run-paired in
+    # tests/test_core_m4wx1.py (the battery), posture here is rc0.
     for size, decl in ((1, "struct S{char a;}"), (2, "struct S{char a,b;}"),
                        (4, "struct S{int a;}"), (8, "struct S{long a;}"),
                        (12, "struct S{int a,b,c;}"),
@@ -354,14 +354,8 @@ def test_wl1_struct_by_value_stays_loud_all_classes(tmp_path):
             s = tmp_path / ("wl1_sv_%d_%s.c" % (size, tag))
             s.write_text(src)
             b = blcc(["-c", str(s), "-o", str(tmp_path / "wl1_sv.o")])
-            if size <= 16:
-                assert b.returncode == 0, "%s %s must build now:\n%s" % (
-                    size, tag, b.stderr)
-                continue
-            assert b.returncode != 0 and \
-                ("passed by value" in b.stderr or "beyond the §6" in b.stderr),\
-                "struct-by-value class {} {} must stay LOUD: {}".format(
-                    size, tag, b.stderr)
+            assert b.returncode == 0, "%s %s must build (W-X MEMORY \
+class, MC 12756):\n%s" % (size, tag, b.stderr)
 
 
 def test_wl1_variadic_named_gt6_stays_loud(tmp_path):

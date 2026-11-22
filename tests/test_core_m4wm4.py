@@ -217,13 +217,13 @@ def test_wm4_gp_param_still_one_slot(tmp_path):
 # ------------------------------------------------ LOUD twins (named,
 # measured, 0-volume-in-corpus)
 
-def test_wm4_memory_param_loud_twin(tmp_path):
-    # >16-byte param: gcc -Os passes the caller's COPY at the stack
-    # position (measure-byval bp_mem row) — consumes no GP. Multi-
-    # participant stack law unmeasured at volume; LOUD is honest.
-    _loud(tmp_path, "wm4m",
-          "struct S { char a[17]; };\nlong f(struct S s){return s.a[0];}\n",
-          "passed by value")
+def test_wm4_memory_param_loud_twin():
+    # POSTURE FLIPPED by M4 W-X COMMIT-X (MC 12756, BY NAME — this leg
+    # pinned W-M's named KEEP "the multi-participant stack law"): the
+    # >16-byte param now BUILDS; gcc's measured bp_mem row IS the law
+    # shipped (ascending incoming words, no GP). Values are run-paired
+    # in tests/test_core_m4wx1.py (battery l01-l18).
+    pass
 
 
 def test_wm4_fp_member_param_loud_twin(tmp_path):
