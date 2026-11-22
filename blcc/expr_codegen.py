@@ -53,6 +53,16 @@ def _fp(ty) -> bool:
     return isinstance(ty, ast.BuiltinType) and ty.name in ("float", "double")
 
 
+def _rsp_slot(slot: str):
+    """Split a temp-slot operand "N(%rsp)" into (N, "(%rsp)"): the
+    MEMORY-class tail bytes address N+1..N+7 INSIDE one staged temp word
+    (m4-wx-sims l16 byte-exact-through-the-stack law, M4 W-X MC 12756).
+    codegen._t owns the format; this is its ONE reader (parse, never a
+    blind re-format)."""
+    cut = slot.index("(")
+    return int(slot[:cut]), slot[cut:]
+
+
 class ExprEmitter(MemFoldMixin, I128Mixin):
     # M4 W-V COMMIT-V (MC 12747): the VOID-DISCARD context. `_discarding`
     # is a one-level ASK from the caller to the next dispatch; a handler
@@ -763,6 +773,10 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
             tgt_slot = self._t()                    # held until the tail
             self._e("movq %rax, {}".format(tgt_slot))
         slots = []
+        stacked_only = set()   # M4 W-X: ARGW positions of MEMORY args —
+        # a MEMORY arg's EVERY word stacks, the GP ladder never touches
+        # them (l02/l03 measured: the ladder is INDEPENDENT of stacked
+        # MEMORY args).
         # temp slots of THIS call start at fn.temp_top + 1 — a nested call
         # evaluated after another temp (e.g. `a*100 + f(...)`) is NOT based
         # at T1; the stack-push addressing below must honour the base.
@@ -790,20 +804,76 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
                 self._fp_guard(self._ty(a), decl_params[idx].type, a)
             aty = self._decay(decl_params[idx].type) if named \
                 else self._decay(self._ty(a))
+            # M4 W-X (MC 12756) door-widen, l21 MEASURED: the §5 by-value
+            # door UNWRAPS a top-level qualifier — gcc folds `const struct
+            # S14 s` identically to `struct S14 s` (l21 run-pair rc14).
+            # A QUALIFIED fp spine stays LOUD: the _fp_guard above runs
+            # PRE-unwrap and the shipped §1-row-14 DEFERDED sentence
+            # answers (l22 `volatile double` twin pinned), so widening
+            # cannot smuggle an fp arm through the door.
+            if isinstance(aty, ast.Qualified):
+                aty = aty.inner
             if isinstance(aty, ast.StructType):
                 # M4 W-M COMMIT-4 by-value arg law (bp2 arrival table):
                 # source ADDRESS, load LOW word (one GP for ≤8) and
                 # HIGH word (9..16 → the pair, low staged FIRST).
-                # MEMORY (>16), fp-member, union and NO-named-param
-                # (unprototyped/builtin) cases keep the §5 LOUD wall —
-                # the named twins (multi-participant stack law = 0
-                # corpus volume; shipping it blind is the silent-ABI
-                # class this wave exists to kill).
+                # fp-member, union and NO-named-param (unprototyped/
+                # builtin) cases keep the §5 LOUD wall — the named twins
+                # with the measured gcc behaviour in the leg docstrings.
+                # M4 W-X (MC 12756): MEMORY (>16) ships here too — the
+                # size-class EXTENSION of this same law home (the ≤16
+                # pair arm unchanged, see the MEMORY branch).
                 if not named or aty.is_union or \
-                        self._struct_has_fp(aty) or \
-                        self._size(aty, a) > 16:
+                        self._struct_has_fp(aty):
                     self._err(a, "'struct' passed by value is 'struct "
                               "assignment' (§5) — pass a pointer", "call")
+                if self._size(aty, a) > 16:
+                    # M4 W-X THE MEMORY LAW (MC 12756; measured gcc -Os
+                    # battery m4-wx-sims.md §1, 22 rows + l21/l22,
+                    # DIVERGE=0 — W-M's named KEEP "the multi-participant
+                    # stack law", shipped by NAME at its measurement):
+                    # the arg consumes ceil(size/8) ASCENDING 8-byte
+                    # incoming words, takes NO GP and flips NO ladder
+                    # boundary (l02/l03: `f(struct20 m, long b)` keeps b
+                    # on %rdi; l08: GP exhaustion AFTER the struct still
+                    # stacks normally), pad parity COUNTS every MEMORY
+                    # word (l05), a hidden sret occupies %rdi FIRST
+                    # (l06). The caller stages each word into a pool
+                    # temp (the shipped W3/S16 staging-then-push shape,
+                    # never push-from-arg), tail bytes zero-extended and
+                    # byte-exact THROUGH the stack (l16; args are
+                    # memory-visible l17). KEEP-LOUD: a >8-alignment
+                    # struct needs stack alignment blcc does not model
+                    # (l09, census volume 0) — LOUD BY NAME, never a
+                    # silent mis-slot.
+                    asz = self._size(aty, a)
+                    if self._align(aty, a) > 8:
+                        self._err(a, "'struct' passed by value needs 16-"
+                                  "byte stack alignment — not modelled "
+                                  "(W-X KEEP-law)", "call")
+                    full, tail = asz // 8, asz % 8
+                    nword = full + (1 if tail else 0)
+                    self._emit_addr(a)
+                    for w_i in range(nword):
+                        t = self._t()
+                        if w_i < full:
+                            # mem→temp rides %rcx, the shipped pair arm
+                            # one line above (nothing else is live
+                            # across these moves).
+                            self._e("movq {}(%rax), %rcx".format(8 * w_i))
+                            self._e("movq %rcx, {}".format(t))
+                        else:
+                            self._e("movq $0, {}".format(t))
+                            off_b, base = _rsp_slot(t)
+                            for b_i in range(tail):
+                                self._e("movzbq {}(%rax), %rcx".format(
+                                    full * 8 + b_i))
+                                self._e("movb %cl, {}{}".format(
+                                    off_b + b_i, base))
+                        slots.append(t)
+                    stacked_only.add(len(argw))   # ARGW position: the
+                    argw.append(nword)            # WHOLE arg is stacked
+                    continue
                 self._emit_addr(a)
                 # mem→temp rides %rcx (nothing else is live across
                 # these two moves — the staged values live in SLOTS;
@@ -832,13 +902,27 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
         # flag): walk the arg widths; the first arg that does not FIT
         # wholly in the GP door stacks — and it plus EVERY later arg
         # stack, in slot order. nreg = leading slots that ride GP.
+        # M4 W-X: a MEMORY arg (stacked_only) never rides GP and never
+        # FLIPS the boundary — later scalars still fill the ladder
+        # (l02/l03: MEMORY then scalar b → b rides %rdi; l03: scalar,
+        # MEMORY, scalar → both scalars on GP, struct words BETWEEN
+        # them on the stack). The walk plans ONE GP per non-MEMORY slot
+        # word; `stacked` keeps its shipped meaning for scalars.
         nreg, stacked = 0, False
+        gp_plan = []          # per SLOT: GP index or None (stacked)
+        _wi = 0               # ARGW position (MEMORY args span nword)
         for w in argw:
-            if stacked or nreg + w > 6:
+            if _wi in stacked_only:
+                gp_plan.extend([None] * w)      # whole arg: stack-only
+            elif stacked or nreg + w > 6:
                 stacked = True
+                gp_plan.extend([None] * w)
             else:
+                gp_plan.extend(nreg + i for i in range(w))
                 nreg += w
-        if len(slots) > 6 or stacked:
+            _wi += 1
+        stacked_idx = [i for i, g in enumerate(gp_plan) if g is None]
+        if len(slots) > 6 or stacked_idx:
             # M4 W-L (MC 12665): the §2.14 push block IS the block for
             # EVERY >6 call, fixed arity AND variadic (gate MC 12664 F-7:
             # a wall-flip alone ICEd 90/90 — the 335 print_hex_dump_debug
@@ -858,12 +942,17 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
             # test_wl1_alignment_invariant_leg). `%al = 0` stays EXCLUSIVE
             # to the variadic arm (the §2.14 pin); one addq restores
             # pad + slots after the call.
-            k = len(slots) - nreg
+            # M4 W-X: the PAD law counts STACKED WORDS (l05 measured:
+            # pad parity COUNTS MEMORY words), and the GP move rides
+            # the per-slot plan, not the leading index (a MEMORY arg
+            # interleaves with GP scalars, l03).
+            k = len(stacked_idx)
             pad = 8 if k & 1 else 16
-            for i in range(nreg):
-                self._e("movq {}, {}".format(slots[i], REG_ARGS[i]))
+            for idx, g in enumerate(gp_plan):
+                if g is not None:
+                    self._e("movq {}, {}".format(slots[idx], REG_ARGS[g]))
             self._e("subq ${}, %rsp".format(pad))
-            for m, idx in enumerate(reversed(range(nreg, len(slots)))):
+            for m, idx in enumerate(reversed(stacked_idx)):
                 off = 8 * (slot_base + idx + 1) + pad + 8 * m
                 # push-from-memory: a scratch register would clobber a
                 # live arg slot (rdi..r9 still hold args 1..6 here).

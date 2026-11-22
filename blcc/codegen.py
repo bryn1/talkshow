@@ -709,6 +709,14 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin, InlinerMixin):
         gp, ss, stacked = hs, 0, False
         for i, p in enumerate(fd.params):
             pty = self._decay(p.type)
+            # M4 W-X (MC 12756) door-widen, l21 MEASURED: the §5 by-value
+            # door UNWRAPS a top-level qualifier (gcc folds `const struct
+            # S14 s` identically to `struct S14 s`); the fp spine stays
+            # LOUD — the _fp check below runs POST-unwrap, so a
+            # `volatile double` param answers the §1-row-14 DEFERDED
+            # sentence, never an fp arm (l22 twin pinned).
+            if isinstance(pty, ast.Qualified):
+                pty = pty.inner
             if _fp(pty):
                 self._err(fd, "'float'/'double' parameter is DEFERRED — "
                           "storage only (§1 row 14; System V passes FP in "
@@ -716,10 +724,49 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin, InlinerMixin):
             wsz = 1
             if isinstance(pty, ast.StructType):
                 psz = self._size(pty, p)
-                if pty.is_union or self._struct_has_fp(pty) or psz > 16:
+                if pty.is_union or self._struct_has_fp(pty):
                     self._err(fd, "'struct' passed by value is 'struct "
                               "assignment' (§5) — pass a pointer",
                               p.name or fd.name, "asm")
+                if psz > 16:
+                    # M4 W-X THE MEMORY LAW, callee twin (MC 12756;
+                    # measured battery m4-wx-sims.md §1, DIVERGE=0): the
+                    # arg occupies ceil(psz/8) incoming words at
+                    # 16(%rbp)+8*ss, copied WORD-WISE into the param's
+                    # frame slot (blcc's spill-to-slot value-equal form,
+                    # the W-L precedent), tail bytes byte-exact (l04/
+                    # l16); it consumes NO GP and flips NO `stacked`
+                    # boundary — later scalars still ride the ladder
+                    # (l02/l03), while ss keeps counting incoming words
+                    # so a LATER stacked scalar reads the slot AFTER the
+                    # struct's words (l08, symmetric with the caller's
+                    # push order). KEEP-LOUD: >8 alignment (l09).
+                    if self._align(pty, fd) > 8:
+                        self._err(fd, "'struct' parameter needs 16-byte "
+                                  "stack alignment — not modelled "
+                                  "(W-X KEEP-law)", p.name or fd.name,
+                                  "asm")
+                    off = self._slot(p.type, fd)
+                    if p.name:
+                        fn.locals[p.name] = (off, pty)
+                    full, tail = psz // 8, psz % 8
+                    for w_i in range(full):
+                        fn.lines.append("    movq {}(%rbp), %rax".format(
+                            16 + 8 * (ss + w_i)))
+                        fn.lines.append("    movq %rax, {}(%rbp)".format(
+                            off + 8 * w_i))
+                    for b_i in range(tail):
+                        # tail bytes continue AFTER this struct's full
+                        # words AT ITS OWN ss (the sim stub's ss=0
+                        # simplification never saw ss>0 with a tail;
+                        # l10+l11 generalize: word k of the incoming
+                        # area is 16+8k, always ss-relative).
+                        fn.lines.append("    movzbq {}(%rbp), %rax".format(
+                            16 + 8 * (ss + full) + b_i))
+                        fn.lines.append("    movb %al, {}(%rbp)".format(
+                            off + full * 8 + b_i))
+                    ss += full + (1 if tail else 0)
+                    continue
                 wsz = 2 if psz > 8 else 1
             off = self._slot(p.type, fd)
             if p.name:
