@@ -1,3 +1,8 @@
+# LINES reason: constant evaluation and the .rodata/.data/.bss emission it
+# feeds are ONE fold (a byte list is the fold's output); the file crossed 600
+# when W-X COMMIT-0 added the data-path _Bool normalize twin (+18 l, both
+# bitfield init sites) — splitting the fold from its emitter would duplicate
+# the ('b'|'q'|'z') stream contract.
 """Global data emission for blcc (ARCHITECTURE.md §4): constant evaluation of
 file-scope initializers (integer/char constants, address-of-global, brace
 lists; a string literal is a §5-style diagnostic naming the construct) and
@@ -252,6 +257,21 @@ class DataEmitter:
                       "model (§1 row 12 LOUD twin)".format(d[3]),
                       "bitfield")
 
+    def _bf_norm(self, init, bfx, v: int) -> int:
+        """M4 W-X COMMIT-0 (MC 12756, W-W gate F1 — SILENT): a `_Bool`
+        unit NORMALIZES to 0/1 BEFORE the width mask — C11 6.3.1.2, the
+        same law the shipped codegen path rides through `_convert`
+        (`_bf_store`'s `un == "_Bool"` arm) and the shipped plain-assign
+        path. gcc byte-pinned (gate, out/bool-pairrun.txt): global
+        `{ .f = 2 }` on `_Bool f:1` stores 01, `{ .f = 258 }` stores 01,
+        `{ .f = -3 }` stores 01; tip masked the RAW value (2&1=0 → 0),
+        a SILENT wrong object. Both data sites (struct bsup, union slot)
+        route HERE — one law, one home. Non-_Bool units truncate mod 2^w
+        exactly as shipped (row 'trunc' pins the control)."""
+        if bfx[3] == "_Bool":
+            return 1 if v else 0
+        return v
+
     def _bf_merge(self, total, out, bsup, init):
         """Fold bitfield bit-contributions into the entry stream. Unit
         bytes are little-endian (x86, W-F layout law); a ('q') label
@@ -340,7 +360,8 @@ class DataEmitter:
                             self._err(init, "address initializer inside a "
                                       "bitfield slot is not in the "
                                       "subset (§5)", "initializer")
-                        vv = v & ((1 << bfx[2]) - 1)
+                        vv = self._bf_norm(init, bfx, v) \
+                            & ((1 << bfx[2]) - 1)
                         for p in range((bfx[2] + 7) // 8):
                             buf[p] = (vv >> (8 * p)) & 255
                         continue
@@ -458,7 +479,8 @@ class DataEmitter:
                         # the constant lands TRUNCATED (mod 2^w) at its
                         # bit position inside its unit; the field's
                         # signedness does NOT change stored bits (guard
-                        # rows g1/g2 pin both). KEEP-laws ride
+                        # rows g1/g2 pin both). _Bool normalizes FIRST
+                        # (W-X COMMIT-0 _bf_norm, gate F1). KEEP-laws ride
                         # _bf_data_guard (packed W-F, unit model).
                         self._bf_data_guard(init, ty, bfx)
                         v = self._const(items[i], ctx)
@@ -469,7 +491,8 @@ class DataEmitter:
                         bsup.append((bfx[0], bfx[1], bfx[2],
                                      self._size(ast.BuiltinType(
                                          init.file, init.line, init.col,
-                                         bfx[3]), at), v))
+                                         bfx[3]), at),
+                                     self._bf_norm(init, bfx, v)))
                         continue
                     out.extend(self._bytes_of(sty, items[i], at, ctx))
             if total - self._bytelen(out) > 0:

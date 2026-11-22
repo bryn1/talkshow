@@ -15,7 +15,7 @@ from blcc import ast, predef
 from blcc.lexer import DiagError, Lexer, SourceLine, Token, TokenStream
 from blcc.expr_parser import ExprParser
 from blcc.asmstmt import AsmParseMixin
-from blcc.types import CompatLawMixin
+from blcc.types import CompatLawMixin, UNSIGNED_NAMES, _RANK
 from blcc.runtime import BUILTINS as _RUNTIME_BUILTINS
 
 # §6 implicit builtins: always callable, never re-declarable. The NAME set is
@@ -1124,7 +1124,21 @@ class Parser(AsmParseMixin, CompatLawMixin):
                 if node.op == "+" and isinstance(right, ast.PtrType) \
                         and not isinstance(left, ast.PtrType):
                     return self._unqual(right)
-            return None
+            # M4 W-X COMMIT-0 (MC 12756, gate F6): the INTEGER arm of the
+            # SAME light mirror — the engine's _binary_ty answer computed
+            # from its OWN tables (_RANK/UNSIGNED_NAMES imported, never
+            # copied): comparisons answer int, a shift takes its promoted
+            # LEFT operand, + - * / % take the §2.2 usual arithmetic
+            # conversions. tip answered None for EVERY int-arith shape, so
+            # `__builtin_types_compatible_p(typeof(cs_nsec - wd_nsec), …)`
+            # folded NOT-compatible (the §2.12 safe direction, W-L) where
+            # gcc folds 1: the kernel abs() choose-chain took its
+            # `((void)0)` arm — the F6 clocksource ICE at _uac, and a
+            # SILENT wrong arm wherever both arms typecheck (own run-pair
+            # at tip: blcc 142, gcc 102 — tests/test_core_m4wx0.py).
+            # fp operands STAY None: the §2.12 safe direction pinned by
+            # the fp leg there (l13-class NAMED-DIVERGE family).
+            return self._arith_ty_light(node, left, right)
         if isinstance(node, ast.Select):
             base = self.expr_type(node.base)
             if isinstance(base, ast.Qualified):
@@ -1152,6 +1166,55 @@ class Parser(AsmParseMixin, CompatLawMixin):
             if inner is not None:
                 return ast.PtrType(node.file, node.line, node.col, inner)
         return None
+
+    _NARROW_NAMES = frozenset(("char", "signed char", "unsigned char",
+                               "short", "unsigned short", "_Bool"))
+
+    def _promote_light(self, ty):
+        """§2.2 integer promotion — fold-side twin of TypeMap._promote
+        (the narrow types → int, LP64; M4 W-X COMMIT-0, MC 12756)."""
+        if isinstance(ty, ast.BuiltinType) and ty.name in self._NARROW_NAMES:
+            return ast.BuiltinType(ty.file, ty.line, ty.col, "int")
+        return ty
+
+    def _arith_ty_light(self, node, left, right):
+        """M4 W-X COMMIT-0 (MC 12756, gate F6) — the light INTEGER twin of
+        the engine's _binary_ty arithmetic law, reached from expr_type.
+        Comparisons answer int; a shift takes its promoted LEFT operand;
+        `+ - * / %` take the §2.2 UAC over the promoted operands using the
+        ENGINE'S OWN rank/signedness tables (imported, never copied).
+        None = this mirror cannot type the shape (fp, void, struct,
+        pointers that are not the +/− arms above, unresolvable names):
+        the §2.12 safe direction stays None, never a guess."""
+        if node.op in ("==", "!=", "<", "<=", ">", ">=", "&&", "||"):
+            return ast.BuiltinType(node.file, node.line, node.col, "int")
+        if node.op not in ("+", "-", "*", "/", "%", "<<", ">>"):
+            return None
+        if node.op in ("<<", ">>"):
+            # a shift's result type is its promoted LEFT ALONE — the
+            # RIGHT operand needs no type here (a literal has none in
+            # this mirror); a LEFT this mirror cannot type stays None.
+            if not isinstance(left, ast.BuiltinType):
+                return None
+            lt0 = self._promote_light(left)
+            return lt0 if lt0.name in _RANK else None
+        if not (isinstance(left, ast.BuiltinType)
+                and isinstance(right, ast.BuiltinType)):
+            return None
+        lt, rt = self._promote_light(left), self._promote_light(right)
+        if lt.name not in _RANK or rt.name not in _RANK:
+            return None                      # fp/void: None, never a lie
+        if lt.name == rt.name:
+            return lt
+        lu, ru = lt.name in UNSIGNED_NAMES, rt.name in UNSIGNED_NAMES
+        lr, rr = _RANK[lt.name], _RANK[rt.name]
+        if lu == ru:
+            name = lt.name if lr >= rr else rt.name
+        else:
+            un, ur = (lt.name, lr) if lu else (rt.name, rr)
+            sn, sr = (rt.name, rr) if lu else (lt.name, lr)
+            name = un if ur >= sr else sn
+        return ast.BuiltinType(node.file, node.line, node.col, name)
 
     # -- small token helpers --------------------------------------------------
 

@@ -1092,7 +1092,14 @@ class TypeMap(CompatLawMixin):
         lt, rt = self._promote(lt), self._promote(rt)
         ln = lt.name if isinstance(lt, ast.BuiltinType) else None
         rn = rt.name if isinstance(rt, ast.BuiltinType) else None
-        if ln is None or rn is None:
+        if ln is None or rn is None or ln == "void" or rn == "void":
+            # M4 W-X COMMIT-0 (MC 12756, F6): `void` used to pass this
+            # gate (BuiltinType('void') HAS a name) and die one line
+            # later at `_RANK['void']` — the §8 catch-all then printed
+            # `asm: internal compiler error, found 'KeyError: void'`
+            # (kernel_time_clocksource stream). void is non-numeric: the
+            # shipped §4 sentence answers (gcc rc1 'invalid use of void
+            # expression' twin); the ICE class is REPLACED here.
             self._err(n, "arithmetic on a non-numeric type is not in the "
                       "subset (§4)", self._what(n))
         if ln in ("float", "double") or rn in ("float", "double"):
