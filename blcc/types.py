@@ -389,7 +389,8 @@ class TypeMap(CompatLawMixin):
             while stack:
                 s = stack.pop(0)
                 if isinstance(s, ast.VarDecl):
-                    self.fn.locals[s.name] = (0, self._untype(s.type))
+                    self.fn.locals[s.name] = (0, self._untype(s.type),
+                                              s.type)
                 stack.extend(stmt_children(s))
             if n.value is None:
                 return ast.BuiltinType(n.file, n.line, n.col, "void")

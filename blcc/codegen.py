@@ -40,11 +40,18 @@ class _FnState:
     def __init__(self, name: str):
         self.name = name
         self.lines: List[str] = []
-        self.locals: Dict[str, Tuple[int, ast.Node]] = {}
+        # M4 W-AB COMMIT-0 (MC 12783): the entry CARRIES its raw declared
+        # type (slot 2, and slot 3 = "param" for parameters) so the
+        # const-store door resolves a store root without a parallel
+        # registry to drift — the block save/restore snapshots below
+        # move the WHOLE dict, and the raw type rides with the object.
+        # Layout/emission keep reading [0]/[1] exactly as before.
+        self.locals: Dict[str, tuple] = {}
         # §1c (MC 12486): function-scope `static` locals — name to
-        # (asm-symbol, type). Checked BEFORE locals/globals everywhere:
-        # the static local SHADOWS the same-name global (gcc w4 law).
-        self.statics: Dict[str, Tuple[str, ast.Node]] = {}
+        # (asm-symbol, type, init, raw declared type). Checked BEFORE
+        # locals/globals everywhere: the static local SHADOWS the
+        # same-name global (gcc w4 law).
+        self.statics: Dict[str, tuple] = {}
         self.frame = 0
         self.temp_top = 0
         self.temp_high = 0
@@ -748,7 +755,7 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin, InlinerMixin):
                                   "asm")
                     off = self._slot(p.type, fd)
                     if p.name:
-                        fn.locals[p.name] = (off, pty)
+                        fn.locals[p.name] = (off, pty, p.type, "param")
                     full, tail = psz // 8, psz % 8
                     for w_i in range(full):
                         fn.lines.append("    movq {}(%rbp), %rax".format(
@@ -770,7 +777,7 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin, InlinerMixin):
                 wsz = 2 if psz > 8 else 1
             off = self._slot(p.type, fd)
             if p.name:
-                fn.locals[p.name] = (off, pty)
+                fn.locals[p.name] = (off, pty, p.type, "param")
             # M4 W-L (MC 12665): params 7+ arrive in 8-byte STACK slots —
             # the incoming area is 16(%rbp), 24(%rbp), … ascending (the
             # measured -Os read-back law; blcc's rbp-frame form of the
@@ -1126,7 +1133,9 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin, InlinerMixin):
         off = self._slot(ty, vd)
         # bind the ORIGINAL type: _ex_ident needs sized-arrayness to decay to
         # leaq; pointer behaviour everywhere else comes from _decay in _ty.
-        self.fn.locals[vd.name] = (off, ty)
+        # M4 W-AB COMMIT-0 (MC 12783): slot 2 carries the RAW declared
+        # type (qualifiers INTACT) for the const-store door.
+        self.fn.locals[vd.name] = (off, ty, vd.type)
         if vd.init is None:
             return
         if isinstance(vd.init, ast.InitList):

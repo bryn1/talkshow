@@ -177,7 +177,7 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
                 self._load(ty, "{}(%rip)".format(sym), at=n)
             return
         if n.name in self.fn.locals:
-            off, ty = self.fn.locals[n.name]
+            off, ty = self.fn.locals[n.name][:2]     # W-AB: raw slot rides
             if isinstance(ty, ast.ArrayType) and ty.size is not None:
                 self._e("leaq {}(%rbp), %rax".format(off))     # decay (§4)
             else:
@@ -1476,7 +1476,102 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
             return                         # nested row decays to address (§4)
         self._load(self._ty(n), "(%rax)", at=n)
 
+    # -- M4 W-AB COMMIT-0 (MC 12783): the const-store door ------------------
+
+    def _ro_lval(self, n, target, verb) -> None:
+        """M4 W-AB COMMIT-0 (MC 12783; W-AB sims card 12781, rows sa04/
+        sa27): the tip ACCEPTED stores into const-qualified objects —
+        `cs = s` AND the scalar `c = x` — where gcc LOUDs rc1. This
+        door rides ALL THREE store homes (plain `=`, compound `op=` —
+        gcc answers the ASSIGNMENT verb for those — and `++/--`), and
+        the sentence is the MEASURED gcc family: '<verb> of read-only
+        variable|parameter <name>', '<verb> of member <f> in read-only
+        object', '<verb> of read-only location <name>'.
+
+        The raw declared type rides the `fn.locals` ENTRY (slot 2, set
+        at bind time in codegen.py/inliner.py — the block save/restore
+        moves the WHOLE dict, so the marker can never drift beside it);
+        statics carry it at slot 3, globals hold their VarDecl raw type.
+        A const at the ROOT layer freezes everything below it (C law:
+        the object is not modifiable); an INDEX/DEREF step that only
+        PASSES THROUGH a qualified layer writes what the layer points
+        or indexes (`int *const cp; cp[i] = 1` is LEGAL — cp itself is
+        frozen, not the pointee), so the layer's own const gates only
+        stores to the layer object. NAMED residuals (loud-NOT-lax means
+        the gap is named, never faked): `->` chains, member types that
+        are themselves const, and typeof(...)/__auto_type names answer
+        None — a pointer's pointee qual is not carried through
+        `_untype`'s recursive strip, and a gcc-compiled corpus cannot
+        contain the violation (volume 0)."""
+        steps = []                       # outermost-first: field name | None
+        t = target
+        while True:
+            if isinstance(t, ast.Select):
+                if t.arrow:
+                    return               # pointee const not carried (named)
+                steps.append(t.field)
+                t = t.base
+            elif isinstance(t, ast.Index):
+                steps.append(None)
+                t = t.base
+            elif isinstance(t, ast.Unary) and t.op == "*":
+                steps.append(None)
+                t = t.operand
+            else:
+                break
+        if not isinstance(t, ast.Ident):
+            return
+        name = t.name
+        param = False
+        if name in self.fn.locals:
+            loc = self.fn.locals[name]
+            raw = loc[2] if len(loc) > 2 else None
+            param = len(loc) > 3
+        elif name in getattr(self.fn, "statics", {}):
+            st = self.fn.statics[name]
+            raw = st[3] if len(st) > 3 else None
+        elif name in self.globals:
+            raw = getattr(self.globals[name], "type", None)
+        else:
+            return
+        if raw is None or isinstance(raw, ast.TypeOf):
+            return                       # typeof forms: named residual
+        ty = raw
+        ro = False
+        for step in reversed(steps):     # root side inward
+            while isinstance(ty, ast.Qualified):
+                if ty.qual == "const" and step is not None:
+                    ro = True            # member of a frozen layer
+                    break
+                ty = ty.inner
+            if ro:
+                break
+            if step is not None:
+                break                    # member through a live layer
+            if isinstance(ty, (ast.ArrayType, ast.PtrType)):
+                ty = ty.inner
+            else:
+                break
+        while not ro and isinstance(ty, ast.Qualified):
+            if ty.qual == "const":
+                ro = True
+            ty = ty.inner
+        if not ro:
+            return
+        if not steps:
+            self._err(n, "{} of read-only {} '{}'".format(
+                verb, "parameter" if param else "variable", name), name)
+        if steps[0] is None:
+            self._err(n, "{} of read-only location '{}'".format(
+                verb, name), name)
+        self._err(n, "{} of member '{}' in read-only object".format(
+            verb, steps[0]), steps[0])
+
     def _ex_assign(self, n) -> None:
+        # M4 W-AB COMMIT-0 (MC 12783): the const door runs BEFORE every
+        # store dispatch below (the aggregate copy, the bitfield arm, the
+        # i128 pair and the scalar Ident fast path all STORE).
+        self._ro_lval(n, n.target, "assignment")
         # M4 W-H COMMIT-2 (MC 12645): when either side is an AGGREGATE
         # type the MEASURED copy law decides, BEFORE the bitfield/asm/
         # i128 arms (none is meaningful for a struct-valued store) and
@@ -1638,6 +1733,10 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
         return "‘{}’".format(self._what(ty))
 
     def _ex_assignop(self, n) -> None:
+        # M4 W-AB COMMIT-0 (MC 12783): compound assign to a const object
+        # LOUDs with the ASSIGNMENT sentence (gcc measured: `c += x`
+        # answers "assignment of read-only variable 'c'").
+        self._ro_lval(n, n.target, "assignment")
         self._asm_c_rmw_blocked(n, "'op=' compound assignment")
         if is_i128(self._decay(self._ty(n.target))):
             # LOUD twin (gcc rc 0): a 128-bit RMW rides the pair ops the
@@ -1695,6 +1794,10 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
         self._unt(2)
 
     def _ex_incdec(self, n) -> None:
+        # M4 W-AB COMMIT-0 (MC 12783): ++/-- on a const object LOUDs
+        # with the measured INCREMENT/DECREMENT sentence.
+        self._ro_lval(n, n.operand,
+                      "increment" if n.op == "++" else "decrement")
         ty = self._decay(self._ty(n.operand))
         if isinstance(ty, ast.StructType):
             self._err(n, "'{}' on a struct is 'struct assignment' (§5)"

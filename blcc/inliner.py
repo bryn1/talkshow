@@ -301,7 +301,7 @@ class InlinerMixin:
             off = self._slot(p.type, a)
             self._e("movq %rax, {}(%rbp)".format(off))
             self.fn.locals[alpha.get(p.name, p.name)] = (off,
-                self._decay(self._untype(p.type)))
+                self._decay(self._untype(p.type)), p.type, "param")
             # W-R TRANSITIVE SITE LAW (own table w02): an argument
             # folds THROUGH the map of the splice we are nested in
             # (`h(0)` maps bit=0; its body's `g(8 + bit)` site folds

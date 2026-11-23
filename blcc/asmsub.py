@@ -359,7 +359,7 @@ class AsmSubMixin:
                 return None
             return "{}(%rip)".format(sym)
         if nm in self.fn.locals:
-            off, lty = self.fn.locals[nm]
+            off, lty = self.fn.locals[nm][:2]     # W-AB: raw slot rides
             if isinstance(self._untype(lty), ast.ArrayType):
                 return None
             return "{}(%rbp)".format(off)

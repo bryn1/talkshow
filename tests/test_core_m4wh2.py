@@ -345,16 +345,21 @@ def test_wh2_call_rhs_stays_loud(tmp_path):
 
 
 def test_wh2_const_lhs_divergence(tmp_path):
-    # SILENT-DIV PIN (NOT approval): gcc rc1 "assignment of read-only
-    # variable 'cw'"; blcc's ONE store law never enforced quals
-    # (measured at tip for every const path). Retirement rides the
-    # const-store class — never this wave.
+    # M4 W-AB COMMIT-0 FLIP (MC 12783): this leg pinned the SILENT-DIV
+    # "retirement rides the const-store class — never this wave". THE
+    # CLASS LANDED: the `_ro_lval` door now answers gcc's measured
+    # sentence ("assignment of read-only variable 'cw'", gcc rc1) for
+    # every const store path; the row flipped with the class it named.
+    # The battery beside it (tests/test_core_m4wab0.py) owns the law.
     r = _compile(tmp_path, "wh2_cw",
                  "struct S{int a;} gs; int g(void){ const struct S cw"
                  " = gs; cw = gs; return cw.a; }\n"
                  "int main(void){ return g(); }")
-    assert r.returncode == 0, (
-        "retire this leg with the const-store class:\n" + r.stderr)
+    assert r.returncode != 0, (
+        "the const-store door went silent — the class CLOSED by "
+        "MC 12783 reopened:\n" + r.stderr[:300])
+    assert "assignment of read-only variable 'cw'" in r.stderr, \
+        "wrong sentence:\n" + r.stderr[:300]
 
 
 # ------------------------------------------------- interaction arms
