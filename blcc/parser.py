@@ -1177,6 +1177,47 @@ class Parser(AsmParseMixin, CompatLawMixin):
             return ast.BuiltinType(ty.file, ty.line, ty.col, "int")
         return ty
 
+    _NON_SWITCH_LABEL_NAMES = frozenset(("void", "float", "double"))
+
+    def _switch_label_width(self, control):
+        """M4 W-Z COMMIT-0 (MC 12774, cl16): the (width, signedness) of the
+        switch control's PROMOTED type — the width every case label is
+        converted TO. One home with the shipped width law: this is
+        TypeMap._fold_w's answer computed on this side's `_promote_light`
+        twin. None = this mirror cannot name an integer scalar control
+        (fp/void/unresolvable) — every label then keeps today's
+        un-converted posture (the safe direction, never a guess)."""
+        from blcc.types import TYPE_SIZE, is_i128, is_unsigned
+        ty = self.expr_type(control)
+        if ty is None:
+            return None
+        ty = self._promote_light(self._unqual(ty))
+        if not isinstance(ty, ast.BuiltinType) \
+                or ty.name not in TYPE_SIZE \
+                or ty.name in self._NON_SWITCH_LABEL_NAMES:
+            return None
+        if is_i128(ty):
+            return 128, not is_unsigned(ty)
+        return 8 * TYPE_SIZE[ty.name], not is_unsigned(ty)
+
+    def _case_to_control(self, v: int) -> int:
+        """M4 W-Z COMMIT-0 (MC 12774): gcc converts EVERY case label to the
+        control's promoted type — `case 0x100000000L:` under an `int`
+        control TRUNCATES to 0 ("overflow in conversion", measured gcc
+        11.4 -Os, and the case then MATCHES 0). blcc's fold answered the
+        UNBOUNDED Python integer, so such a label matched nothing and the
+        switch silently rode its default arm — a SILENT divergence, the
+        same conversion-to-control-type family W-O's switch door rides
+        (W-Z sims cl16; corpus volume 0, named at tip, repaired here
+        FIRST). The wrap IS the shipped width law (TypeMap._wrapw,
+        WHG-B's home) — not a second oracle."""
+        ws = getattr(self, "_case_ctrl_ws", None)
+        w = ws[-1] if ws else None
+        if w is None:
+            return v
+        from blcc.types import TypeMap
+        return TypeMap._wrapw(v, *w)
+
     def _arith_ty_light(self, node, left, right):
         """M4 W-X COMMIT-0 (MC 12756, gate F6) — the light INTEGER twin of
         the engine's _binary_ty arithmetic law, reached from expr_type.
@@ -3501,9 +3542,10 @@ class Parser(AsmParseMixin, CompatLawMixin):
             hi = self.parse_int_constant("'case' range bound needs an "
                                          "integer constant (§4b)")
             self.s.expect_punct(":")
-            return ("range", (lo, hi), ct)
+            return ("range", (self._case_to_control(lo),
+                              self._case_to_control(hi)), ct)
         self.s.expect_punct(":")
-        return ("case", lo, ct)
+        return ("case", self._case_to_control(lo), ct)
 
     def parse_switch(self) -> ast.Node:
         t = self._accept("switch")
@@ -3512,6 +3554,14 @@ class Parser(AsmParseMixin, CompatLawMixin):
         self.s.expect_punct(")")
         self.s.expect_punct("{")
         self.switch_depth += 1
+        # M4 W-Z COMMIT-0 (MC 12774): the innermost switch owns every label
+        # parsed while it is open (C 6.8.5.3), so the control widths ride a
+        # STACK, pushed here and consumed in parse_case_arm — both label
+        # paths (body loop and parse_nested_label) convert the SAME way and
+        # the duplicate check below keys on the CONVERTED values, exactly
+        # as gcc's does.
+        self._case_ctrl_ws = getattr(self, "_case_ctrl_ws", [])
+        self._case_ctrl_ws.append(self._switch_label_width(control))
         stmts: List[ast.Node] = []
         labels: List[tuple] = []
         while not self.s.at_punct("}") and self.s.peek().kind != "eof":
@@ -3535,6 +3585,7 @@ class Parser(AsmParseMixin, CompatLawMixin):
             stmts.append(self._wrap_case(kind, value, ltok, None))
         self.s.expect_punct("}")
         self.switch_depth -= 1
+        self._case_ctrl_ws.pop()
         self._check_case_labels(stmts)
         return ast.Switch(t.file, t.line, t.col, control, tuple(stmts))
 
