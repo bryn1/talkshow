@@ -118,7 +118,18 @@ def test_wh1_fn_decay_loud_defer(tmp_path):
     assert r.returncode != 0, (
         "when the call gate materializes TypeOf, FLIP this leg to the "
         "run-pair expect 14 (6 + 8)")
-    assert "not a 'function'" in r.stderr, r.stderr
+    # M4 W-Z COMMIT-CH37T FOLLOW-UP (MC 12774): the SENTENCE SHIFTED, the
+    # DEFER STANDS. W-Z's light-mirror __auto_type materialize made the
+    # LAZY TypeOf node no longer reach the gate: expr_type(f) now answers
+    # through the materialize, and for a fn designator initializer the
+    # parse-side symbol carries only the RETURN type (`("fn", ret)`), so
+    # the mirror lands on the non-callable spelling and the raise moved
+    # from "not a 'function'" to "no declaration for callable" (measured:
+    # stderr below; gcc rc0 exit 14 unchanged). Still LOUD, never silent;
+    # the flip to 14 stays unreached — retiring this defers to the call
+    # gate learning fn-typed materialization (parse sym needs the full
+    # FuncType, not a second gate).
+    assert "no declaration for callable" in r.stderr, r.stderr
 
 
 def test_wh1_top_qual_drops_run_pair(tmp_path):
