@@ -81,6 +81,39 @@ def _roundup8(n: int) -> int:
     return (n + 7) & ~7
 
 
+def call_target_ret(callee_ty):
+    """M4 W-AA (MC 12780): THE one home of "what does a call return" —
+    the body `TypeMap._ind_call_ty` shipped (the M4 W3 (MC 12563) §2 R1
+    law), lifted to module level so the light parse-side mirror
+    `Parser.expr_type` can answer a Call with the SAME text instead of
+    restating it: the sims (card 12778 §5) planted exactly that second
+    call-law home and their one-home law is binding here — engine and
+    mirror type the same callee or not at all. The callee arrives in its
+    undecayed typing view: the callee DECAYS to PtrType(FuncType) (the
+    fn-ptr value; the FuncType designator `(*fp)` and an array element
+    ride the same decay, C 6.3.2.1/6.7.6.3p7 — the `_decay` law this file
+    owns) and the call's TYPE is the TARGET's return. NO qualifier eat
+    here: the lifted body never had one, and the engine hands this home
+    only unqualified types (`_ty` untypes at every arm) — a top-qualified
+    callee is eaten by each CALLER's decay view, the engine's `_decay`
+    upstream of `_ind_call_ty` and the light mirror's per-arm `_unqual`
+    (the shipped posture at parser.py's Ident/Select arms; measured at
+    the a22/a29/a30 rows), so the two sides can never disagree about a
+    qualified callee. None answers every
+    shape that is NOT a callable target — the home stays silent and each
+    CALLER keeps its own refusal sentence: `_ind_call_ty` LOUDs the §8
+    gcc-rc1 twin, the light mirror answers None so the parse gate keeps
+    its §8 sentence (ca16/ca17 stay BOTH-REFUSE, the safe direction)."""
+    ty = callee_ty
+    if isinstance(ty, ast.ArrayType):
+        ty = ast.PtrType(ty.file, ty.line, ty.col, ty.inner)
+    elif isinstance(ty, ast.FuncType):
+        ty = ast.PtrType(ty.file, ty.line, ty.col, ty)
+    if isinstance(ty, ast.PtrType) and isinstance(ty.inner, ast.FuncType):
+        return ty.inner.ret
+    return None
+
+
 def walk_fields(members, structs):
     """Flat (name, type) view of a member list with anonymous nested
     struct/union members PROMOTED (gcc 11.4 -std=gnu89 measured, MC 12460
@@ -1405,15 +1438,14 @@ class TypeMap(CompatLawMixin):
         self._err(n, "cannot type this expression", self._what(n))
 
     def _ind_call_ty(self, n: ast.Call) -> ast.Node:
-        """M4 W3 (MC 12563) §2 R1: type a call through a VALUE — the
-        callee expression decays to PtrType(FuncType) (or the FuncType
-        designator `(*fp)`, which the decay rebuilds); the call's type is
-        the TARGET's return. A non-callable target answers the §8 twin
-        (the parse gate is the first line; this is the engine's)."""
-        tgt = self._decay(self._ty(n.callee))
-        if isinstance(tgt, ast.PtrType) and \
-                isinstance(tgt.inner, ast.FuncType):
-            return tgt.inner.ret
+        """M4 W3 (MC 12563) §2 R1: type a call through a VALUE. M4 W-AA
+        (MC 12780) moved the LAW text to `call_target_ret` (module level,
+        the one home the light mirror shares — see its docstring); this
+        arm keeps the engine's own §8 twin for the None case (the parse
+        gate is the first line; this is the engine's)."""
+        ret = call_target_ret(self._ty(n.callee))
+        if ret is not None:
+            return ret
         self._err(n, "called object is not a 'function' or a 'function "
                   "pointer' (§8 — gcc rc1 twin)", "call")
 

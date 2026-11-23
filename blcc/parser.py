@@ -15,7 +15,8 @@ from blcc import ast, predef
 from blcc.lexer import DiagError, Lexer, SourceLine, Token, TokenStream
 from blcc.expr_parser import ExprParser
 from blcc.asmstmt import AsmParseMixin
-from blcc.types import CompatLawMixin, UNSIGNED_NAMES, _RANK
+from blcc.types import (CompatLawMixin, UNSIGNED_NAMES, _RANK,
+                        call_target_ret)
 from blcc.parse_fold import ParseFoldMixin
 from blcc.runtime import BUILTINS as _RUNTIME_BUILTINS
 
@@ -1097,6 +1098,31 @@ class Parser(ParseFoldMixin, AsmParseMixin, CompatLawMixin):
                     if name == node.field:
                         return mtype
             return None
+        if isinstance(node, ast.Call):
+            # M4 W-AA (MC 12780): the CALL arm of the light mirror — the
+            # §8 crowd's missing arm (sims card 12778: 15 of the 17 §8
+            # first-walls are a call-result MEMBER callee; the walk's
+            # sentence is `skb_dst(skb)->output(...)` at dst.h:450, the
+            # crypto family `crypto_ahash_reqtfm(req)->export(...)`).
+            # TWO answers, NO second law text: the NAMED fn rides the
+            # shipped light symbol shape ("fn", ret) — the engine's
+            # `sigs[name][1]` twin, not a new home (ca01/ca02, plant P2);
+            # EVERY other callee shape — the fn-ptr VAR `fp()`, the
+            # designator `(*fp)`, an array element `t[0]` — DELEGATES to
+            # `types.call_target_ret`, the pure body lifted out of
+            # `TypeMap._ind_call_ty` (the sims' stub RESTATING the decay
+            # law in this arm is the two-homes defect their §5 P2/P3
+            # plants kill — the one-home guard test pins this text). A
+            # target this mirror cannot type answers None and the §8
+            # gate (expr_parser.py) keeps its gcc-rc1-twin sentence —
+            # ca16/ca17 stay BOTH-REFUSE, the safe direction (S4: the
+            # StmtExpr-callee streams are a DIFFERENT missing arm and
+            # stay walled here; the wave claims 15, never 17).
+            if isinstance(node.callee, ast.Ident):
+                sym = self.lookup(node.callee.name)
+                if sym is not None and sym[0] == "fn":
+                    return sym[1]
+            return call_target_ret(self.expr_type(node.callee))
         if isinstance(node, ast.Unary) and node.op == "*":
             base = self.expr_type(node.operand)
             if isinstance(base, ast.Qualified):
