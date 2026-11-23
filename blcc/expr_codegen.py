@@ -1862,10 +1862,46 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
             self._err(n, "a 128-bit conditional arm is not in the subset "
                       "(§5 — mirrors the struct-arm wall)", "?:")
         if isinstance(ty, ast.StructType):
-            # The TYPE law lives in _cond_ty (sizeof folds); the VALUE
-            # is the shipped §5 struct wall — mirrored, never silent.
-            self._err(n, "'struct assignment' is not in the subset (§5) — "
-                      "the conditional arm would copy a struct", "?:")
+            # M4 W-AB COMMIT-1 (MC 12783) — the conditional's STRUCT arm
+            # is armed: ONE frame temp of the result size materialized by
+            # the shipped `_slot` law; the SELECTED arm's sizeof bytes
+            # copied into it by the shipped block-copy size law
+            # (`_copy_block`: chunked GPR ≤ 16, `rep movsb` beyond, zero
+            # libcalls — W-H MC 12645, ONE emission home). The VALUE is
+            # the temp's ADDRESS — the object-IS-the-value law the
+            # shipped struct assign, the W-M struct-call temp and the
+            # W-U statement-expression source already ride; the arms are
+            # addressed through the SAME value-as-address family via
+            # `_emit_addr` (no second copy law, no hidden return).
+            # Exactly ONE arm runs (this conditional's own short-circuit,
+            # row e19). An arm `_emit_addr` cannot address keeps the
+            # shipped §5 wall below the family — never a faked address.
+            # GNU `a ?: b` keeps the §5 wall (NAMED, safe direction).
+            if n.gnu:
+                self._err(n, "'struct assignment' is not in the subset (§5) — "
+                          "the conditional arm would copy a struct", "?:")
+            sz = self._size(ty, n)
+            toff = self._slot(ty, n)
+            l_arm2 = self._label("tern")
+            l_end = self._label("ternend")
+            self._emit_expr(n.test)
+            self._truth(n.test)
+            self._e("je {}".format(l_arm2))
+            self._emit_addr(n.arm1)
+            self._e("movq %rax, %rsi")
+            self._e("leaq {}(%rbp), %rdi".format(toff))
+            if sz:
+                self._copy_block(sz, n)
+            self._e("jmp {}".format(l_end))
+            self.fn.lines.append("{}:".format(l_arm2))
+            self._emit_addr(n.arm2)
+            self._e("movq %rax, %rsi")
+            self._e("leaq {}(%rbp), %rdi".format(toff))
+            if sz:
+                self._copy_block(sz, n)
+            self.fn.lines.append("{}:".format(l_end))
+            self._e("leaq {}(%rbp), %rax".format(toff))
+            return
         if _fp(ty):
             # row 14: bits-only. Same-kind arms already intern their
             # storage; mixed kinds were LOUD at _ty via _uac.
@@ -2280,6 +2316,18 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
             # %rax; the shipped W-H source-address/block-copy law takes
             # it from here (`t = f();` and `struct S t = f();` both
             # copy from the temp; `f().m` adds the member offset).
+            self._emit_expr(n)
+            return
+        if isinstance(n, ast.Cond) and isinstance(
+                self._decay(self._ty(n)), ast.StructType):
+            # M4 W-AB COMMIT-1 (MC 12783) — the SECOND home of the ONE
+            # struct-value law, its VALUE-as-address FAMILY: this family
+            # already carries Assign (W-H), struct-valued Call (W-M) and
+            # StmtExpr (W-U) as copy-SOURCE addresses; the conditional
+            # was the missing member. Its value IS the address of the
+            # materialized temp, so `r = c ? a : b;` and `(c ? a : b).m`
+            # answer through `_ex_cond`'s arm — control-flow SELECTED,
+            # run ONCE, no faked hidden return.
             self._emit_expr(n)
             return
         if isinstance(n, ast.StmtExpr):

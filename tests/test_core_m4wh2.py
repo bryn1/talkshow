@@ -305,15 +305,30 @@ def test_wh2_compound_assign_stays_loud(tmp_path):
 
 
 def test_wh2_cond_arm_stays_loud(tmp_path):
-    # NAMED DEFER (measured gcc rc 0): struct arms of `?:`. The shipped
-    # cond-arm wall stays — retirement rides the conditional law, not
-    # a copy path bolted onto Cond. capability.h-adjacent shapes too.
-    r = _compile(tmp_path, "wh2_ca",
-                 "struct S{int a;} x, y;\n"
-                 "int gi;\nint g(void){ struct S z; z = gi ? x : y;"
-                 " return z.a; }\nint main(void){ return g(); }")
-    assert r.returncode != 0
-    assert "conditional arm" in r.stderr, r.stderr
+    # FLIPPED by M4 W-AB (MC 12783) — the named retirement ARRIVED: the
+    # conditional struct arm is ARMED (the §5-conditional law, tests/
+    # test_core_m4wab1.py), so this pin becomes the run-pair it named.
+    # gi = 0 selects the FALSE arm; the battery owns the full law table.
+    src = ("struct S{int a;} x = {2}, y = {7};\nint gi;\n"
+           "int g(void){ struct S z; z = gi ? x : y; return z.a; }\n"
+           "int main(void){ return g(); }\n")
+    s = tmp_path / "wh2_ca.c"
+    s.write_text(src)
+    gx = tmp_path / "wh2_ca.gcc"
+    gr = subprocess.run(["gcc", "-std=gnu89", "-O0", str(s), "-o", str(gx)],
+                        capture_output=True, text=True,
+                        env={"PATH": "/usr/bin:/bin"})
+    assert gr.returncode == 0, gr.stderr
+    bx = tmp_path / "wh2_ca.blcc"
+    br = subprocess.run(
+        [sys.executable, "-m", "blcc", str(s), "-o", str(bx)],
+        capture_output=True, text=True, cwd=REPO,
+        env={"PYTHONPATH": REPO, "PATH": "/usr/bin:/bin"})
+    assert br.returncode == 0, br.stderr
+    g = subprocess.run([str(gx)], capture_output=True, text=True)
+    b = subprocess.run([str(bx)], capture_output=True, text=True)
+    assert g.returncode == b.returncode == 7, \
+        "run-pair: gcc {} blcc {} expect 7".format(g.returncode, b.returncode)
 
 
 def test_wh2_call_rhs_stays_loud(tmp_path):
