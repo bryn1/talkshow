@@ -273,6 +273,53 @@ def test_label_then_scalar_overlap_refuses_loud():
     assert _side(Y31, "y31", "gcc")[1] == "4"
 
 
+# M4 CC-REFACTOR C4 (MC 12775): the byte-7/span-7 discriminators the W-Y
+# GATE named (m4-wy-gate-verdict.md finding 3 — "battery cannot kill the
+# 7-of-8 window mutant … Recommended next-wave row: my g_mut2_byte7
+# verbatim"; shape recreated at tip from the gate scratch probe
+# .tmp/m4-wy-gate/probes/g_mut2_byte7.c, provenance named there + in the
+# LEDGER CLEAN-CODE row). The shipped law is correct (it guards byte 7):
+# these rows arm the battery, they do not change the law.
+
+GMUT2 = """
+int sym;
+struct Lab { long p; };
+struct Tail { char pad[7]; char c; };
+union U { struct Lab l; struct Tail t; };
+union U u = { .l = { &sym }, .t = { {}, 7 } };
+int answer(void) { return (int)u.t.c; }
+"""
+GMUT2C = """
+struct Lab { long p; };
+struct Tail { char pad[7]; char c; };
+union U { struct Lab l; struct Tail t; };
+union U u = { .t = { {}, 7 } };
+int answer(void) { return (int)u.t.c; }
+"""
+
+
+def test_scalar_at_window_last_byte_refuses_loud():
+    """THE byte-7 discriminator (kills the gate's 7-of-8 window mutant
+    M2: stamp range(mo+pos, mo+pos+8) -> +7, advance stays 8): a
+    zero-filled 7-byte run then the scalar AT window byte 7 — the last
+    byte of the 8-byte label window. SHIP refuses LOUD; the mutant
+    swallows byte 7, ACCEPTS and silently answers 0 (gcc last-wins 7)."""
+    brc, err = _side(GMUT2, "gmut2", "blcc")
+    assert brc != 0 and "overlap in a union" in err and "§Y" in err, err
+    grc, g = _side(GMUT2, "gmut2", "gcc")
+    assert grc == 0 and g == "7", (grc, g)
+
+
+def test_unlabeled_tail_scalar_at_byte_7_pairs():
+    """Control (gate: the SAME shape WITHOUT the label ACCEPTS, exit 7 at
+    gcc AND ship): the refusal is window-specific, not byte-7-specific.
+    Kills the over-wide window mutant that would refuse with no label."""
+    grc, g = _side(GMUT2C, "gmut2c", "gcc")
+    brc, b = _side(GMUT2C, "gmut2c", "blcc")
+    assert grc == 0 and g == "7", (grc, g)
+    assert brc == 0 and b == "7", (brc, b)
+
+
 def test_non_aligned_window_keeps_the_loud_row():
     """A packed struct member puts the window at offset 1: no honest
     object exists, so the shipped §5 sentence stands unchanged (honesty
