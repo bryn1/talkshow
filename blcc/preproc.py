@@ -1,7 +1,7 @@
 """M1 GCC-compatible preprocessor: directive dispatch & source bookkeeping
 (plan R1, R2, R4, R10–R14, R17, R20, R21).
 
-LINES reason (559 > 400): directive dispatch is ONE concern — the #if-conditional
+LINES reason (562 > 400): directive dispatch is ONE concern — the #if-conditional
 stack, #line origin state and include search must share the per-file state
 machine; splitting would duplicate that state across files. The M4 W4
 depfile writer (plan §4.4) rides THIS machine on purpose: the include
