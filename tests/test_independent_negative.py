@@ -75,6 +75,36 @@ def assert_loud(src_text, tag, name, line=None, col=None):
     return r
 
 
+def assert_pair(src_text, tag, expect):
+    """Run-pair for a FLIPPED negative (M4 W-AB idiom, MC 12783): the
+    construct became SUPPORTED, the leg answers what its retirement
+    named: gcc twin (-w -std=gnu89 -O0) and blcc binaries agree, both
+    return expect. Self-cleaning like assert_loud (no stray binaries)."""
+    src, out = _paths(tag)
+    g = out + ".gcc"
+    with open(src, "w", encoding="utf-8") as fh:
+        fh.write(src_text)
+    try:
+        r = subprocess.run([sys.executable, "-m", "blcc", src, "-o", out],
+                           cwd=ROOT, capture_output=True, text=True,
+                           timeout=60)
+        assert r.returncode == 0, \
+            "{}: flipped leg must COMPILE, rc={} stderr={!r}".format(
+                tag, r.returncode, r.stderr[:300])
+        rg = subprocess.run(["gcc", "-w", "-std=gnu89", "-O0", src, "-o", g],
+                            capture_output=True, text=True, timeout=60)
+        assert rg.returncode == 0, \
+            "{}: gcc twin failed:\n{}".format(tag, rg.stderr[:300])
+        bx = subprocess.run([out], capture_output=True, timeout=30).returncode
+        gx = subprocess.run([g], capture_output=True, timeout=30).returncode
+        assert gx == expect and bx == gx, \
+            "{}: pair gcc={} blcc={} expect {}".format(tag, gx, bx, expect)
+    finally:
+        for p in (src, out, g):
+            if os.path.exists(p):
+                os.remove(p)
+
+
 # -- §5 constructs, each alone, named literally ---------------------------------
 
 def test_float_variable():
@@ -127,14 +157,18 @@ def test_label():
 
 def test_union():
     # M2 resync (§2.8): union is SUPPORTED (M1 pin retired; coverage
-    # moved to tests/test_core_m2_link.py run-pairs). The §8 sweep rides
-    # a construct VERIFIED LOUD this very build: a struct-valued
-    # conditional arm (the §5 struct-VALUE wall; `?:` itself flipped to
-    # SUPPORT with §1c AMENDMENT v4.2, MC 12486 — see
-    # test_core_m2_tern.py for the support legs).
-    assert_loud("struct S{int x;} s,t; int c;\n"
-                "int main(void){ struct S z = c ? s : t; return z.x; }\n",
-                "union", "struct")
+    # moved to tests/test_core_m2_link.py run-pairs). This leg's §8
+    # sweep VEHICLE — the struct-valued conditional arm (§5 struct-VALUE
+    # wall) — was ARMED by M4 W-AB (MC 12783, tests/test_core_m4wab1.py
+    # owns the 32-row law). The leg flips to the run-pair of the very
+    # shape it used to ride: the UNION-valued conditional (measured pair
+    # at REC -Os, high-byte significance so a wrong-size copy bites).
+    assert_pair("union U { int i; long l; };\n"
+                "int main(void){ union U u1, u2, r;\n"
+                "\tu1.l = ((long)3 << 48) | 7; u2.l = 0;\n"
+                "\tr = 1 ? u1 : u2;\n"
+                "\treturn (int)((r.l >> 48) & 0xff) + (int)(r.i & 0xff); }\n",
+                "unioncond", 10)
 
 
 def test_bitfield():

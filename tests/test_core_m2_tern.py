@@ -414,13 +414,22 @@ int main(void){
 # ------------------------------------------------------------------- LOUDs
 
 def test_tern_struct_arms_runtime_loud():
-    # gcc SUPPORTS same-type struct arms; blcc mirrors its shipped §5
-    # struct-VALUE wall (assignment precedent) — LOUD, never silent.
-    blcc_loud("""
+    # FLIPPED by M4 W-AB (MC 12783): the §5 struct-VALUE wall named here
+    # is ARMED (the conditional struct arm, tests/test_core_m4wab1.py).
+    # The leg becomes the runtime pair its name always described —
+    # BOTH arms selected at RUNTIME, value law = the materialized temp
+    # (measured gcc SUPPORTS same-type struct arms; the battery owns the
+    # full 32-row law table — this keeps the M2 row honest at new truth).
+    both_rc("""
 struct S { int x; };
-struct S s1, s2; int c;
-int main(void){ struct S s = c ? s1 : s2; return s.x; }
-""", "structloud", "sema", "struct")
+struct S s1 = { 7 }, s2 = { 3 };
+int main(void){ int c = 1; struct S s = c ? s1 : s2; return s.x; }
+""", "structpair", 7)
+    both_rc("""
+struct S { int x; };
+struct S s1 = { 7 }, s2 = { 3 };
+int main(void){ int c = 0; struct S s = c ? s1 : s2; return s.x; }
+""", "structpair_f", 3)
 
 
 def test_tern_assign_to_result_loud():
