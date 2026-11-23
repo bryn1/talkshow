@@ -249,6 +249,26 @@ class Parser(AsmParseMixin, CompatLawMixin):
                 return None
             return 1 if self._types_compatible(node.args[0],
                                                node.args[1]) else 0
+        if (isinstance(node, ast.Call)
+                and isinstance(node.callee, ast.Ident)
+                and node.callee.name in ("__builtin_bswap16",
+                                         "__builtin_bswap32",
+                                         "__builtin_bswap64")
+                and len(node.args) == 1):
+            # M4 W-Z COMMIT-CL (MC 12774): the byte-swap of a constant IS
+            # a constant expression — the post-pp kernel feeds case labels
+            # the htons-of-constant expansion `case (( __be16)(__u16)
+            # __builtin_bswap16((__u16)((0x0800))):` (the WALK wall
+            # netdevice.h:4798, the 11-stream corpus crowd, all one
+            # byte-identical construct). The swap rides types.bswap_const
+            # — the SAME home the codegen door uses (one law, two doors;
+            # AM31). None (LOUD) for a non-constant operand — cl14
+            # measured gcc refusing at exactly that shape too.
+            from blcc.types import bswap_const
+            v = self.fold_truthy(node.args[0])
+            if v is None:
+                return None
+            return bswap_const(node.callee.name, v)
         if isinstance(node, ast.Binary):
             op = node.op
             if op in ("&&", "||"):                      # short-circuit

@@ -55,6 +55,28 @@ def is_unsigned(ty) -> bool:
     return isinstance(ty, ast.BuiltinType) and ty.name in UNSIGNED_NAMES
 
 
+def bswap_const(name: str, v: int) -> int:
+    """M4 W-Z COMMIT-CL (MC 12774): THE byte-swap-of-a-constant law, at the
+    builtin's OWN result width (u16/u32/u64 masks) — one home, TWO doors.
+    W-W shipped the 32/64 arm at the codegen folder (the crc32 table);
+    W-Z's kill-sim measured the rest of the law's reach: the case-label
+    door (`case htons(ETH_P_IP):`, the netdevice.h:4798 walk wall) needs
+    the SAME arm at the parse-side folder, and the kernel_extable re-wall
+    (`static const __be16 m = bswap16(0xfff0)`, etherdevice.h:80 §4) proved
+    the 16-bit member was missing at THIS door. AM31's one-home warning in
+    live action: the law is one law; arming one door left the other wall
+    standing (sims 12768 §1c). Non-constant operands never reach here —
+    each door's own LOUD twin stands (cl14: gcc refuses there too)."""
+    if name.endswith("16"):
+        v &= 0xFFFF
+        return int.from_bytes(v.to_bytes(2, "big"), "little")
+    if name.endswith("32"):
+        v &= 0xFFFFFFFF
+        return int.from_bytes(v.to_bytes(4, "big"), "little")
+    v &= (1 << 64) - 1
+    return int.from_bytes(v.to_bytes(8, "big"), "little")
+
+
 def _roundup8(n: int) -> int:
     return (n + 7) & ~7
 
@@ -506,7 +528,8 @@ class TypeMap(CompatLawMixin):
             if isinstance(v, int):
                 return v
         if isinstance(n, ast.Call) and getattr(n.callee, "name", "") \
-                in ("__builtin_bswap32", "__builtin_bswap64") \
+                in ("__builtin_bswap16", "__builtin_bswap32",
+                    "__builtin_bswap64") \
                 and len(n.args) == 1:
             # M4 W-W COMMIT-2 (MC 12753): the lib_crc32 residual
             # (W-V §6 named). gcc-verified at REC: byte-swap of a
@@ -515,11 +538,15 @@ class TypeMap(CompatLawMixin):
             # .longs. NAME + ARITY + CONSTANT argument only: a
             # runtime operand still raises through _fold_const like
             # any non-constant (the door's LOUD twin stands).
+            # M4 W-Z COMMIT-CL (MC 12774): THE 16-BIT MEMBER joined the
+            # family HERE — the sims' {CL} kill-sim re-walled
+            # kernel_extable at exactly this door (`static const __be16
+            # m = (( __be16)(__u16)__builtin_bswap16(...))`, etherdevice.
+            # h:80 §4), proving the one-home law had ≥2 doors; the swap
+            # itself moved to types.bswap_const so BOTH folders answer the
+            # SAME width (no second oracle).
             v = self._fold_const(n.args[0], at)
-            w = 32 if n.callee.name.endswith("32") else 64
-            v &= (1 << w) - 1
-            ba = v.to_bytes(w // 8, "big")
-            return int.from_bytes(bytes(reversed(ba)), "big")
+            return bswap_const(n.callee.name, v)
         if isinstance(n, ast.Unary) and n.op == "~":
             v = self._fold_const(n.operand, at)
             oty = self._fold_ty(n.operand, at)
