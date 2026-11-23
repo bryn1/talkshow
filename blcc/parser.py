@@ -1111,10 +1111,89 @@ class Parser(AsmParseMixin, CompatLawMixin):
 
     def expr_type(self, node: ast.Node) -> Optional[ast.Node]:
         """Light type-of-expression: only what §5 struct checks need."""
+        if isinstance(node, ast.IntLit):
+            # M4 W-Z COMMIT-CH37T (MC 12774): the typing mirror TYPES
+            # literals too — the __is_constexpr/__auto_type crowd feeds
+            # bare literals through the seam (sims ch09 measured: without
+            # these arms the mirror answered None for every bare-integer
+            # initializer and the A-shape never reached its C0 refusal).
+            return ast.BuiltinType(node.file, node.line, node.col,
+                                   node.itype)
+        if isinstance(node, ast.CharLit):
+            return ast.BuiltinType(node.file, node.line, node.col, "int")
+        if isinstance(node, ast.IncDec):
+            # §6.5.2.6p2: the result is the PROMOTED operand type; for the
+            # sizeof mirror the operand's own type is what decays — the
+            # `sizeof(*(u++))` dispatch (ptrace.c:441 corpus row).
+            return self.expr_type(node.operand)
+        if isinstance(node, ast.Cond):
+            # M4 W-Z COMMIT-CH37T (MC 12774, SIMS-LAW MEASURED at card
+            # 12768): the §6.5.15p5 conditional TYPING the Linus
+            # __is_constexpr / BUILD_BUG constant-detect tricks ride —
+            # `sizeof(*(8 ? ((void *)((long)(x) * 0l)) : (int *)8))`
+            # answers through the TYPE of the `?:`, never a folded value.
+            # A FOLDABLE test picks the arm; a NULL POINTER CONSTANT arm
+            # (C 6.3.2.3p3 — integer-constant expr of value 0) takes the
+            # OTHER arm's pointer type; two different real pointers
+            # compose to void* (gnu89 MEASURED: sizeof(void) == 1 — the
+            # trick's runtime answer). A test the fold cannot resolve
+            # answers None — the §2.12 safe direction, never a guessed
+            # arm. THE bcp/C0 GUARD IS NOT TOUCHED BY THIS ARM: the 18
+            # A-shape streams shift from the choose-wall to the C0 LOUD
+            # refusal (ch09 pinned in tests/test_core_m4wz2.py) —
+            # accepting them would be the y27 silent re-armed.
+            v = self.fold_truthy(node.test)
+            if v is None:
+                return None
+            if node.gnu:
+                chosen, other = ((node.test, node.arm2) if v != 0
+                                 else (node.arm2, None))
+            else:
+                chosen, other = ((node.arm1, node.arm2) if v != 0
+                                 else (node.arm2, node.arm1))
+            ty = self.expr_type(chosen)
+            if ty is None:
+                return None
+            if other is None:
+                return ty
+            oty = self.expr_type(other)
+            if oty is None:
+                return ty
+            ty, oty = self._unqual(ty), self._unqual(oty)
+            if isinstance(ty, ast.PtrType) and isinstance(oty, ast.PtrType):
+                if self._light_null_ptr_const(chosen):
+                    return oty
+                if self._light_null_ptr_const(other):
+                    return ty
+                if self._light_ptr_key(ty) is not None and \
+                        self._light_ptr_key(ty) == self._light_ptr_key(oty):
+                    return ty
+                return ast.PtrType(
+                    node.file, node.line, node.col,
+                    ast.BuiltinType(node.file, node.line, node.col, "void"))
+            return ty
         if isinstance(node, ast.Ident):
             sym = self.lookup(node.name)
-            return (self._unqual(sym[1]) if sym is not None
-                    and sym[0] == "var" else None)
+            ty = (self._unqual(sym[1]) if sym is not None
+                  and sym[0] == "var" else None)
+            # M4 W-Z COMMIT-CH37T (MC 12774): an __auto_type var carries a
+            # LAZY TypeOf(auto=True) (W-H shipped the form); the mirror
+            # MATERIALIZES it here with W-H's OWN decay law — arrays DECAY,
+            # top quals DROP. Scope-blind materialization is the sims'
+            # plant-p4 class (shadowing eats the outer); the lookup above
+            # is scope-correct, so the mirror answers the DECLARING scope's
+            # initializer (ch08 run-pair pinned).
+            if isinstance(ty, ast.TypeOf) and ty.auto:
+                ity = self.expr_type(ty.expr) if ty.expr is not None \
+                    else None
+                if ity is None:
+                    return None
+                ity = self._unqual(ity)
+                if isinstance(ity, ast.ArrayType):
+                    return ast.PtrType(ty.file, ty.line, ty.col,
+                                       self._unqual(ity.inner))
+                return ity
+            return ty
         if isinstance(node, ast.Cast):
             # M4 W3 commit-2: the value of a cast is its TYPE — the call
             # target `((fp_t)expr)(x)` types through the cast (S14/S18).
@@ -1276,6 +1355,21 @@ class Parser(AsmParseMixin, CompatLawMixin):
             sn, sr = (rt.name, rr) if lu else (lt.name, lr)
             name = un if ur >= sr else sn
         return ast.BuiltinType(node.file, node.line, node.col, name)
+
+    def _light_null_ptr_const(self, node) -> bool:
+        """M4 W-Z COMMIT-CH37T (MC 12774): a NULL POINTER CONSTANT is an
+        integer constant expression of value 0 (C 6.3.2.3p3), cast or
+        not. The parse-side test: the fold answers 0 for the WHOLE node
+        without needing any runtime operand."""
+        return self.fold_truthy(node) == 0
+
+    def _light_ptr_key(self, ty):
+        """Identity key for pointee equality in the conditional's
+        pointer-combination arm (builtins by name, tags by tag)."""
+        ty = self._unqual(ty)
+        if isinstance(ty, ast.BuiltinType):
+            return ty.name
+        return getattr(ty, "tag", None)
 
     # -- small token helpers --------------------------------------------------
 
