@@ -359,6 +359,44 @@ int answer(void)
 	return c;
 }
 """ + MAIN, "refuse"),
+    # TEETH rows (not sims rows): the plants must bite. A 1-byte tail
+    # truncation or a union size-1 restatement is INVISIBLE unless the
+    # value's SIGNIFICANT byte sits high — these two put it at bit 56
+    # (struct) and bit 48 (union), measured pairs at ship bytes 8/11.
+    "sa28-cond-high-byte-struct": ("""
+struct L { int a; long v; };
+int answer(void)
+{
+	struct L x, y, r;
+	x.a = 2; x.v = ((long)1 << 56) | 5;
+	y.a = 9; y.v = 0;
+	r = 1 ? x : y;
+	return (int)((r.v >> 56) & 0xff) + (int)(r.v & 0xff) + (int)r.a;
+}
+""" + MAIN, 8),
+    "sa29-cond-high-byte-union": ("""
+union U { int i; long l; };
+struct W { int a; union U u; };
+int answer(void)
+{
+	struct W w1, w2, r;
+	w1.a = 1; w1.u.l = ((long)3 << 48) | 7;
+	w2.a = 8; w2.u.l = 0;
+	r = 1 ? w1 : w2;
+	return (int)((r.u.l >> 48) & 0xff) + (int)(r.u.i & 0xff) + (int)r.a;
+}
+""" + MAIN, 11),
+    "sa30-union-valued-cond-arm": ("""
+union U { int i; long l; };
+int answer(void)
+{
+	union U u1, u2, r;
+	u1.l = ((long)3 << 48) | 7;
+	u2.l = 0;
+	r = 1 ? u1 : u2;
+	return (int)((r.l >> 48) & 0xff) + (int)(r.i & 0xff);
+}
+""" + MAIN, 10),
 }
 
 
