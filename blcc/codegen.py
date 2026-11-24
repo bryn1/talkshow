@@ -1311,7 +1311,17 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin, InlinerMixin):
                     self._zero_local(off + mo, ssz)
                 placed = mo + ssz
         else:
-            self._err(at, "brace initializer for a scalar local (§4)", "{")
+            # M4 W-AC (MC 12404.2.133): the LOCAL brace-scalar door — the
+            # SAME collapse law as the DATA door, ONE home
+            # (`DataEmitter._scalar_brace`); what is still an InitList
+            # (empty `{ }`, designated `{ .x = 0 }`) keeps the shipped
+            # §4 LOUD; the value then rides the shipped `_init_item`
+            # path (bs01-05/bs08/bs12/bs13/bs15 pin this door).
+            init = self._scalar_brace(init)
+            if isinstance(init, ast.InitList):
+                self._err(at, "brace initializer for a scalar local (§4)",
+                          "{")
+            self._init_item(off, ty, init, at)
 
     def _zero_local(self, off: int, nbytes: int) -> None:
         """Zero a frame span: partial initializers must leave ZERO in the

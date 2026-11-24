@@ -335,6 +335,27 @@ class DataEmitter:
                 vals[p] = (cur >> (8 * (p - uoff))) & 255
         return self._entries_from_maps(total, vals, labs)
 
+    def _scalar_brace(self, init):
+        """M4 W-AC (MC 12404.2.133 / job 12787): THE brace-scalar collapse,
+        ONE home for both shipped §4 doors (data below, `codegen
+        ._init_local`). gnu89 brace-initializer-for-a-SCALAR (the REAL-MAKE
+        FIRST-RED family, init/calibrate.c:251 DEFINE_PER_CPU `= { 0 }`):
+        the list supplies the value of its FIRST item — collapse
+        repeatedly, ONLY while the run is non-designated and non-empty
+        (battery bs01-17 at gcc 11.4 -std=gnu89 -Os, sims card 12789:
+        nested `{{0}}` collapses; `{5, 9}` WARNS but ACCEPTS, value =
+        FIRST, never the last). Anything still an InitList when the
+        collapse stops is the shipped §4 LOUD: empty `{ }` and designated
+        `{ .x = 0 }` — gcc refuses BOTH (bs09/bs10/bs17 measured
+        BOTH-REFUSE). The value then rides the ALREADY shipped scalar
+        paths unchanged (_const, the .quad address law, the _Bool 0/1
+        rule, the string-address law): zero new mechanism."""
+        while (isinstance(init, ast.InitList) and len(init.items) >= 1
+               and not any(isinstance(it, ast.Desig)
+                           for it in init.items)):
+            init = init.items[0]
+        return init
+
     def _bytes_of(self, ty: ast.Node, init, at,
                   ctx: str = "global") -> List[Tuple[str, int]]:
         """-> list of ('b', byte) | ('q', label) | ('z', count) covering
@@ -439,7 +460,14 @@ class DataEmitter:
             if init is None:
                 return [("z", sz)]
             if isinstance(init, ast.InitList):
-                self._err(init, "brace initializer for a scalar (§4)", "{")
+                # M4 W-AC (MC 12404.2.133): the gnu89 brace-scalar door —
+                # collapse through the ONE law (`_scalar_brace`, above);
+                # what is still an InitList (empty `{ }`, designated) keeps
+                # the shipped §4 LOUD. bs06/bs12/bs16 pin this DATA path.
+                init = self._scalar_brace(init)
+                if isinstance(init, ast.InitList):
+                    self._err(init, "brace initializer for a scalar (§4)",
+                              "{")
             if isinstance(init, ast.StrLit) and isinstance(
                     self._untype(ty), ast.PtrType):
                 # M4 W-V COMMIT-S (MC 12747, the 37-row `.name = "noop"`
