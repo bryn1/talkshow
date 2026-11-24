@@ -114,8 +114,16 @@ class DataEmitter:
                 # §1 row 11 file scope: &literal names an unnamed STATIC
                 # object — its bytes are emitted, the value is its address.
                 return ("lab", self._anon_static(n.operand))
-            if isinstance(n.operand, ast.Ident) and n.operand.name in self.globals:
-                return ("lab", n.operand.name)
+            if isinstance(n.operand, ast.Ident):
+                sv = self._static_self_root(n.operand.name)
+                if sv is not None:
+                    # M4 W-AD twin of the fold root (MC 12801): `&self`
+                    # of the static object being emitted is its own §1c
+                    # symbol; the object's declarator shadows a
+                    # same-named global, so the SELF check runs FIRST.
+                    return ("lab", sv.name)
+                if n.operand.name in self.globals:
+                    return ("lab", n.operand.name)
             # M4 W-V COMMIT-G (MC 12747, law row e25): a `.`-select /
             # index CHAIN rooted at a global object is an address
             # constant (symbol + byte offset) — the corpus shape
@@ -205,10 +213,19 @@ class DataEmitter:
                 n = n.base
         if not chain or not isinstance(n, ast.Ident):
             return None
-        gd = self.globals.get(n.name)
-        if gd is None:
-            return None
-        off, ty = 0, self._untype(gd.type)
+        sv = self._static_self_root(n.name)
+        if sv is not None:
+            # M4 W-AD (MC 12801): root the SAME walk at the §1c static
+            # being emitted (the rt.c:2758 DEFINE_MUTEX self-address
+            # family); ONE law, see _static_self_root. The offset walk
+            # and its guards (arrow/bitfield/non-constant index) are
+            # the shipped law — nothing below changes.
+            off, ty, lab = 0, self._untype(sv.type), sv.name
+        else:
+            gd = self.globals.get(n.name)
+            if gd is None:
+                return None
+            off, ty, lab = 0, self._untype(gd.type), n.name
         for kind, arg in reversed(chain):      # ROOT-most op first
             ty = self._untype(ty)
             if kind == "m":
@@ -238,8 +255,35 @@ class DataEmitter:
                 off += arg * esz
                 ty = ty.inner
         if off == 0:
-            return ("lab", n.name)
-        return ("lab", "{}+{}".format(n.name, off))
+            return ("lab", lab)
+        return ("lab", "{}+{}".format(lab, off))
+
+    def _static_self_root(self, name):
+        """M4 W-AD (MC 12801) — the ONE home of the static-root scope
+        law for the shipped address-fold family. A function-scope
+        `static` lives in TU-level storage under the §1c symbol
+        "name.N" (codegen static_objs); while ITS OWN initializer is
+        being emitted, a bare name spelling the object's own base
+        binds to the object itself (rt.c:2758 / irq/proc.c:340:
+        `&(mutex.wait_list)` INSIDE mutex's own init — measured self-
+        reference; the corpus twins kernfs/reboot carry the SAME
+        macro law). Returns that VarDecl (`.name` = the symbol the
+        emit uses, `.type` = the sized type) or None.
+        REFUSED by construction: any OTHER name — the sims stub that
+        resolved the flat static_objs map at EMIT order measured
+        SILENT-DIVERGE on the reuse rows ib19/ib30 (gcc 4 / stub 3),
+        the DO-NOT-SHIP posture; without the emitting function's
+        scope a cross-object name cannot bind honestly, so it keeps
+        the §4 LOUD. Anchors: `_fold_addr_member` root + the `&Ident`
+        twin arm in `_const` (TWO anchors, ONE law — the twins the
+        sims row named); the current object arrives through the
+        codegen §1c emit-scope anchor `_fold_static`."""
+        vd = getattr(self, "_fold_static", None)
+        if vd is None or "." not in vd.name:
+            return None
+        if name != vd.name.rsplit(".", 1)[0]:
+            return None
+        return vd
 
     def _bf_data_guard(self, init, ty, d) -> None:
         """M4 W-W COMMIT-1 (MC 12753) KEEP-laws (measured, sentences

@@ -615,7 +615,15 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin, InlinerMixin):
             # (zero -> .bss, const -> .rodata (§6 parity, M4 W2), other
             # -> .data; init never re-runs) and LOCAL nm binding —
             # vd.is_static suppresses the .globl.
-            section, lines = self._emit_global(vd, "static")
+            # M4 W-AD (MC 12801): the fold emit-scope anchor — while
+            # THIS object's initializer folds, its own name is the §1c
+            # symbol (data._static_self_root reads exactly this
+            # attribute); cleared once the object's bytes are out.
+            self._fold_static = vd
+            try:
+                section, lines = self._emit_global(vd, "static")
+            finally:
+                self._fold_static = None
             if isinstance(section, tuple) and section[0] == "sec":
                 cust.append((section[1], section[2], lines))
                 continue
