@@ -144,15 +144,23 @@ def test_wt1_chained_designator():
 
 
 def test_wt1_posture_pins():
-    # named posture rows (NOT regressions): g_scalar file-scope CL LOUD
-    # twin pair (gcc rc0 blcc rc2 = pre-existing LOUDER row — kept);
+    # named posture rows (NOT regressions): g_scalar file-scope CL twin
+    # pair MOVED at M4 W-AC (MC 12404.2.133, commit c5d365a): the shipped
+    # brace-scalar collapse law reaches the file-scope `(int){5}` scalar
+    # too - re-pinned AS MEASURED at my hands: blcc rc0 exit 5, gcc
+    # -no-pie REC rc0 exit 5 (was the pre-existing LOUDER-than-gcc row
+    # gcc rc0 blcc rc2; the law made blcc AGREE with gcc, value-correct).
     # g_cl_nested quieter-than-gcc row (tip-precedent rc0-vs-rc1, the
-    # file-scope CL fold already shipped it) — PINNED as measured, so a
-    # future change that MOVES either posture goes RED here first.
+    # file-scope CL fold already shipped it) — PINNED as measured.
     c = "/dev/shm/wt1_gp.c"
     open(c, "w").write("int x = (int){5};\nint main(void){return x;}")
     b = blcc(["-c", c, "-o", "/dev/null"])
-    assert b.returncode == 2, "g_scalar LOUDER posture moved: " + b.stderr
+    assert b.returncode == 0, "g_scalar W-AC-moved posture drifted back: " \
+        + b.stderr
+    blcc([c, "-o", "/dev/shm/wt1_gp.bin"])
+    assert subprocess.run(["/dev/shm/wt1_gp.bin"], capture_output=True,
+                          timeout=60).returncode == 5, \
+        "g_scalar value moved (measured gcc rc0 exit 5)"
     open(c, "w").write("struct M{int x;};struct N{struct M m;};"
                        "struct N g=(struct N){ (struct M){4} };"
                        "int main(void){return g.m.x;}")

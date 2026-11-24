@@ -230,7 +230,13 @@ def test_allowed_global_init_forms_still_work():
 REJECT_CASES = [
     ("callinit", "int f(void){return 1;} int x = f();\n"
                  "int main(void){ _sys_exit(0); }\n", "call expression"),
-    ("bracescalar", "int i = {1};\nint main(void){ _sys_exit(0); }\n", "{"),
+    # ("bracescalar", "int i = {1};", "{") entry removed by M4 W-AC
+    # (MC 12404.2.133, commit c5d365a): the gnu89 brace-initializer-for-a-
+    # scalar law — `int i = {1};` is the REAL-MAKE FIRST-RED shape
+    # (init/calibrate.c DEFINE_PER_CPU ... = { 0 }) — gcc 11.4 accepts
+    # (measured rc0, value = FIRST item); the shape now ACCEPTS and is
+    # pinned green by test_brace_scalar_global_init_accepted below
+    # (same treatment the `int a = 1 + 1;` row got at T+10b).
     ("strtoolong", 'char s[2] = "abc";\nint main(void){ _sys_exit(0); }\n',
      "initializer"),
     ("toomany", "int a[2] = {1,2,3};\nint main(void){ _sys_exit(0); }\n",
@@ -255,6 +261,20 @@ def test_const_arith_global_init_accepted():
     assert r.returncode == 0, (r.returncode, r.stderr)
     import subprocess
     assert subprocess.run([out], timeout=30).returncode == 2  # a == 2
+
+
+def test_brace_scalar_global_init_accepted():
+    # M4 W-AC (MC 12404.2.133, commit c5d365a): `int i = {7};` — the
+    # gnu89 brace-initializer-for-a-scalar law, the REAL-MAKE FIRST-RED
+    # shape (init/calibrate.c DEFINE_PER_CPU(...)= { 0 }, the first wall
+    # the acceptance make named). Value = FIRST item (bs-law, card 12789;
+    # the battery test_core_m4wac1.py owns the law table — this is the
+    # c2-orchestrator-side accept pin the REJECT_CASES comment promises).
+    r, out = compile_src("int i = {7};\nint main(void){ return i; }\n",
+                         "bsok")
+    assert r.returncode == 0, (r.returncode, r.stderr)
+    import subprocess
+    assert subprocess.run([out], timeout=30).returncode == 7  # i == 7
 
 
 def test_global_string_init_FLIPPED_by_WVS():
