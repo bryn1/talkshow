@@ -2996,6 +2996,25 @@ class Parser(ParseFoldMixin, AsmParseMixin, CompatLawMixin):
         off = 0
         packed = self._attr_packed(ty)
         for m in members:
+            if getattr(m, "width", None) == 0:
+                # M4 W-AE COMMIT-1 (MC 12404.2.141 / job 12819): the slot-
+                # model PAIRING LAW, parser half. A width-0 pad consumes NO
+                # init slot — the SAME law types._struct_layout already
+                # ships (`if w == 0: continue`, both arms), and battery row
+                # ae03 measures it as the gcc-11.4 law: the positional item
+                # SKIPS the :0 position (exit=1, 2 truncated to 0 into `b`).
+                # The anonymous `unsigned :0;` inside struct task_struct was
+                # the ONE member where the two homes forked: the parser
+                # counted 120 slots, data + gcc DWARF 119 (sizeof 5824) —
+                # DATA is gcc; the PARSER table was the divergent home, and
+                # the designated arm padding items to len(slots) fired the
+                # init_task.c:69:3 wall at data.py:580. The agreement
+                # invariant (slot names/counts equal; byte-offset parity
+                # where both tables carry byte truth; residual parser bit-
+                # slot drift PINNED as measured) rides BOTH homes through
+                # tests/test_core_m4wae1.py — a change to one home without
+                # the other turns that pin-test RED.
+                continue
             msz = self._csize(m.type)
             mal = self._calign(m.type)
             if msz is None or mal is None:
