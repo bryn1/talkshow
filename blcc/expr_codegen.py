@@ -1538,20 +1538,44 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
             return                       # typeof forms: named residual
         ty = raw
         ro = False
-        for step in reversed(steps):     # root side inward
+        # M4 W-AC COMMIT-0 (MC 12787; W-AB gate F-1, card verdict
+        # m4-wab-gate-verdict.md): a crossed const layer freezes writes to
+        # that layer's OWN storage — a write TO a member (member step
+        # outermost) or an INDEX into an ARRAY member (elements live in
+        # the frozen object). An INDEX/DEREF of a POINTER member's VALUE
+        # lands in OTHER storage and passes through, exactly as the
+        # pointer layer below already does; the pointee's own quals still
+        # gate the store (ff09f). A LIVE (never-const-crossed) root keeps
+        # the shipped walk VERBATIM — the `break` below and every
+        # disclosed lax residual are unchanged (zero collateral).
+        frozen = False
+        nsteps = len(steps)
+        for i, step in enumerate(reversed(steps)):   # root side inward
             while isinstance(ty, ast.Qualified):
                 if ty.qual == "const" and step is not None:
-                    ro = True            # member of a frozen layer
-                    break
+                    frozen = True        # root-side const layer crossed
                 ty = ty.inner
-            if ro:
-                break
             if step is not None:
-                break                    # member through a live layer
-            if isinstance(ty, (ast.ArrayType, ast.PtrType)):
-                ty = ty.inner
-            else:
-                break
+                if not frozen:
+                    break                # member through a live layer
+                if i == nsteps - 1:
+                    ro = True            # write TO a member of a frozen layer
+                    break
+                mt = self._ro_member_ty(ty, step)
+                if mt is None:
+                    return               # member type unresolvable (named)
+                ty = mt                  # member READ through frozen storage
+            else:                        # INDEX/DEREF pass-through step
+                if isinstance(ty, ast.ArrayType):
+                    if frozen:
+                        ro = True        # elements live in the frozen object
+                        break
+                    ty = ty.inner
+                elif isinstance(ty, ast.PtrType):
+                    frozen = False       # the pointer VALUE points at OTHER
+                    ty = ty.inner        # storage; its quals still gate
+                else:
+                    break                # unresolved: named pass-through
         while not ro and isinstance(ty, ast.Qualified):
             if ty.qual == "const":
                 ro = True
@@ -1566,6 +1590,26 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
                 verb, name), name)
         self._err(n, "{} of member '{}' in read-only object".format(
             verb, steps[0]), steps[0])
+
+    def _ro_member_ty(self, ty, field):
+        """M4 W-AC COMMIT-0 (MC 12787, W-AB gate F-1): the DECLARED type
+        of `field` inside a frozen layer — needed only by the pass-through
+        law to tell an array member (elements live in the frozen object)
+        from a pointer member (its value points elsewhere). A type LOOKUP,
+        not a second door: it freezes nothing and gates nothing. Member
+        types below a LIVE layer are never consulted here — that stays the
+        W-AB disclosed residual, unchanged."""
+        if isinstance(ty, ast.StructType):
+            members = getattr(ty, "members", None)
+            if not members:
+                members = self.structs.get(ty.tag)
+            for m in members or ():
+                if getattr(m, "name", None) == field:
+                    return getattr(m, "type", None)
+                if (isinstance(m, tuple) and len(m) >= 2
+                        and m[0] == field):
+                    return m[1]
+        return None
 
     def _ex_assign(self, n) -> None:
         # M4 W-AB COMMIT-0 (MC 12783): the const door runs BEFORE every
