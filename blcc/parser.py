@@ -2668,6 +2668,29 @@ class Parser(ParseFoldMixin, AsmParseMixin, CompatLawMixin):
                 # T+10b: `extern unsigned char _ctype[];` declares without
                 # defining — no size is needed here (the §1 row 10 walk
                 # hit this wall on 7 corpus files behind the fn-ptr gate).
+                if at_file:
+                    # M4 W-AE COMMIT-2 (MC 12404.2.141 / job 12819): a
+                    # file-scope TENTATIVE `[]` array without initializer
+                    # DEFERS through the EXISTING §2.8 home `_ext_refs`
+                    # (ONE deferral mechanism — the b2 law just above; a
+                    # second deferral home is what this wave's own plant
+                    # must find RED, never a second dict). C 6.7.5.2p4:
+                    # the later definition-with-init of the same TU
+                    # completes the tentative and supplies size+storage;
+                    # the real wall kernel/cpu.c:134 (`static struct
+                    # cpuhp_step cpuhp_hp_states[];`, corpus row + live
+                    # walk) answers rc0 under it. A LOCAL spelling keeps
+                    # the §4 wall (both-refuse twin x07); a name the TU
+                    # never completes rides the TU-end bind — NAMED
+                    # residual x05 (gcc COMPLETES to 1 element `B a`;
+                    # blcc leaves the object absent — link-time-only,
+                    # own future pricing, never silently merged).
+                    if self.lookup(name) is None:
+                        self._ext_refs.setdefault(name, (pos, ty))
+                    if self.s.accept_punct(","):
+                        continue
+                    self.s.expect_punct(";")
+                    break
                 self._sema(pos, "'array' declaration without size needs an initializer list (§4)")
             if (is_static and not at_file
                     and name in self.scopes[-1]):
