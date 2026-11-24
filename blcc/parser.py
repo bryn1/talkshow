@@ -2964,6 +2964,21 @@ class Parser(ParseFoldMixin, AsmParseMixin, CompatLawMixin):
     def _unqual(self, ty):
         while isinstance(ty, ast.Qualified):
             ty = ty.inner
+        if isinstance(ty, ast.TypeOf) and not ty.auto \
+                and ty.typ is not None:
+            # M4 W-AD (MC 12801): TypeOf materialization has ONE
+            # parser-side home — this type LOOKUP, mirroring the
+            # data-side law `types._untype` already ships. A
+            # `__typeof__(struct X)` declaration therefore resolves
+            # through EVERY `_unqual` call site (designator slots,
+            # struct/array arms) instead of reaching data as a bare
+            # Desig run — the printk DEFINE_PER_CPU struct-form wall
+            # and its radix-tree/mm_swap twins (sims ib10/ib22/ib33,
+            # real-make wall printk/printk.c:3090). KEEP the refusal
+            # OUTSIDE this guard: `__auto_type` and `__typeof__(expr)`
+            # ride the TypeMap VALUE law (sims ib18/ib31 posture
+            # stands; battery wd109/wd110 pin both non-materializing).
+            return self._unqual(ty.typ)
         return ty
 
     def _init_slots(self, ty):
