@@ -143,6 +143,27 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin, InlinerMixin):
                             or d.type)
                         self.globals[d.name] = d
                         continue
+                    if (prev.init is None and not prev.is_extern
+                            and d.init is not None):
+                        # M4 W-AC (MC 12404.2.133 / job 12787): the
+                        # TENTATIVE half of the §2.8 one-object rule (the
+                        # REDEF-GLOBAL real-wall family — vdso/vma.c:252
+                        # `vvar_mapping`, kernel/sched/fair.c:11478
+                        # `fair_sched_class`, 17-stream crowd): a
+                        # file-scope tentative decl (no init, non-extern)
+                        # followed by a DEFINITION is ONE object; the
+                        # defining decl replaces it here and the single
+                        # `for name in self.globals` walk below emits it
+                        # once (rd01/rd02/rd05 measured PAIR; section
+                        # attrs ride `d` unchanged). Two DEFINING decls
+                        # keep the LOUD (rd03 gcc-LOUD twin); repeated
+                        # tentatives stay the NAMED residual (rd04 —
+                        # this door opens exactly the measured walls).
+                        d = dataclasses.replace(
+                            d, type=self._sized_array_decl(d.type, d.init, d)
+                            or d.type)
+                        self.globals[d.name] = d
+                        continue
                     self._err(d, "redefinition of global '{}'".format(d.name),
                               d.name)
                 sized = self._sized_array_decl(d.type, d.init, d)
