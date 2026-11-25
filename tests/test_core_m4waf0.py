@@ -154,18 +154,17 @@ def test_f2_codegen_home_carries_no_oracle_tag():
                     reason="kernel tier + pinned streams corpus required")
 def test_f2_events_core_wall_wore_no_oracle_tag(tmp_path):
     # THE stream of the refutation: at base bytes its first wall wears
-    # the (false) tag; at W-AF ship bytes the §8 sentence is gone for
-    # THIS stream entirely (the wall moves to `cannot load a 512-byte
-    # value (§4)`). BOTH states must satisfy the PERMANENT law: the
-    # first wall never claims a gcc rc1 twin.
+    # the (false) tag; at W-AF ship bytes the §8 sentence moved to the
+    # §4 `cannot load a 512-byte value` FUTURE wall — and M4 W-AG
+    # (MC 12404.2.147 / job 12835) IS that future card: the {512B} TYPE
+    # law lands the stream rc0 (test_core_m4wag1.py pins the LAND with
+    # the object-bytes leg). The PERMANENT law this leg keeps: no §8
+    # refusal may wear the retracted tag — pinned at the runtime face by
+    # tests/test_core_m4wag0.py (untagged corpus refusal).
     clean = _clean_i(os.path.join(STREAMS, "arch_x86_events_core.c.i"),
                      tmp_path, "waf0c")
     r = blcc(["-c", str(clean), "-o", str(tmp_path / "waf0c.o")])
-    assert r.returncode != 0, \
-        ("events/core landed unexpectedly — if §8 AND the §4 big-load "
-         "wall both fell, a FORBIDDEN family (the 512-byte load law) "
-         "moved in this wave: NAME IT, do not ship silent")
-    first = next(ln for ln in (r.stdout + r.stderr).splitlines()
-                 if ln.strip())
-    assert "gcc rc1 twin" not in first, \
-        "the walk's own first RED still wears the retracted tag:\n" + first
+    assert r.returncode == 0, \
+        ("events/core REFUSED — the W-AG TYPE law (card 12835) that "
+         "landed it moved back:\n" + next((ln for ln in
+         (r.stdout + r.stderr).splitlines() if ln.strip()), ""))

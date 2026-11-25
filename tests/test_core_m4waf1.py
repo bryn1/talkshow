@@ -336,37 +336,44 @@ from test_core_m4w25b import _clean_i                    # noqa: E402
                          and os.path.isdir(STREAMS)),
                     reason="kernel tier + pinned streams corpus required")
 def test_tf_kernel_events_core_wall_moved_off_eight(tmp_path):
-    # THE census claim pinned: this stream's first wall moved to the
-    # §4 big-value-load sentence (the future card's wall — its sentence
-    # appears HERE for the first time; the 512-byte-load law itself is
-    # FORBIDDEN territory for this wave and must NOT be closed).
+    # THE census claim pinned at W-AF: this stream's first wall moved off
+    # §8 to the §4 big-value-load sentence (a FUTURE card's wall, named
+    # then, NOT closed in W-AF). M4 W-AG (MC 12404.2.147 / job 12835) IS
+    # that card — the {512B} TYPE law retargets this leg: the stream now
+    # has NO wall at all (rc0); the §4 sentence may never re-appear as
+    # this stream's first refusal without the TYPE law being moved back.
     clean = _clean_i(os.path.join(STREAMS, "arch_x86_events_core.c.i"),
                      tmp_path, "waf1ec")
     r = subprocess.run(["python3", "-m", "blcc", "-c", str(clean),
                         "-o", str(tmp_path / "waf1ec.o")],
                        capture_output=True, text=True,
                        env=dict(os.environ, PYTHONPATH=REPO))
-    first = next(ln for ln in (r.stdout + r.stderr).splitlines()
-                 if ln.strip())
-    assert "cannot load a 512-byte value (§4)" in first, \
-        "events/core first wall must be the newly-visible §4 512-byte " \
-        "load sentence, got:\n" + first
+    assert r.returncode == 0, \
+        "events/core REFUSED again at W-AG ship — the TYPE law moved " \
+        "back, first wall:\n" + next((ln for ln in (r.stdout +
+        r.stderr).splitlines() if ln.strip()), "(silent)")
 
 
 @pytest.mark.skipif(not (os.environ.get("KERNEL_510")
                          and os.path.isdir(STREAMS)),
                     reason="kernel tier + pinned streams corpus required")
-def test_tf_kernel_events_core_keeps_wall_never_lands(tmp_path):
-    # The stream must NOT land: the §4 512-byte-load wall (its own
-    # future card) stands. A silent rc0 here means the FORBIDDEN family
-    # moved — NAME IT, do not ship it.
+def test_tf_kernel_events_core_landed_at_wag(tmp_path):
+    # RENAMED + RETARGETED at M4 W-AG (was test_tf_kernel_events_core_
+    # keeps_wall_never_lands): that leg forbade this landing INSIDE W-AF
+    # — "its own future card", and W-AG (12835) is that card, NAMED, with
+    # the battery (test_core_m4wag1.py) and the census row behind it. The
+    # teeth are INVERTED, never dropped: a rc0 landing with a NON-EMPTY
+    # object is now the law; a refusal here means the W-AG law regressed.
     clean = _clean_i(os.path.join(STREAMS, "arch_x86_events_core.c.i"),
                      tmp_path, "waf1nl")
     r = subprocess.run(["python3", "-m", "blcc", "-c", str(clean),
                         "-o", str(tmp_path / "waf1nl.o")],
                        capture_output=True, text=True,
                        env=dict(os.environ, PYTHONPATH=REPO))
-    assert r.returncode != 0, \
-        "events/core LANDED — the §4 512-byte-load law (future card) " \
-        "moved inside W-AF: STOP, this wave's DoD is walls-moved, not " \
-        "this accept"
+    assert r.returncode == 0, \
+        "events/core REFUSED — the W-AG TYPE law (12835) regressed:\n" + \
+        next((ln for ln in (r.stdout + r.stderr).splitlines()
+              if ln.strip()), "(silent)")
+    import os as _os
+    assert _os.path.getsize(str(tmp_path / "waf1nl.o")) > 0, \
+        "landed with an EMPTY object — a landing must produce bytes"

@@ -1692,7 +1692,32 @@ class Parser(ParseFoldMixin, AsmParseMixin, CompatLawMixin):
                 if self.expr._starts_type(0):
                     typ = self.parse_type()
                     self.s.expect_punct(")")
-                    return ast.TypeOf(t.file, t.line, t.col, None, typ)
+                    # M4 W-AG COMMIT-TYPE (MC 12404.2.147 / job 12835):
+                    # the TYPE spelling MATERIALIZES AT PRODUCTION —
+                    # `typeof(T)` IS T's type node, returned concrete.
+                    # The LAZY wrapper was not a no-op: the DECL stored
+                    # the TypeOf node, so an array-typed wrapper decl
+                    # (`__typeof__(u64 [64]) pmc_prev_left;` — the per-CPU
+                    # collapse) never became an ArrayType, `_decay`/the §4
+                    # load law MISSED the array-ness, and the ident
+                    # CONTENT-LOADED the whole object: the corpus
+                    # `cannot load a 512-/2048-byte value (§4)` walls
+                    # (arch_x86_events_core.c.i 51607:175,
+                    # arch_x86_kernel_irq.c.i 60515:1003 — the pair this
+                    # card LANDS) were the VISIBLE tips; every <=8-byte
+                    # spelling COMPILED AND SEGFAULTED (sims 12833
+                    # wgF06/ef14 — the silent family this hunk also
+                    # kills; battery test_core_m4wag1.py run-pairs it).
+                    # ONE HOME: the shipped W-AF {T2} mirror materializes
+                    # the same law for the light mirror; production makes
+                    # DECL, fold and codegen see the concrete type too.
+                    # The EXPR spelling below stays LAZY (W-H's measured
+                    # difference table, W-Z's `__auto_type` arm, and the
+                    # wgF08 over-lax EXPR face all UNMOVED — pinned).
+                    # The §4 `_load` law itself is CORRECT and untouched:
+                    # the fix restores the DECAY, it does not make the
+                    # wrong big-value load legal (sims decision row).
+                    return typ
                 operand = self.expr.parse_expression()
                 self.s.expect_punct(")")
                 return ast.TypeOf(t.file, t.line, t.col, operand, None)
