@@ -73,7 +73,8 @@ Two forms (this is the actual usage text the compiler prints):
 | `-I dir` / `-isystem dir` | include search dirs; `#include <...>` resolves through these ONLY — there are no default system directories |
 | `-nostdinc` | accepted (there are no default system dirs to drop anyway) |
 | `-include file` | force-include before the main file (resolves CWD, then -I, then -isystem) |
-| `-std=X` | selects the predefined-macro profile: `c89` `gnu89` `c94` `gnu94` `c99` `gnu99` `c11` `gnu11` `c17` (`c90`/`gnu90` alias c89/gnu89); an unknown spelling exits 2 |
+| `-std=X` | selects the predefined-macro profile; the accepted spellings are `c89` `c90` `gnu89` `gnu90` `c94` `gnu94` `c99` `gnu99` `c11` `gnu11` `c17` `gnu17` `c2x` `gnu2x` `iso9899:1990` `iso9899:199409` `iso9899:1999` `iso9899:2011` (`c90`/`gnu90` alias `c89`/`gnu89`; the set is the driver's validation table); an unknown spelling exits 2 |
+| `-c` | compile to the `-o` file as an object (no link) — M4 kernel-integration mode; requires `-o` (without it, a loud exit 2). Backed by the driver and `tests/test_core_m4w0.py`; the printed usage text above does not list it |
 
 Exit codes: `0` success; `2` compile or preprocessor error (a
 `file:line:col: <phase>: <message>` diagnostic on stderr); `3` assembler or
@@ -106,7 +107,8 @@ A readable summary of contract §4 (the contract owns the exact pins):
   assignment, `++`/`--`, `sizeof` (type / identifier / parenthesized
   expression forms), casts, address-of and dereference.
 - **Strings:** literals become `.rodata` byte arrays typed `char *`; the
-  escape set is pinned (including a two-hex-digit `\x` cap).
+  escape set is pinned (including `\x` taking EXACTLY two hex digits, with no
+  maximal-munch consumption: `"\x80ab"` is three characters).
 - **Not in the subset** (contract §5 — every one is a loud, naming
   diagnostic): `float`/`double`, `goto` and labels, unions, bitfields,
   function pointers, variadic functions, struct assignment/comparison, and
@@ -121,8 +123,8 @@ to assumptions:
 - The full directive set — `#include` (quoted and angled, with macro-expanded
   operands), `#define`/`#undef` (object- and function-like, GNU variadics),
   `#if`/`#ifdef`/`#ifndef`/`#elif`/`#else`/`#endif`, `#error`, `#warning`,
-  `#line`, `#pragma` pass-through — plus `#` stringify, `##` paste, and
-  blue-paint recursion hiding.
+  `#line`, `#pragma` pass-through (emitted in `-E` mode only) — plus `#`
+  stringify, `##` paste, and blue-paint recursion hiding.
 - Predefined macros are GENERATED DATA captured from gcc 11.4 per `-std`
   profile (regenerable via `scripts/gen_predefines_table.py`), not a
   hand-picked table.
@@ -135,8 +137,14 @@ to assumptions:
 - Kernel-build option inventory: every option spelling the real linux-5.10
   tinyconfig reference build emits (2806 distinct spellings measured across
   its 777 command records) is classified against gcc — preprocessing-surface
-  spellings are measured-equal, and cc-phase flags exit 2 naming the flag
-  (never a silent pretend-support). See the inventory table in contract §2.
+  spellings are measured-equal, and at the M1-c7 measurement every cc-phase
+  flag exited 2 naming the flag (never a silent pretend-support). Kernel-
+  integration work has since SHIPPED `-c` — compile to the `-o` operand as an
+  object file, stopping before the link (per the driver and
+  `tests/test_core_m4w0.py`) — so the inventory's classification is a
+  measurement record, not a frozen promise; the still-unshipped flags
+  (`-Wall`, `-O2`, …) exit 2 naming the flag. See the inventory table in
+  contract §2.
 
 ## Tests
 
