@@ -280,14 +280,23 @@ _TAG = "pointer' (§8 — gcc rc1 twin)"
 _BLCC_ONLY = "§8 — blcc-only"
 
 
-def test_tf_eight_homes_are_five_and_the_twin_tag_rides_two():
+def test_tf_eight_homes_are_six_and_the_twin_tag_rides_two():
+    # RENAMED at M4 W-AG COMMIT-0 (was test_tf_eight_homes_are_five_…;
+    # the leg count is unchanged, the NAME was the claim):
     # W-AF measured the §8 sentence at FIVE homes: expr_parser.py 3
     # (blcc-only un-typeable arm + twin + named-ident twin),
     # expr_codegen.py 1, types.py 1 (the sims-named _ind_call_ty twin).
-    # The oracle tag ("gcc rc1 twin") rides ONLY the two MEASURED typed
-    # arms in expr_parser.py — the W-AF scoping (gate F-2). A NEW home,
-    # or a NEW tagged site, goes this RED: adding a refusal home without
-    # a measured twin is exactly the false-oracle F-2 named.
+    # The oracle tag ("gcc rc1 twin") rode ONLY the two MEASURED typed
+    # arms in expr_parser.py — the W-AF scoping (gate F-2).
+    # M4 W-AG COMMIT-0 (gate F-2-SCOPE, card 12832): the NAME arm gained
+    # its OWN scoped blcc-only face (six homes now: 4 parser + 1 codegen
+    # + 1 types) — the tag may only reach it through `_twin_measured`,
+    # the MEASURED scalar/struct/union/array class. A NEW home, or a NEW
+    # tagged site, still goes this RED: adding a refusal home without a
+    # measured twin is exactly the false-oracle F-2 named. The RUNTIME
+    # catcher for tag-smuggling (postures, not strings) is
+    # tests/test_core_m4wag0.py — the gate named this census's limit:
+    # "the catcher pins STRINGS, not postures".
     # (Counts run over quotes/whitespace-normalized text: the shipped
     # sentences are multi-literal concatenations, a raw substring scan
     # splits them at every `" +` seam.)
@@ -305,15 +314,16 @@ def test_tf_eight_homes_are_five_and_the_twin_tag_rides_two():
         if n:
             tagged.append((f, src.count(norm(_TAG))))
             scoped.append((f, src.count(norm(_BLCC_ONLY))))
-    assert homes == 5, "the §8 sentence moved homes: %d emission sites " \
-        "(expected 5: 3 parser + 1 codegen + 1 types)" % homes
+    assert homes == 6, "the §8 sentence moved homes: %d emission sites " \
+        "(expected 6: 4 parser + 1 codegen + 1 types — W-AG COMMIT-0 " \
+        "gave the name arm its scoped face)" % homes
     assert tagged == [("expr_codegen.py", 0), ("expr_parser.py", 2),
                       ("types.py", 0)], \
         "the oracle tag drifted off its measured arms: %r" % tagged
-    assert dict(scoped) == {"expr_codegen.py": 1, "expr_parser.py": 1,
+    assert dict(scoped) == {"expr_codegen.py": 1, "expr_parser.py": 2,
                             "types.py": 1}, \
-        "the scoped blcc-only sentence must ride all three unmeasured " \
-        "arms: %r" % scoped
+        "the scoped blcc-only sentence must ride every unmeasured " \
+        "arm: %r" % scoped
 
 
 # ---- kernel tier: the surviving §8 stream never wears the tag ----------

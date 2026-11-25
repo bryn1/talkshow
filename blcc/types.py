@@ -1469,8 +1469,16 @@ class TypeMap(CompatLawMixin):
         # still is not callable through the one shared call-law home —
         # a mirror/engine MISMATCH arm whose gcc posture is UNMEASURED
         # per-shape; W-AE gate F-2 law: no oracle tag on an unmeasured
-        # refusal. The kernel_events_core.c.i wall (82407:918, the
-        # `typeof(_Generic(…))` callee, P3c) answers HERE at {TF}.
+        # refusal. M4 W-AG COMMIT-0 RECONCILE (MC 12404.2.147, gate
+        # 12832 DoD-3): the W-AF note here claimed the
+        # kernel_events_core.c.i wall (82407:918, the `typeof(_Generic(…))`
+        # callee, P3c) answers HERE at {TF} — FALSE at the gate's hands
+        # (a marker planted in THIS arm NEVER appeared for the corpus
+        # stream nor any of 20 invented shapes; verdict DoD-3). That
+        # wall answers at the PARSER arms (W-AF close-row `RECONCILED:`
+        # line said so; the CODE comment now says the same). This arm
+        # stays the engine's own UNtagged twin for any target that types
+        # past the parse gate — UNREACHED by corpus or battery at ship.
         self._err(n, "called object is not a 'function' or a 'function "
                   "pointer' (§8 — blcc-only: the target typed and is "
                   "still not callable through the call-law home; rc1 "

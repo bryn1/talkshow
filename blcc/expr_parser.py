@@ -149,6 +149,27 @@ class ExprParser:
                                        # the engine retypes it via sigs)
         return self._callable_view(self.expr_type(node))
 
+    def _twin_measured(self, ty) -> bool:
+        """M4 W-AG COMMIT-0 TAG LAW (MC 12404.2.147 / job 12835, gate
+        F-2-SCOPE P1): the '(§8 — gcc rc1 twin)' oracle claim rides ONLY
+        the class MEASURED against gcc 11.4 — a CONCRETE non-callable
+        target: scalar (enum rides BuiltinType int), struct, union,
+        array (gate 12832: `long x; x(1);`, `struct{int n;} w; w();`,
+        the array/union/enum faces pinned in test_core_m4wag0.py — all
+        gcc rc1). PtrType/FuncType targets and any type still wrapped in
+        an un-resolved TypeOf (typeof-declared FUNCTION POINTERS — the
+        gate's eight refuted rc0 shapes and the corpus row 82407:918)
+        answer False: untagged-LOUD is a legal posture, a false twin tag
+        is the defect. Qualifiers drop like in `_callable_view`."""
+        if ty is None:
+            return False
+        while isinstance(ty, ast.Qualified):
+            ty = ty.inner
+        if isinstance(ty, (ast.PtrType, ast.FuncType, ast.TypeOf)):
+            return False
+        return isinstance(ty, (ast.BuiltinType, ast.StructType,
+                               ast.ArrayType))
+
     # -- entry: assignment level (right-associative) ------------------------
 
     def parse_expression(self) -> ast.Node:
@@ -492,36 +513,40 @@ class ExprParser:
                     # (`long x; x(1);`) replaces it — LOUD, never silent.
                     if not self._lenient_calls and \
                             self._callable_ty(node) is None:
-                        # M4 W-AF COMMIT-0 (MC 12404.2.144 / job 12831):
-                        # the "(§8 — gcc rc1 twin)" oracle tag on this
-                        # sentence was REFUTED by the W-AE gate (verdict
-                        # F-2, P1): the shape that is NOW the walk's
-                        # first RED — static_call's `({…; (&__SCT__x);})
-                        # ()`, an object of FUNCTION type called through
-                        # its address — compiles at gcc 11.4 rc0 with
-                        # ZERO diagnostics (W-AF own-hands receipt: whole
-                        # clean arch_x86_events_core.c.i under the REC
-                        # flags → rc0, 54,488 B object). A typeof-object
-                        # call is LEGAL C; the measured rc1 twin is the
-                        # NON-callable object shape only (`long x; x(1);`,
-                        # `struct{int n;} w; w();` → gcc rc1). The
-                        # refusal STANDS (blcc-only, over-loud until the
-                        # {TF} mirror arms of this same wave land); the
-                        # twin tag rides ONLY the typed arm, where the
-                        # twin is measured.
-                        if self.expr_type(node) is None:
+                        # M4 W-AF COMMIT-0 (12404.2.144) REFUTED the
+                        # blanket twin tag (W-AE gate F-2, P1) but split
+                        # this arm on "the mirror could TYPE it"; the
+                        # W-AF gate (card 12832, F-2-SCOPE, P1) REFUTED
+                        # that split too: the typeof-declared FUNCTION
+                        # POINTER class — a target that DOES type (Ptr of
+                        # a TypeOf wrapper) and is gcc rc0 — wore the
+                        # rc1-twin claim here and in the name arm (its
+                        # shapes s2/s6/s7/s8/s12/s13/s14/s15 + the corpus
+                        # row kernel_events_core.c.i:82407:918; whole
+                        # stream gcc rc0/0-diag/109,992 B). M4 W-AG
+                        # COMMIT-0 TAG LAW (MC 12404.2.147 / job 12835,
+                        # AMENDMENT-49; own-hands battery
+                        # test_core_m4wag0.py): the tag rides the
+                        # MEASURED CLASS (`_twin_measured` — concrete
+                        # scalar/struct/union/array, gcc rc1 measured at
+                        # 12831 + gate 12832); the un-typeable face AND
+                        # the typed-but-unmeasured face share ONE scoped
+                        # blcc-only sentence — loud stays legal, an
+                        # oracle claim may not.
+                        if self._twin_measured(self.expr_type(node)):
                             raise DiagError(
                                 "sema", t.file, t.line, t.col,
                                 "called object is not a 'function' or a "
-                                "'function pointer' (§8 — blcc-only: the "
-                                "light mirror cannot type the target; "
-                                "measured rc1 twins live in the "
-                                "non-callable class only)", "call")
+                                "'function pointer' (§8 — gcc rc1 twin)",
+                                "call")
                         raise DiagError(
                             "sema", t.file, t.line, t.col,
                             "called object is not a 'function' or a "
-                            "'function pointer' (§8 — gcc rc1 twin)",
-                            "call")
+                            "'function pointer' (§8 — blcc-only: the "
+                            "light mirror cannot prove this target "
+                            "callable; measured rc1 twins ride the "
+                            "concrete scalar/struct/union/array class "
+                            "only)", "call")
                 elif not self.callable_known(node.name):
                     if self._lenient_calls:
                         # Inside a __builtin_choose_expr/__builtin_expect
@@ -540,18 +565,32 @@ class ExprParser:
                         # declared but NOT callable (`long x; x(1);`):
                         # gcc rc1 "called object…" — the same §8 twin the
                         # expression-form target above answers with.
-                        # M4 W-AF COMMIT-0 scope note (W-AE gate F-2):
-                        # reaching THIS arm means the name is declared
-                        # AND typed AND non-callable (scalar/struct/
-                        # union/array) — the gcc-rc1 twin is measured
-                        # exactly for that class, so the tag stays. A
-                        # function-typed object spelled as a plain ident
-                        # is typed by the {TF} mirror and does NOT
-                        # answer here.
+                        # M4 W-AF COMMIT-0 claimed reaching THIS arm
+                        # MEANT "declared AND typed AND non-callable
+                        # (scalar/struct/union/array)" — the W-AF gate
+                        # (12832, F-2-SCOPE) refuted the precondition:
+                        # a typeof-declared FUNCTION POINTER is declared,
+                        # fails `_callable_ty` (the wrapper hides
+                        # call-ability from the light mirror) and answered
+                        # HERE wearing the rc1-twin claim at gcc rc0
+                        # (shapes s2/s8/s13, corpus row 82407:918). M4
+                        # W-AG COMMIT-0: the tag rides `_twin_measured`
+                        # ONLY — every other declared-but-unproven target
+                        # answers the same scoped blcc-only posture the
+                        # other unmeasured homes speak (TAG LAW,
+                        # AMENDMENT-49).
+                        if self._twin_measured(self.expr_type(node)):
+                            raise DiagError(
+                                "sema", t.file, t.line, t.col,
+                                "called object '{}' is not a 'function' "
+                                "or a 'function pointer' (§8 — gcc rc1 "
+                                "twin)".format(node.name), node.name)
                         raise DiagError(
                             "sema", t.file, t.line, t.col,
                             "called object '{}' is not a 'function' or a "
-                            "'function pointer' (§8 — gcc rc1 twin)".format(
+                            "'function pointer' (§8 — blcc-only: the "
+                            "declared type is not in the measured "
+                            "rc1-twin class; no oracle claim)".format(
                                 node.name), node.name)
                     # M4 W3: a fn-ptr VARIABLE answers — the §2 R1 law.
                     # The undeclared-IDENTIFIER wall above keeps its exact
