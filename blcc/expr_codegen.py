@@ -1002,8 +1002,19 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
         elif isinstance(tgt, ast.FuncType):
             ft = tgt
         else:
+            # M4 W-AF COMMIT-0 (MC 12404.2.144 / job 12831, W-AE gate
+            # F-2 P1): the "(§8 — gcc rc1 twin)" oracle tag is RETRACTED
+            # at THIS home. Reaching it means the parse-side light
+            # mirror said the target is callable while codegen's own
+            # _decay/_ty view disagrees — a per-shape MISMATCH whose gcc
+            # posture is UNMEASURED as a twin (the {T}-arm instrumented
+            # pass of arch_x86_events_core.c.i lands HERE on the corpus
+            # site, and that site is gcc rc0 — W-AF receipt). Refusal
+            # stands, blcc-only, until the {TF} arms of this wave land.
             self._err(n, "called object is not a 'function' or a 'function "
-                      "pointer' (§8 — gcc rc1 twin)", "call")
+                      "pointer' (§8 — blcc-only: parse-mirror and codegen "
+                      "type views disagree; rc1 twin UNMEASURED here)",
+                      "call")
         want = len(ft.params)
         # `(*fp)(x)` IS `fp(x)` (measured rc0, the pointer law): a
         # deref whose expression TYPES as a FuncType is the function

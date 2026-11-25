@@ -492,10 +492,36 @@ class ExprParser:
                     # (`long x; x(1);`) replaces it — LOUD, never silent.
                     if not self._lenient_calls and \
                             self._callable_ty(node) is None:
+                        # M4 W-AF COMMIT-0 (MC 12404.2.144 / job 12831):
+                        # the "(§8 — gcc rc1 twin)" oracle tag on this
+                        # sentence was REFUTED by the W-AE gate (verdict
+                        # F-2, P1): the shape that is NOW the walk's
+                        # first RED — static_call's `({…; (&__SCT__x);})
+                        # ()`, an object of FUNCTION type called through
+                        # its address — compiles at gcc 11.4 rc0 with
+                        # ZERO diagnostics (W-AF own-hands receipt: whole
+                        # clean arch_x86_events_core.c.i under the REC
+                        # flags → rc0, 54,488 B object). A typeof-object
+                        # call is LEGAL C; the measured rc1 twin is the
+                        # NON-callable object shape only (`long x; x(1);`,
+                        # `struct{int n;} w; w();` → gcc rc1). The
+                        # refusal STANDS (blcc-only, over-loud until the
+                        # {TF} mirror arms of this same wave land); the
+                        # twin tag rides ONLY the typed arm, where the
+                        # twin is measured.
+                        if self.expr_type(node) is None:
+                            raise DiagError(
+                                "sema", t.file, t.line, t.col,
+                                "called object is not a 'function' or a "
+                                "'function pointer' (§8 — blcc-only: the "
+                                "light mirror cannot type the target; "
+                                "measured rc1 twins live in the "
+                                "non-callable class only)", "call")
                         raise DiagError(
                             "sema", t.file, t.line, t.col,
                             "called object is not a 'function' or a "
-                            "'function pointer' (§8 — gcc rc1 twin)", "call")
+                            "'function pointer' (§8 — gcc rc1 twin)",
+                            "call")
                 elif not self.callable_known(node.name):
                     if self._lenient_calls:
                         # Inside a __builtin_choose_expr/__builtin_expect
@@ -514,6 +540,14 @@ class ExprParser:
                         # declared but NOT callable (`long x; x(1);`):
                         # gcc rc1 "called object…" — the same §8 twin the
                         # expression-form target above answers with.
+                        # M4 W-AF COMMIT-0 scope note (W-AE gate F-2):
+                        # reaching THIS arm means the name is declared
+                        # AND typed AND non-callable (scalar/struct/
+                        # union/array) — the gcc-rc1 twin is measured
+                        # exactly for that class, so the tag stays. A
+                        # function-typed object spelled as a plain ident
+                        # is typed by the {TF} mirror and does NOT
+                        # answer here.
                         raise DiagError(
                             "sema", t.file, t.line, t.col,
                             "called object '{}' is not a 'function' or a "
