@@ -43,9 +43,11 @@ Oracle facts pinned from THIS session's measurements (gcc 11.4):
   `-isystem` and `-include` accept BOTH split and attached spellings;
   `-nostdincX` / `-std=bogus` / unknown flags LOUD both sides — gcc 11.4
   ERRORS on `-Wfoo` (rc 1; the "warn and continue" claim is DISPROVED),
-  while cc-phase flags (-Wall -O2 -m64 -c ...) are rc 0 at gcc -E: blcc
+  while cc-phase flags (-Wall -O2 -m64 ...) are rc 0 at gcc -E: blcc
   §2 "No other flags" rejects them LOUD rc 2 — the pinned M4-divergence
-  (measured, inventoried from the real 777-line .o.cmd set, doc §2 table).
+  (measured, inventoried from the real 777-line .o.cmd set, doc §2 table);
+  `-c` LEFTS this class at M4 W0 (eb24bba, MC 12531) — its legs ride
+  tests/test_core_m4w0.py.
 * `-std=c90`/`-std=gnu90` are -dM-BYTE-IDENTICAL aliases of c89/gnu89
   (measured `gcc -dM` diff empty) -> blcc aliases them at the argv layer.
 """
