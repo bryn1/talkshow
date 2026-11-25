@@ -1654,6 +1654,29 @@ class Parser(ParseFoldMixin, AsmParseMixin, CompatLawMixin):
         # combines per C: `unsigned`, bare `signed`, `unsigned long long`,
         # `long long`, order-free spec words.
         self._take_qualifiers(quals)
+        if self._at_attr():
+            # M4 W-AF {Y} (MC 12404.2.144 / job 12831): an attribute may
+            # ride BETWEEN the qual words and the type SPECIFIER —
+            # `static const __attribute__((__section__(".init.rodata")))
+            # struct x86_cpu_id cpu_vuln_whitelist[]`
+            # (arch/x86/kernel/cpu/common.c:1047:59 + idt.c:57:59; live
+            # real-make table; corpus volume EXACTLY 2: cpu_common +
+            # idt). The SCALAR spelling already answered (the specifier
+            # word loop skips attrs) — that is why af28 walls while
+            # af29 pairs, and why a fix that skips too much breaks
+            # af29 (sims plant p4, exit 2->14). ONE home, and the SKIP
+            # MECHANISM IS THE SHIPPED ONE (`_at_attr`/`_skip_gnu_attrs`
+            # — the pair the declarator-star law rides; the attribute-
+            # FIRST GATE is the new part, not the skip). Re-enter the
+            # specifier head — the tag/typeof/enum branch gets its look
+            # (probe p5: gcc rc0 / tip rc2); a skip-and-fall-through
+            # would make a tag with a POINTER declarator read the `*`
+            # as a binary op. The SINK is the one the shipped W2.5
+            # attach law owns (attr following the type keyword attaches
+            # to NOTHING; §1 row 9 position-conflict still reads it —
+            # the SPEC-position attach is NOT moved by this arm).
+            self._skip_gnu_attrs(attr_sink)
+            return self._base_type_core(quals, attr_sink)
         t = self.s.peek()
         if t.kind == "kw":
             if t.text in ("float", "double"):
