@@ -1346,8 +1346,23 @@ class TypeMap(CompatLawMixin):
             return self._untype(n.type)
         if isinstance(n, ast.Unary):
             if n.op == "&":
+                # M4 W-AF {E} (MC 12404.2.144 / job 12831): C
+                # 6.5.3.2p1 — `&f` of a FUNCTION is pointer-to-function,
+                # ONE pointer. The shipped arm decayed the operand FIRST
+                # (_decay: FuncType -> Ptr(FuncType), the parameter-
+                # position law) and then wrapped — giving
+                # Ptr(Ptr(Func)), which is why the corpus site RE-WALLED
+                # at the codegen home once the mirror answered (probe
+                # p1: gcc rc0 / shipped posture rc2 §8; card-12825
+                # §3 root-cause line). The change surface is the
+                # &-operand here ONLY — the data-side spellings are
+                # UNMOVED (af31–af34 + the `.get_time = &ktime_get`
+                # corpus idiom probe p12, PAIR at tip AND at {TF}).
+                _ot = self._ty(n.operand)
+                if isinstance(_ot, ast.FuncType):
+                    return ast.PtrType(n.file, n.line, n.col, _ot)
                 return ast.PtrType(n.file, n.line, n.col,
-                                   self._decay(self._ty(n.operand)))
+                                   self._decay(_ot))
             if n.op == "*":
                 base = self._decay(self._ty(n.operand))
                 if not isinstance(base, ast.PtrType):
@@ -1447,8 +1462,19 @@ class TypeMap(CompatLawMixin):
         ret = call_target_ret(self._ty(n.callee))
         if ret is not None:
             return ret
+        # M4 W-AF COMMIT-TF (MC 12404.2.144 / job 12831): the fourth §8
+        # home — the sims-named engine twin `types._ind_call_ty`
+        # (card-12825 §3; the F-2 verdict text enumerated only the three
+        # parse/codegen homes). Reaching it means the target TYPED and
+        # still is not callable through the one shared call-law home —
+        # a mirror/engine MISMATCH arm whose gcc posture is UNMEASURED
+        # per-shape; W-AE gate F-2 law: no oracle tag on an unmeasured
+        # refusal. The kernel_events_core.c.i wall (82407:918, the
+        # `typeof(_Generic(…))` callee, P3c) answers HERE at {TF}.
         self._err(n, "called object is not a 'function' or a 'function "
-                  "pointer' (§8 — gcc rc1 twin)", "call")
+                  "pointer' (§8 — blcc-only: the target typed and is "
+                  "still not callable through the call-law home; rc1 "
+                  "twin UNMEASURED here)", "call")
 
     def _cond_ty(self, n: ast.Cond) -> ast.Node:
         """§1c AMENDMENT v4.2 (MC 12486) — the conditional's result type,

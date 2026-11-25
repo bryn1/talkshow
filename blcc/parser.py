@@ -1039,6 +1039,25 @@ class Parser(ParseFoldMixin, AsmParseMixin, CompatLawMixin):
                     return ast.PtrType(ty.file, ty.line, ty.col,
                                        self._unqual(ity.inner))
                 return ity
+            if isinstance(ty, ast.TypeOf):
+                # M4 W-AF {T2} (MC 12404.2.144 / job 12831): the mirror
+                # MATERIALIZES the non-auto typeof spelling — engine
+                # twin TypeMap._untype. The TYPED form recurses through
+                # _unqual (W-AD's ONE shipped home); the EXPR form
+                # types through THIS mirror and does NOT decay (W-H's
+                # measured difference table). An operand this mirror
+                # cannot type answers None — NEVER a guessed type (the
+                # §2.12 safe direction; card-12825 plant p2 documents
+                # that the downstream judge enforces it today and a
+                # later fix must not quietly remove that judge). Rows
+                # af12/af13 NAMED: the _Generic operand and the CAST
+                # path are not claimed here — kernel_events_core.c.i
+                # keeps its §8 wall (P3c).
+                if ty.typ is not None:
+                    return self._unqual(ty.typ)
+                if ty.expr is None:
+                    return None
+                return self.expr_type(ty.expr)
             return ty
         if isinstance(node, ast.Cast):
             # M4 W3 commit-2: the value of a cast is its TYPE — the call
@@ -1129,6 +1148,21 @@ class Parser(ParseFoldMixin, AsmParseMixin, CompatLawMixin):
                 base = self._unqual(base)
             if isinstance(base, (ast.PtrType, ast.ArrayType)):
                 return self._unqual(base.inner)
+        if isinstance(node, ast.StmtExpr):
+            # M4 W-AF {T1} (MC 12404.2.144 / job 12831): the light
+            # mirror TYPES the GNU statement-expression — the engine
+            # twin TypeMap._ty_stmtexpr (§2.4c: the group's type IS its
+            # LAST value). The corpus rider is the static_call
+            # trampoline spelling `({…; (&__SCT__x);})()`
+            # (arch/x86/events/core.c:699:246, the walk's first RED;
+            # battery rows af04/af05/af06/af26 move WALL→PAIR here,
+            # card-12825 census: the ONLY corpus carrier of the
+            # `(&__SCT__…)` callee form is that ONE stream, 18 sites).
+            # The HONEST limit is NAMED: the mirror has no group-locals
+            # home, so a value referring to a group-local decl stays
+            # un-typeable and answers None (row af03), the §2.12 safe
+            # direction — the shipped §8 refusal keeps it walled.
+            return self.expr_type(node.value)
         if isinstance(node, ast.Unary) and node.op == "&":
             # W3 commit-2 (S22 chain `**(&f)`): ADDRESS-OF builds the
             # pointer view — the mirror the deref arm decays back.
