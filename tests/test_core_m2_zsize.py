@@ -9,10 +9,11 @@ zsz2}.c, -O0 and the audit at -Os agree): `y: .zero 1` + `.size y, 0` —
 the label advances 1 byte while the symbol stays size 0 — so
 after@y+1, after2@a+1, after4@e0+1. The blcc twin (uniform .align 8) must
 keep every pair at DISTINCT addresses with ≥1 byte advance. Postures the
-gate states as correct: a local `int a[0];` keeps its frame-slot posture,
-and the tentative `int tent[];` edge stays LOUD (gcc completes it to 4
-bytes — measured; blcc's §4 rejection is the shipped LOUD posture, not a
-silent class). THE EMPTY-STRUCT LINE WAS SUPERSEDED by M4 W-S (MC 12716):
+gate states as correct: a local `int a[0];` keeps its frame-slot posture.
+The tentative `int tent[];` edge pin was SUPERSEDED by M4 W-AE COMMIT-2
+(MC 12404.2.141 / job 12819): the file-scope spelling now DEFERS through
+the existing §2.8 _ext_refs home (C 6.7.5.2p4; gcc completes it, measured
+`B a`); the LOCAL spelling keeps its LOUD teeth (see the re-pinned leg). THE EMPTY-STRUCT LINE WAS SUPERSEDED by M4 W-S (MC 12716):
 the §5 "empty struct stays LOUD" posture was REPLACED by the completed
 gcc-11.4 law (sizeof 0, rc0 — the spinlock_types_up.h:25 class); the
 leg below was FLIPPED with the wave (W-R flip precedent) and now pins
@@ -209,7 +210,8 @@ def test_zerofam_empty_struct_completed():
     # The MEASURED gcc 11.4 -Os law (own table .tmp/m4-ws/out/
     # laws-gcc.txt rows s01-s15) answers rc0 with sizeof 0; the leg now
     # pins the COMPLETED posture and its size answer — the sibling
-    # zerofam legs (tentative int[], fam) stay LOUD and UNTOUCHED.
+    # zerofam legs (fam member) stay LOUD and UNTOUCHED; the tentative
+    # int[] sibling was SUPERSEDED by M4 W-AE (12819) — re-pinned below.
     p = _fresh("zse")
     open(p + ".c", "w").write("struct es { };\nstruct es es0;\n"
                               "int main(void){return (int)sizeof(es0);}\n")
@@ -232,11 +234,18 @@ def test_zerofam_empty_struct_completed():
         os.remove(p + ext)
 
 
-def test_zerofam_tentative_incomplete_array_stays_loud():
-    # extern-tentative edge MEASURED: gcc 11.4 completes `int tent[];` to
-    # size 4 (.size 4 measured, zsz2.c); blcc's shipped §4 posture is LOUD
-    # ("array declaration without size needs an initializer list") — a
-    # loud class, pinned so the min-1-byte change cannot silently absorb it.
+def test_zerofam_tentative_incomplete_array_split_by_scope():
+    # M4 W-AE COMMIT-2 (MC 12404.2.141 / job 12819) SUPERSEDES the M2 LOUD
+    # pin. That pin measured a real posture ("blcc's shipped §4 posture is
+    # LOUD"), and the wave's X law REPLACED it at file scope: a tentative
+    # `int tent[];` DEFERS through the EXISTING §2.8 `_ext_refs` home
+    # (C 6.7.5.2p4 — the later definition-with-init of the same TU supplies
+    # size+storage; gcc 11.4 answers rc0 and completes it to ONE element,
+    # nm `B a`, with its own warning). The nm twin x05 in
+    # tests/test_core_m4wae3.py pins blcc's own current posture AS-IS
+    # (object-ABSENT, NAMED residual); THIS leg keeps teeth on the half of
+    # the law the wave did NOT relax: the LOCAL spelling (an auto
+    # incomplete array has no deferral meaning) stays LOUD, both-refuse.
     p = _fresh("zst")
     src_path = p + ".c"
     open(src_path, "w").write("int tent[];\nint main(void){return 0;}\n")
@@ -244,5 +253,16 @@ def test_zerofam_tentative_incomplete_array_stays_loud():
                          os.devnull], cwd=ROOT, capture_output=True,
                         text=True, timeout=60)
     os.remove(src_path)
-    assert rb.returncode == 2, \
-        "tentative int[] must stay LOUD, got rc={}".format(rb.returncode)
+    assert rb.returncode == 0, \
+        "file-scope tentative int[] now DEFERS (12819), got rc={}".format(
+            rb.returncode)
+    p2 = _fresh("zsl")
+    open(p2 + ".c", "w").write("int f(void){ int a[]; return 0; }\n"
+                               "int main(void){return f();}\n")
+    rb2 = subprocess.run([sys.executable, "-m", "blcc", p2 + ".c", "-o",
+                          os.devnull], cwd=ROOT, capture_output=True,
+                         text=True, timeout=60)
+    os.remove(p2 + ".c")
+    assert rb2.returncode == 2, \
+        "LOCAL incomplete array must stay LOUD, got rc={}".format(
+            rb2.returncode)

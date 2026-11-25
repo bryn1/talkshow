@@ -392,8 +392,17 @@ def test_for_init_beyond_one_simple_declaration():
     assert "'for' init" in d.message
 
 
-def test_unsized_array_without_initializer_is_diagnostic():
-    d = diag("int a[];")
+def test_unsized_array_file_scope_defers_local_stays_diagnostic():
+    # M4 W-AE COMMIT-2 (MC 12404.2.141 / job 12819) SUPERSEDES the blanket
+    # pin: a file-scope TENTATIVE `int a[];` DEFERS through the existing
+    # §2.8 `_ext_refs` home (C 6.7.5.2p4 completion at the later
+    # definition-with-init; the real wall kernel/cpu.c:134; gcc 11.4 rc0).
+    # The law now SPLITS BY SCOPE and this leg pins BOTH halves: file scope
+    # raises nothing, the LOCAL spelling keeps the §4 sentence (an auto
+    # incomplete array has no deferral meaning; gcc-refuses twin too —
+    # x07 of tests/test_core_m4wae3.py).
+    parse_text("int a[];", "t.c")              # no diagnostic any more
+    d = diag("int f(void){ int a[]; return 0; }")
     assert "'array'" in d.message
 
 
