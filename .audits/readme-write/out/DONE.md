@@ -16,3 +16,5 @@ R8 | Contract agrees: v5.3 SUPERSEDED -c row + scoped cc-phase law + grep-to-zer
 R9 | Committed and pushed to bryn1/talkshow kernel | PASS | efc60ba..499db62 chain, ls-remote tip matches local HEAD, tree clean
 R10 | DA gate for THIS run dir | PASS | DA-verdict-c3.md — JUDGED ed1ae4b6face24c3a3d84204df3f8e698199a0531bcbd394347ed63d12ab43c1, CONFIDENCE 0.90, VERDICT SHIP
 R11 | README L24 contract citation "(v5.1, 153 lines)" vs live file (154 lines, newest row v5.3, title still v5.1) | N/A | P3 recorded, DA c3 finding F1 — echoes the contract's own stale title line; fixing it moves the deliverable under the sealed JUDGED pin; hygiene follow-up noted in the final report, not a DoD row
+
+CLEANUP: scratch binaries (.o, hello, fib) under out/.tmp and /tmp removed by the children and the orchestrator; the run dir keeps only evidence .txt/.md + the .tmp/judged pin map (gate scratch)
