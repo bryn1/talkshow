@@ -284,6 +284,40 @@ def test_typelaw_splice_wrapper_postrename():
         "the splice fell back to the CALL law: a `pick:` leaf survived"
 
 
+def test_typelaw_expr_form_array_face_stays_refused(tmp_path):
+    # THE ONE-HOME WITNESS (measured at tip, at the sims stub AND at ship
+    # bytes — IDENTICAL everywhere): the EXPR spelling over an ARRAY
+    # operand stays LAZY — `__typeof__(a10) v` is gcc rc0 (exit 3) and
+    # blcc refuses `cannot load a 32-byte value (§4)`: the OVER-LOUD face
+    # of the same family as the corpus 512/2048 walls, NAMED UNCLAIMED by
+    # the sims (P3c — the kernel_events_core.c.i §8 wall rides it). This
+    # card ships the TYPE home ONLY; if a second materialization home is
+    # ever smuggled in (the EXPR spelling resolving at production too),
+    # this row flips to an accept and goes RED — the one-home plant
+    # witness the wave gate runs.
+    src = ("typedef unsigned long u64;\n"
+           "static u64 a10x[4];\n"
+           "__typeof__(a10x) v10a = { 1, 2, 3, 4 };\n"
+           "int answer(void){ return (int)(v10a[2] == 3 && v10a[0] == 1 "
+           "? 3 : 4); }\n")
+    p = tmp_path / "wagxarr.c"
+    p.write_text(src + MAIN)
+    gr = subprocess.run(["gcc"] + GCC_REC + ["-c", str(p),
+                                             "-o", str(tmp_path / "ge")],
+                        capture_output=True, text=True)
+    assert gr.returncode == 0, "gcc rc0 precondition: " + gr.stderr
+    br = subprocess.run([sys.executable, "-m", "blcc", "-c", str(p),
+                         "-o", str(tmp_path / "be")],
+                        capture_output=True, text=True,
+                        env=dict(os.environ, PYTHONPATH=REPO))
+    assert br.returncode == 2, (
+        "the EXPR-form array face MOVED (rc=%d) — that is a SECOND "
+        "materialization home; the TYPE law is ONE home and P3c named "
+        "this face UNCLAIMED:\n%s" % (br.returncode, br.stderr[:300]))
+    assert "cannot load a 32-byte value" in br.stderr, \
+        "the refusal moved off its sentence (collateral): " + br.stderr[:300]
+
+
 # ---- kernel tier: the corpus pair LANDS, the W-F walls do NOT move ------
 
 from test_core_m4w1 import STREAMS               # noqa: E402  (SHIPPED)
