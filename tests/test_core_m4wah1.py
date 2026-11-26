@@ -62,7 +62,7 @@ def _pair(src, tag, expect_gcc=None):
     bexe = os.path.join(TMP, tag + ".blcc")
     rb = subprocess.run([sys.executable, "-m", "blcc", "-c", c, "-o", o],
                         capture_output=True, text=True,
-                        env=dict(os.environ, PYTHONPATH=REPO))
+                        env=dict(os.environ, PYTHONPATH=REPO), cwd=REPO)
     assert rb.returncode == 0, (
         "blcc refused the packed fold-window interaction rc=%d:\n%s"
         % (rb.returncode, (rb.stdout + rb.stderr)[:300]))
@@ -153,7 +153,7 @@ int answer(void)
     o = tmp_path / "walw.o"
     b = subprocess.run([sys.executable, "-m", "blcc", "-c", str(p),
                         "-o", str(o)], capture_output=True, text=True,
-                       env=dict(os.environ, PYTHONPATH=REPO))
+                       env=dict(os.environ, PYTHONPATH=REPO), cwd=REPO)
     assert b.returncode == 0
     r = subprocess.run(["gcc", "-no-pie", "-o", str(tmp_path / "walw.b"),
                         str(o)], capture_output=True, text=True)
@@ -211,7 +211,7 @@ int answer(void){ int r = pick(1) + pick(0); return r % 251; }
     s = os.path.join(TMP, "wah1-sp-pin.s")
     r = subprocess.run([sys.executable, "-m", "blcc", "--emit-asm", c,
                         "-o", s], capture_output=True, text=True,
-                       env=dict(os.environ, PYTHONPATH=REPO))
+                       env=dict(os.environ, PYTHONPATH=REPO), cwd=REPO)
     assert r.returncode == 0, r.stderr[:300]
     asm = open(s + ".s").read()
     assert "\npick:" not in asm and not asm.startswith("pick:"), \
@@ -251,7 +251,7 @@ int answer(void)
     o = tmp_path / "waasm.o"
     b = subprocess.run([sys.executable, "-m", "blcc", "-c", str(p),
                         "-o", str(o)], capture_output=True, text=True,
-                       env=dict(os.environ, PYTHONPATH=REPO))
+                       env=dict(os.environ, PYTHONPATH=REPO), cwd=REPO)
     assert b.returncode == 0
     r = subprocess.run(["gcc", "-no-pie", "-o", str(tmp_path / "waasm.b"),
                         str(o)], capture_output=True, text=True)

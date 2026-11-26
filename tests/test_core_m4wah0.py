@@ -184,7 +184,7 @@ def _build(src, tag, cc):
         exe = os.path.join(TMP, tag + ".blcc")
         b = subprocess.run([sys.executable, "-m", "blcc", "-c", c, "-o", o],
                            capture_output=True, text=True,
-                           env=dict(os.environ, PYTHONPATH=REPO))
+                           env=dict(os.environ, PYTHONPATH=REPO), cwd=REPO)
         if b.returncode != 0:
             return b, None
         cmd = ["gcc", "-no-pie", "-o", exe, o]
@@ -231,7 +231,7 @@ int answer(void)
     br = subprocess.run([sys.executable, "-m", "blcc", "-c", str(p),
                          "-o", str(tmp_path / "wau.o")],
                         capture_output=True, text=True,
-                        env=dict(os.environ, PYTHONPATH=REPO))
+                        env=dict(os.environ, PYTHONPATH=REPO), cwd=REPO)
     assert br.returncode == 2, (
         "the codegen UNION twin moved off LOUD (rc=%d) — NAMED refusal, "
         "not this card:\n%s" % (br.returncode, br.stderr[:300]))
@@ -252,7 +252,7 @@ def test_wf_int128_unit_stays_loud(tmp_path):
     br = subprocess.run([sys.executable, "-m", "blcc", "-c", str(p),
                          "-o", str(tmp_path / "w128.o")],
                         capture_output=True, text=True,
-                        env=dict(os.environ, PYTHONPATH=REPO))
+                        env=dict(os.environ, PYTHONPATH=REPO), cwd=REPO)
     assert br.returncode == 2, (
         "the __int128 unit LOUD moved (rc=%d):\n%s"
         % (br.returncode, br.stderr[:300]))
@@ -281,7 +281,7 @@ def test_wf_five_streams_land(stream, tmp_path):
     o = tmp_path / "wah.o"
     r = subprocess.run([sys.executable, "-m", "blcc", "-c", str(clean),
                         "-o", str(o)], capture_output=True, text=True,
-                       env=dict(os.environ, PYTHONPATH=REPO))
+                       env=dict(os.environ, PYTHONPATH=REPO), cwd=REPO)
     assert r.returncode == 0, (
         "%s must LAND at W-AH (the producer window law) — first wall:\n%s"
         % (stream, next((ln for ln in (r.stdout + r.stderr).splitlines()
@@ -300,7 +300,7 @@ def test_wf_nonpacked_control_unmoved(tmp_path):
     r = subprocess.run([sys.executable, "-m", "blcc", "-c", str(clean),
                         "-o", str(tmp_path / "wahctl.o")],
                        capture_output=True, text=True,
-                       env=dict(os.environ, PYTHONPATH=REPO))
+                       env=dict(os.environ, PYTHONPATH=REPO), cwd=REPO)
     assert r.returncode == 0, (
         "the non-packed control moved (collateral!):\n"
         + next((ln for ln in (r.stdout + r.stderr).splitlines()
