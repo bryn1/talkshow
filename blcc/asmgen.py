@@ -33,7 +33,7 @@ from __future__ import annotations
 from typing import List
 
 from blcc import ast
-from blcc.asmsub import AsmSubMixin
+from blcc.asmsub import AsmSubMixin, _AI_DEFERRED
 from blcc.asmstmt import (POOL, CALLEE_SAVED, STABLE_BIND, _IMMO,
                           norm_clobber, implicit_regs, parse_constraint,
                           reg_name)
@@ -287,10 +287,33 @@ class AsmGenMixin(AsmSubMixin):
             # The W-P bare-Ident map arm inside `_asm_fold` rides the
             # SAME mask, exactly as its posture was before this wave.
             saved = self._inl_imm
+            saved_df = getattr(self, "_inl_defer_fd", None)
             if ci.alt:
                 self._inl_imm = {}
-            val = self._asm_fold(o.expr, node)
+                self._inl_defer_fd = None        # M4 W-AI: an alt ('iq')
+            val = self._asm_fold(o.expr, node)   #   keeps the S2 posture
             self._inl_imm = saved
+            self._inl_defer_fd = saved_df
+            if val is _AI_DEFERRED and ci.readwrite:
+                self._err(node, "constraint '{}' operand is not a "
+                          "compile-time constant (S5/L4: the closure is "
+                          "{{int, symbol, symbol+off}})".format(ci.raw),
+                           ci.raw, "asm")         # M4 W-AI: '+' never
+            if val is _AI_DEFERRED:
+                # M4 W-AI THE OWED DOOR (MC 12404.2.153 / card 12846): the
+                # dead-copy MATERIALIZE. This body has NO caller (zero
+                # sites, not address-taken, not an alias target — the
+                # `_inl_analyze` law), so the bytes never execute. An
+                # 'i'/'I'/'N'/'n' operand can ONLY be an immediate: the
+                # slot alternative is gas-invalid (measured rc3 `%ecx'
+                # not allowed with `testb' — the REJECTED materialization,
+                # card 12845 §2.4), and pp_expand placement is dead on
+                # preprocessed .i streams (§2.3). The placeholder imm is
+                # the one form both engines' refusals agree never executes;
+                # gcc's copy-ABSENT form is the NAMED divergence (§7).
+                o.form = "imm"
+                o.imm = 0
+                return o
             if val is None and ci.alt:
                 o.ci = parse_constraint(ci.alt, node)   # iq/Ir fallback S2
             elif val is None:
@@ -318,7 +341,7 @@ class AsmGenMixin(AsmSubMixin):
                 o.mem = st
                 return o
             val = self._asm_fold(o.expr, node)
-            if val is not None:
+            if val is not None and val is not _AI_DEFERRED:
                 o.form = "imm"
                 o.imm = val
                 return o

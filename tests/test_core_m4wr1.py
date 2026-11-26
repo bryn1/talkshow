@@ -192,32 +192,45 @@ def test_wr_stream_spot_off_the_class():
     assert n >= 10, "spot count"
 
 
-# the 14 streams still ON the 'i' class are ALL ZERO-SITE: the stream
+# the streams still ON the 'i' class are ALL ZERO-SITE: the stream
 # contains the `_static_cpu_has` DEFINITION and no call (grep -c
 # "_static_cpu_has(" == 1, checked own hands on 4 of them). The
 # measured-truth law (W-Q repair, MC 12712: zero-site keeps the copy)
-# stands: no site -> no splice -> the copy postures LOUD. GAINED is
-# therefore honestly 0 and this leg pins WHY, stream by stream.
+# STILL stands; what moved is the POSTURE of the kept copy: M4 W-AI
+# (MC 12404.2.153 / card 12846) opens the deferral door — the copy
+# materializes (no expansion context ever decided its `'i'(param)`).
+# This leg RETARGETED BY NAME from `test_wr_zero_site_copy_keeps_loud`
+# (the W-R pin the door INTENTIONALLY flips; teeth inverted, never
+# dropped): it now pins the LAND + the 1x-materialize shape, and goes
+# RED if the door silently DROPS the copy or the wall returns.
 ZERO_SITE = ["arch_x86_kernel_cpu_rdrand.c.i", "arch_x86_kernel_cpu_tsx.c.i",
              "lib_irq_regs.c.i", "lib_uuid.c.i", "lib_rbtree.c.i",
              "lib_refcount.c.i"]
 
 
-def test_wr_zero_site_copy_keeps_loud():
-    """ZERO-SITE law at the cpufeature class: a definition with NO
-    call site keeps its standalone copy (never silently dropped), and
-    the copy's `"i" (param)` closure stands LOUD — the honest reason
-    the accepts count moved 50 -> 50, not 50 -> 54."""
+def test_wr_zero_site_copy_lands_at_wai():
+    """ZERO-SITE law at the cpufeature class AT THE W-AI DOOR: a
+    definition with NO call site keeps its standalone copy (never
+    silently dropped — the W-Q law UNMOVED) and the copy's `"i"(param)`
+    closure now MATERIALIZES as the placeholder imm (sims §2.1 S5).
+    Six streams LAND (rc0), each object carries `t _static_cpu_has`
+    EXACTLY ONCE (sims §2.4 shape own hands) and the wall sentence is
+    GONE."""
     if not os.path.isdir(PINNED):
         import pytest
         pytest.skip("pinned corpus not linked (builder posture)")
     for name in ZERO_SITE:
-        r = blcc(["-c", _clean_stream(name),
-                  "-o", "/dev/shm/wr1_z_%s.o" % name[:12]])
-        assert r.returncode != 0, "%s accepted?!" % name
+        o = "/dev/shm/wai1_l_%s.o" % name[:12]
+        r = blcc(["-c", _clean_stream(name), "-o", o])
+        assert r.returncode == 0, "%s refused at the door: %s" % (
+            name, r.stderr[:200])
         assert "constraint 'i' operand is not a compile-time" \
-            in r.stderr, "%s left the zero-site wall: %s" % (
-                name, r.stderr[:200])
+            not in r.stderr, "%s back on the zero-site wall" % name
+        nm = subprocess.run(["nm", "--defined-only", o],
+                            capture_output=True, text=True).stdout
+        assert nm.count(" t _static_cpu_has") == 1, (
+            "%s: the zero-site copy must materialize EXACTLY ONCE "
+            "(W-Q law unmoved):\n%s" % (name, nm))
 
 
 # ------------------------------------------------------- own law legs --

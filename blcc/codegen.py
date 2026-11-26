@@ -533,7 +533,22 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin, InlinerMixin):
                 # i03/i05/i08: no symbol survives in its .s).
                 continue
             fd = self.funcs[name]
+            # M4 W-AI (MC 12404.2.153 / card 12846): the THIRD imm
+            # context rides the emit decision — while THIS zero-site
+            # copy's body materializes, an `'i'`-class fold that fails
+            # and references one of its OWN params has no caller that
+            # ever decided the operand: `_asm_fold` answers the deferral
+            # sentinel and `_asm_opnd` materializes the placeholder imm.
+            # Every OTHER emit runs with the flag cleared — the splice
+            # imm-map and the global-init closure keep their contexts
+            # UNTOUCHED (S5), and the W-Q law (the zero-site copy KEEPS
+            # its symbol) is UNMOVED: this is not the copy-discard door.
+            _ai_saved = getattr(self, "_inl_defer_fd", None)
+            self._inl_defer_fd = (
+                {p.name for p in fd.params if getattr(p, "name", "")}
+                if name in getattr(self, "_inl_defer", ()) else None)
             lines = self._emit_func(fd)
+            self._inl_defer_fd = _ai_saved
             if fd.inline_kind == "extern-inline":
                 # §2.8 gnu89: `extern inline` is an INLINE-ONLY
                 # definition — the body is still COMPILED (every codegen

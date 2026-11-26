@@ -70,6 +70,9 @@ class InlinerMixin:
     def _inl_init(self):
         self._inl_map = {}          # callee name -> fd (sites to splice)
         self._inl_discard = set()   # names whose standalone copy is gone
+        self._inl_defer = set()     # M4 W-AI (MC 12404.2.153): zero-site
+                                    # in-universe static inlines — the
+                                    # expansion-time DEFER SET (S1)
         self._inl_imm_off = {}      # fd name -> slot-only param names
         self._inl_imm = {}          # ACTIVE imm map during a splice body
         self._inl_goto = {}         # fd name -> asm-goto body-label names
@@ -118,7 +121,9 @@ class InlinerMixin:
             if n in alias_tgt or n in taken:
                 continue
             if not sites.get(n):
-                continue                       # W-R: VALUE sites cover too
+                self._inl_defer.add(n)         # M4 W-AI: NO expansion
+                continue                       # context ever — defer face
+                                               # W-R: VALUE sites cover too
             self._inl_map[n] = fd
             self._inl_discard.add(n)
             gl = _inl_goto_names(fd.body)

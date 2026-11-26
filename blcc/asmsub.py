@@ -28,6 +28,42 @@ from blcc.lexer import DiagError
 _DIGRUN = re.compile(r"\d+")
 
 
+class _AIDeferred:
+    """M4 W-AI (MC 12404.2.153 / card 12846): the THIRD imm-context
+    sentinel — the fold was asked in a context that NEVER exists: the
+    never-expanded standalone copy of a zero-site `static inline`. Not a
+    value, not None: an `'i'`-class operand here was NEVER decided by a
+    caller, so it DEFERS to materialization instead of refusing (the
+    expansion-time door the walk owes, cpufeature.h:187)."""
+    pass
+
+
+_AI_DEFERRED = _AIDeferred()
+
+
+def _ai_uses_param(e, names):
+    """True when the operand expression mentions one of the copy's param
+    names — the SAME name-keyed lookup the shipped imm-map already rides
+    (`self._inl_imm.get(e.name)` in `_asm_fold`), widened to the composed
+    fold route. OPERAND-anchored, never body-anchored: a LOCAL under
+    `'i'` inside a dead copy keeps its refusal (r3 plant measures the
+    alternative)."""
+    import dataclasses
+    stack = [e]
+    while stack:
+        x = stack.pop()
+        if not dataclasses.is_dataclass(x):
+            continue
+        if isinstance(x, ast.Ident) and x.name in names:
+            return True
+        for f in dataclasses.fields(x):
+            v = getattr(x, f.name, None)
+            for y in (v if isinstance(v, (tuple, list)) else (v,)):
+                if dataclasses.is_dataclass(y):
+                    stack.append(y)
+    return False
+
+
 class AsmSubMixin:
 
     def _asm_fold(self, e, node):
@@ -51,6 +87,9 @@ class AsmSubMixin:
         try:
             return self._fold_const(e, node)     # enums, sizeof, unary/binary
         except DiagError:
+            dfd = getattr(self, "_inl_defer_fd", None)
+            if dfd and _ai_uses_param(e, dfd):
+                return _AI_DEFERRED              # M4 W-AI: no ctx ever
             return None
 
     def _asm_ctype(self, e):
