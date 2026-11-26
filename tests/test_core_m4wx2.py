@@ -182,13 +182,28 @@ def test_keep_int128_unit_loud():
     assert r.returncode == 2 and "no extraction model" in r.stderr
 
 
-def test_keep_packed_static_init_data_loud():
-    # data.py stands untouched: the packed member-INITIALIZER fold is
-    # NOT part of the access-window law.
-    c = _w("pinit", "struct P { unsigned a:3, b:5; } "
-           "__attribute__((packed));\nstruct P p = { 3, 31 };\n"
-           "int main(void){ return (int)p.a; }\n")
+def test_packed_static_init_lands_at_wah():
+    # RENAMED + TEETH-INVERTED at M4 W-AH (MC 12404.2.150), NEVER
+    # dropped: this W-X KEEP-leg pinned the packed member-INITIALIZER
+    # LOUD ("data.py stands untouched") — that fold window IS the W-AH
+    # law: the bsup producer passes the field's OWN ceil((bit+w)/8)
+    # window, the fold lands, the object carries gcc's bits. Same shape,
+    # answer-is-the-assertion, gcc law verified at this very moment.
+    src = ("struct P { unsigned a:3, b:5; } __attribute__((packed));\n"
+           "struct P p = { 3, 31 };\n"
+           "int probe(void){ return (int)p.a + (int)p.b * 2; }\n"
+           "int main(void){ return probe(); }\n")
+    c = _w("pinit2", src)
+    g = subprocess.run(["gcc", "-no-pie", "-std=gnu89", "-Os",
+                        "-mno-sse", "-mno-sse2", "-fno-pic", c,
+                        "-o", c + ".g"], capture_output=True, text=True)
+    assert g.returncode == 0, g.stderr
+    gx = subprocess.run([c + ".g"], capture_output=True, timeout=60).returncode
     r = subprocess.run([sys.executable, "-m", "blcc", "-c", c,
                         "-o", c + ".o"], capture_output=True, text=True,
                        cwd=REPO, env=ENV)
-    assert r.returncode == 2 and "member initializer" in r.stderr
+    assert r.returncode == 0, ("the packed static init moved back onto a "
+                               "wall:\n" + r.stderr)
+    subprocess.run(["gcc", "-no-pie", "-o", c + ".b", c + ".o"], check=True)
+    bx = subprocess.run([c + ".b"], capture_output=True, timeout=60).returncode
+    assert bx == gx, "SILENT: blcc %d vs gcc %d" % (bx, gx)

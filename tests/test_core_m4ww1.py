@@ -310,14 +310,17 @@ def test_local_static_bitfield_pair():
 
 # --------------------------------------------------------- KEEP-LAWS
 
-def test_packed_bitfield_init_stays_loud():
-    """W-F KEEP-law: packed bitfield init stays LOUD (the packed LAYOUT
-    law ships; unit-window codegen does not)."""
+def test_packed_bitfield_init_lands_at_wah():
+    """RENAMED + TEETH-INVERTED at M4 W-AH (MC 12404.2.150), NEVER
+    dropped: the W-W/W-F KEEP-law that pinned the packed member-init LOUD
+    was THIS wave's target — the bsup producer now passes the field's OWN
+    ceil((bit+w)/8) fold window (reusing the shipped W-X span law), so a
+    packed bitfield initializer LANDS and answers through the shipped W-W
+    materializer. Same shape, answer-is-the-assertion: `.a = 1` reads back
+    1 at rc0 (was rc2 + 'packed'). The __int128-unit LOUD below stays."""
     src = ("struct __attribute__((packed)) S { unsigned int a : 3; };\n"
-           "int probe(void) { struct S s = { .a = 1 }; return s.a; }\n")
-    b = blcc(["-c", _w("pk", src), "-o", "/dev/shm/ww1_pk_%d.o"
-              % os.getpid()])
-    assert b.returncode == 2 and "packed" in b.stderr, b.stderr
+           "int probe(void) { struct S s = { .a = 1 }; return s.a + 41; }\n")
+    rp(src, want=42, tag="pkland")
 
 
 def test_int128_unit_stays_loud_by_name():

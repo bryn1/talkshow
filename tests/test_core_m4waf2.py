@@ -156,22 +156,22 @@ STREAM_ROWS = {
                          and os.path.isdir(STREAMS)),
                     reason="kernel tier + pinned streams corpus required")
 @pytest.mark.parametrize("stream", sorted(STREAM_ROWS))
-def test_y_streams_rewrite_at_wf_never_land(stream, tmp_path):
-    # THE Y wave-move receipts (census-priced): the attr parse wall is
-    # DEAD, the next wall is the W-F packed-bitfield family at the
-    # sims-predicted line:col (W-F = NEXT wave, NOT closed here; the
-    # io_apic row at 52201:20 must stay character-identical per P3a —
-    # that stream is UNMOVED in the ship census).
+def test_y_streams_landed_at_wah(stream, tmp_path):
+    # RENAMED + TEETH-INVERTED at M4 W-AH (MC 12404.2.150), NEVER dropped:
+    # this leg's W-F wall is the wave that SHIPPED at card 12839 — the
+    # producer window law lands both streams rc0 (own-hands census: the
+    # five W-F streams are the whole GAINED set). The historical receipt
+    # stands as history: the attr parse wall died at W-AF, the streams
+    # then re-walled at the W-F packed family at these line:cols
+    # (STREAM_ROWS below, the sealed W-AF/W-AG receipts).
     clean = _clean_i(os.path.join(STREAMS, stream), tmp_path, "waf2")
     r = subprocess.run(["python3", "-m", "blcc", "-c", str(clean),
                         "-o", str(tmp_path / "waf2.o")],
                        capture_output=True, text=True,
                        env=dict(os.environ, PYTHONPATH=REPO))
-    first = next(ln for ln in (r.stdout + r.stderr).splitlines()
-                 if ln.strip())
-    assert "packed bitfield member initializer" in first, \
-        "%s must re-wall at W-F, got:\n%s" % (stream, first)
-    assert STREAM_ROWS[stream] in first, \
-        "%s re-wall line:col drifted from %s:\n%s" % (
-            stream, STREAM_ROWS[stream], first)
-    assert "expected a type" not in first, "attr family still alive"
+    assert r.returncode == 0, (
+        "%s must LAND at W-AH (the producer window law) — first wall:\n%s"
+        % (stream, next((ln for ln in (r.stdout + r.stderr).splitlines()
+                         if ln.strip()), "(no output)")))
+    obj = tmp_path / "waf2.o"
+    assert obj.exists() and obj.stat().st_size > 0, "empty object"

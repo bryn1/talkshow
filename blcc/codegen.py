@@ -1303,12 +1303,13 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin, InlinerMixin):
                         self._err(at, "a flexible array member initializer "
                                   "is not in the subset (§5 — §1 row 13)",
                                   "{")
-                if self._attr_packed(ty):
-                    self._err(at, "packed bitfield member initializer is "
-                              "not in the subset (W-F: the packed LAYOUT "
-                              "law ships, the unit-window codegen stays "
-                              "LOUD — gcc's shrunk-unit extraction is not "
-                              "modelled)", "packed")
+                # M4 W-AH COMMIT-WFW (MC 12404.2.150): the LOCAL packed
+                # STRUCT LOUD opens too — the shipped `_init_bf_local`/
+                # `_bf_store` copy law lands the value (sims card 12838:
+                # the local path measured byte-correct; the volatile-
+                # sourced probe defeats the const-fold and PAIRS). The
+                # codegen UNION twin at the same home stays LOUD —
+                # NAMED honest refusal, volume 0 in this corpus.
                 for _, d in supplied_bf:
                     if d[3] not in self._BF_UNS:
                         self._err(at, "bitfield unit type '{}' has no "

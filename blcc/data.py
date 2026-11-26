@@ -286,16 +286,15 @@ class DataEmitter:
         return vd
 
     def _bf_data_guard(self, init, ty, d) -> None:
-        """M4 W-W COMMIT-1 (MC 12753) KEEP-laws (measured, sentences
-        inherited from the shipped LOUD twins): packed bitfields keep
-        the W-F unit-window LOUD; unit types outside the extraction
-        model stay LOUD BY NAME (tip ICEd `unsigned __int128`; W-G named
-        the LOUD)."""
-        if self._attr_packed(ty):
-            self._err(init, "packed bitfield member initializer is not "
-                      "in the subset (W-F: the packed LAYOUT law ships, "
-                      "the unit-window law stays LOUD — gcc's shrunk-"
-                      "unit extraction is not modelled)", "packed")
+        """M4 W-W COMMIT-1 (MC 12753) KEEP-laws + M4 W-AH COMMIT-WFW
+        (MC 12404.2.150): the packed member-initializer LOUD OPENS — the
+        shipped W-W materializer lands the value through the per-slot
+        paths, and under packed the fold window is the field's OWN span
+        (the bsup producer's window law below; the sims card 12838
+        ICE-traceback receipts proved the DECLARED unit walking off the
+        shrunk extent is the whole failure). Unit types outside the
+        extraction model stay LOUD BY NAME (tip ICEd `unsigned __int128`;
+        W-G named the LOUD)."""
         if d[3] not in self._BF_UNS:
             self._err(init, "bitfield unit type '{}' has no extraction "
                       "model (§1 row 12 LOUD twin)".format(d[3]),
@@ -606,10 +605,29 @@ class DataEmitter:
                             self._err(init, "address initializer inside a "
                                       "bitfield slot is not in the "
                                       "subset (§5)", "initializer")
-                        bsup.append((bfx[0], bfx[1], bfx[2],
-                                     self._size(ast.BuiltinType(
-                                         init.file, init.line, init.col,
-                                         bfx[3]), at),
+                        # M4 W-F layout + M4 W-AH COMMIT-WFW
+                        # (MC 12404.2.150): THE WINDOW LAW. Under packed
+                        # the layout cursor is bit-contiguous (the
+                        # shipped W-F cursor law, types.py), so a field's
+                        # fold window is its OWN span ceil((bit+w)/8)
+                        # bytes at its first byte — the SAME expression
+                        # the shipped W-X access law rides at its three
+                        # homes (expr_codegen read :1198 / store :1262 /
+                        # read-modify :1363, `nb = (bit + w + 7) // 8`),
+                        # NOT the DECLARED unit size, which walked off
+                        # the shrunk extent (the base ICE at _bf_merge's
+                        # label-overlap read — sims card 12838 traceback
+                        # receipts). `_bf_merge` is UNCHANGED: it already
+                        # folds arbitrary (uoff, bit, w, ub, v) windows
+                        # little-endian and its refusal keeps its teeth,
+                        # now bounded to the TRUE window. Unpacked rides
+                        # the DECLARED unit exactly as shipped.
+                        _wub = ((bfx[1] + bfx[2] + 7) // 8
+                                if self._attr_packed(ty) else
+                                self._size(ast.BuiltinType(
+                                    init.file, init.line, init.col,
+                                    bfx[3]), at))
+                        bsup.append((bfx[0], bfx[1], bfx[2], _wub,
                                      self._bf_norm(init, bfx, v)))
                         continue
                     out.extend(self._bytes_of(sty, items[i], at, ctx))

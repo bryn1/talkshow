@@ -350,15 +350,16 @@ def test_typelaw_corpus_pair_lands(stream, tmp_path):
 @pytest.mark.skipif(not (os.environ.get("KERNEL_510")
                          and os.path.isdir(STREAMS)),
                     reason="kernel tier + pinned streams corpus required")
-def test_typelaw_wf_walls_unmoved(tmp_path):
-    # ZERO collateral at stream grade: the data-side W-F walls keep their
-    # EXACT sentence at {512B} (sims census: the only moves are the two
-    # §4-load walls; the packed-bitfield family is DEFERRED to its own
-    # `_bf_merge` law — see LEDGER PBF defer row, no code this card).
+def test_typelaw_wf_walls_landed_at_wah(tmp_path):
+    # RENAMED + TEETH-INVERTED at M4 W-AH (MC 12404.2.150), NEVER dropped:
+    # this card's {512B} TYPE law left the three data-side W-F walls on
+    # their sentences (that was TRUE at W-AG ship, the sims P3c receipt);
+    # at W-AH the producer WINDOW law lands all three rc0 — the leg now
+    # pins the LANDS. A stream back on a wall is the collateral catcher.
     for s in ("arch_x86_kernel_cpu_common.c.i", "arch_x86_kernel_head64"
               ".c.i", "arch_x86_kernel_idt.c.i"):
         r, _ = _blcc_stream(tmp_path, s, "wagctl")
-        first = next(ln for ln in (r.stdout + r.stderr).splitlines()
-                     if ln.strip())
-        assert "packed bitfield member initializer" in first, \
-            "%s moved OFF its W-F sentence (collateral!):\n%s" % (s, first)
+        assert r.returncode == 0, \
+            "%s moved BACK onto a wall (collateral!):\n%s" % (
+                s, next((ln for ln in (r.stdout + r.stderr).splitlines()
+                         if ln.strip()), "(no output)"))
