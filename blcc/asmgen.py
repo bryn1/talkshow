@@ -247,6 +247,31 @@ class AsmGenMixin(AsmSubMixin):
                 o.shadow = shadow
                 return o
         ci = o.ci
+        if ci.readwrite and ci.cls == "r" and isinstance(o.expr, ast.Select):
+            # M4 W-AI COMMIT-0 (MC 12404.2.153 / card 12846): the NAMED
+            # SILENT made LOUD, PACKED-SCOPED (lead ruling on the sims
+            # decision pack, card 12845 §4). A read-write '+r' on a packed
+            # bitfield member stores the RAW operand value at the object
+            # base — gcc extracts through the field window, operates, and
+            # writes back MASKED (clobber class measured: neighbours and
+            # tail bytes die, sims §4.2 as01-as08). The blast screen over
+            # all 591 accepted streams flipped N=0, so the refusal prices
+            # ZERO corpus accepts; the extract/mask/write-back FIX is a
+            # law of its own and rides its own card. Unpacked members are
+            # NOT in scope — blcc answers CORRECT there (as02 PAIR 50/50).
+            # The gate REUSES the shipped packed law key `_bf_owner_packed`
+            # (types.py, owner-through-nesting incl. the W-G anon hoist):
+            # exactly the population the W-X window access law serves.
+            try:
+                _pk = self._bf_owner_packed(o.expr)
+            except Exception:
+                _pk = False              # unproven shape stays as-is
+            if _pk:
+                self._err(node, "read-write '+' asm operand on a packed "
+                          "bitfield member is not modelled (W-AI: gcc's "
+                          "window write-back law has its OWN card; the "
+                          "raw-unit store clobbers neighbours)",
+                          "+bf", "asm")
         if ci.cls == "match":
             o.form = "match"
             return o

@@ -218,16 +218,16 @@ int answer(void){ int r = pick(1) + pick(0); return r % 251; }
         "the splice fell back to the CALL law: a `pick:` leaf survived"
 
 
-def test_wf_asm_rw_operand_on_bitfield_is_silent_pinned(tmp_path):
-    # THE NAMED DOOR (pre-existing AT TIP, pinned UNMOVED — its own card,
-    # NOT the producer window's home): a read-write '+r' asm operand on a
-    # BITFIELD MEMBER stores the RAW operand value at the object's base
-    # address (asm dump: `movl %eax, -8(%rbp)` over the packed 5-byte
-    # object), clobbering the neighbours. Receipts (own hands, this card,
-    # logs/splice-asm-dump.txt): packed gcc 50 vs blcc 0 AT TIP ALREADY
-    # and at ship (UNMOVED); the non-packed twin answers 50/50 (PAIRS).
-    # Pinned so a half-fix that changes the answer without the real law
-    # flips this leg — the W-AG wgF08 pin idiom: SILENT, VISIBLE.
+def test_wf_asm_rw_operand_on_packed_bitfield_loud_at_wai(tmp_path):
+    # RETARGETED BY NAME at M4 W-AI (card 12846, teeth INVERTED, never
+    # dropped — was `test_wf_asm_rw_operand_on_bitfield_is_silent_pinned`,
+    # the W-AH pin of the SILENT door at tip). The lead ruling on the sims
+    # decision pack LOUDIFIED the face PACKED-SCOPED (blast N=0 measured on
+    # all 591 accepted streams; the extract/mask/write-back FIX rides its
+    # own card). gcc's measured 50 STAYS the ground-truth receipt of the
+    # divergence: gcc still answers 50; blcc now REFUSES with the named
+    # sentence instead of answering a silent 0. A half-fix that starts
+    # answering without the real window law flips this leg.
     src = PRE + """
 volatile u32 v;
 int answer(void)
@@ -252,13 +252,11 @@ int answer(void)
     b = subprocess.run([sys.executable, "-m", "blcc", "-c", str(p),
                         "-o", str(o)], capture_output=True, text=True,
                        env=dict(os.environ, PYTHONPATH=REPO), cwd=REPO)
-    assert b.returncode == 0
-    r = subprocess.run(["gcc", "-no-pie", "-o", str(tmp_path / "waasm.b"),
-                        str(o)], capture_output=True, text=True)
-    assert r.returncode == 0
-    bx = subprocess.run([str(tmp_path / "waasm.b")],
-                        capture_output=True, timeout=60).returncode
-    assert bx == 0, (
-        "the NAMED asmsub door ANSWER CHANGED (%d, was the pinned silent "
-        "0 at tip and at W-AH ship) — the real law has its OWN card; do "
-        "not half-fix it beside this one" % bx)
+    assert b.returncode == 2, (
+        "the asmsub '+r'-on-packed-bitfield face is NOT loud (rc=%d) — "
+        "W-AI shipped the LOUDIFY; a silent answer (the pinned pre-W-AI "
+        "posture) or an unruled fix (the window law has its OWN card) "
+        "both flip this leg:\n%s" % (b.returncode, b.stderr[:300]))
+    assert "read-write '+' asm operand on a packed bitfield member is " \
+           "not modelled" in b.stderr, (
+        "the loudify moved off its sentence: " + b.stderr[:300])
