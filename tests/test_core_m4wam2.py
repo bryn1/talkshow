@@ -175,3 +175,30 @@ def test_wam_value_conv_one_home():
     assert "def _asm_value_conv" not in ec, (
         "the mode-test was smuggled into the value-as-address family — "
         "wl06 pins that home LOOSE by the gcc oracle")
+
+
+# ------------------------------------------------- x4 TEXT law (AMENDED)
+# The instrument that caught the except-masked universal drop: exit codes
+# stayed honest through the bug (the door answers right values), only the
+# TEXT betrayed it. A bit-preserving cast in an m slot keeps the STATIC
+# address — the emitted bytes must be IDENTICAL to tip c586d25 (golden
+# measured at tip; retargeting this golden needs a law reason, and the
+# tip-vs-ship byte blast of the streams is the corpus-level twin).
+GOLDEN_X4_SRC = 'typedef unsigned int u32;\nint answer(void) {\n    u32 x = 41; u32 d = 0;\n    __asm__ volatile ("movl %[x], %k[d]" : [d] "=r" (d) : [x] "rm" ((u32)x));\n    return (int)d;\n}\n'
+GOLDEN_X4_ASM = '    .text\n    .globl answer\nanswer:\n    pushq %rbp\n    movq %rsp, %rbp\n    subq $32, %rsp\n    movq $41, %rax\n    movl %eax, -8(%rbp)\n    movq $0, %rax\n    movl %eax, -16(%rbp)\n    movl -8(%rbp), %eax\n    movl %eax, 8(%rsp)\n    movl 8(%rsp), %eax\n    movl %eax, -16(%rbp)\n    .text\n    .align 16\n    movl -16(%rbp), %eax\n    movl %eax, %eax\n    movslq %eax, %rax\n    movl %eax, %eax\n    movslq %eax, %rax\n    jmp .Lep_answer_1\n    movq $0, %rax\n.Lep_answer_1:\n    movq %rbp, %rsp\n    popq %rbp\n    ret\n    .section .rodata\n    .data\n    .bss\n'
+
+
+def test_wam_x4_text_law():
+    os.makedirs(TMP, exist_ok=True)
+    c = os.path.join(TMP, "x4text.c")
+    with open(c, "w") as fh:
+        fh.write(GOLDEN_X4_SRC)
+    r = subprocess.run(["python3", "-m", "blcc", "-c", "--emit-asm", c,
+                        "-o", c + ".o"],
+                       capture_output=True, text=True,
+                       env=dict(os.environ, PYTHONPATH=REPO), cwd=REPO)
+    assert r.returncode == 0, str(r.stderr)[:200]
+    assert r.stdout == GOLDEN_X4_ASM, (
+        "the no-op cast operand must ride the STATIC address: emitted "
+        "bytes moved away from the tip golden (park/lea/transport = the "
+        "silent face of a universal drop)")
