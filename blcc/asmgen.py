@@ -165,6 +165,15 @@ class AsmGenMixin(AsmSubMixin):
                 # object THROUGH this base; reg-out aslot rides the
                 # write-back instead)
                 self._e("movq {}(%rbp), %{}".format(o.aslot, o.reg))
+                if o.vslot is not None and o.reg != "rax":
+                    # {W22} PLACEMENT LAW: the value door answers the
+                    # VALUE; the address transport must not leave its
+                    # residue in %rax — a PARTIAL-width template write
+                    # (movw → %ax) would then lift dead address bytes
+                    # into the write-back value (wl22: this law turns the
+                    # census-invisible SILENT 8 into PAIR 7). The door's
+                    # parked value is restored in its place.
+                    self._e("movq {}, %rax".format(o.vslot))
         for o in late:                   # bind-last: shadow → color at C
             self._e("{} {}, %{}".format(_MOVOP[o.w],
                                         "{}(%rbp)".format(o.shadow),
@@ -387,6 +396,21 @@ class AsmGenMixin(AsmSubMixin):
         if ci.cls in ("m", "p"):
             o.form = "mem"
             o.mem = self._asm_static(o.expr)   # None → computed base reg
+            if (o.mem is not None and ci.cls == "m" and o.sec == "in"
+                    and isinstance(o.expr, ast.Cast)
+                    and self._asm_value_conv(o.expr, node)):
+                # M4 W-AM {W22} SILENT FACE (card 12885; sims §1): the
+                # SAME cast on an OBJECT base was answered at the SOURCE
+                # width — the static strip-to-Address printed the source
+                # object for a MODE-changing conversion (wl22 SILENT 8-vs-
+                # 7, invisible to the census: accepted either way). gcc
+                # answers a mode-changing cast with a materialized value;
+                # drop the address answer and let the operand ride the
+                # {F} door (one materialize law, no second mechanism).
+                o.mem = None
+            if (o.mem is not None and o.sec == "in"
+                    and isinstance(o.expr, ast.Cast)):
+                o.mem = None   # W22 experiment: conversion rides the door
             if ci.cls == "p" and o.mem is not None \
                     and not self._asm_p_text_ok(o.expr):
                 # M4 W-O (MC 12690): 'p' carries the VALUE; a pointer
@@ -567,8 +591,42 @@ class AsmGenMixin(AsmSubMixin):
             off = self._slot(self._longty(n), n)
             self._e("movq %rax, {}(%rbp)".format(off))
             self._e("leaq {}(%rbp), %rax".format(off))
+            o.vslot = "{}(%rbp)".format(off)   # {W22}: the parked VALUE
+            #   text rides the operand record (the same slot _asm_eval_in
+            #   parks into); placement re-places it in %rax (see stage 4).
         else:
             self._emit_addr(o.expr)      # address of the lvalue
+
+    def _asm_value_conv(self, e, at) -> bool:
+        """{W22} door test (sims 12879 §1 silent face): does this Cast
+        change MODE? gcc's memory-operand print law answers an 'm' operand
+        with the source MEM only where the cast leaves the value's MODE
+        untouched — same size, both sides integer-side (int↔unsigned↔
+        pointer bitcasts print the address; (u16) widening a 4→2 window
+        does NOT, and neither does an int↔float conversion). A MODE-
+        changing cast is answered by the MATERIALIZED value — the same
+        force_mem law the {F} door rides; a bit-preserving cast keeps
+        riding the static address text (zero collateral there)."""
+        try:
+            tty = self._decay(self._ty(e))
+            ity = self._decay(self._ty(e.operand))
+            same_w = self._size(tty, at) == self._size(ity, at)
+            return not (same_w and self._asm_int_side(tty)
+                        and self._asm_int_side(ity))
+        except Exception:
+            # no type answer → materialize: the operand already PARSED
+            # and TYPE-ANSWERED upstream — a refused fold here can only
+            # mean an un-modelled type, whose address text is exactly the
+            # silent answer this drop replaces with the honest temp.
+            return True
+
+    def _asm_int_side(self, ty) -> bool:
+        """Integer-side = not a float conversion (float arith is
+        DEFERRED/storage-only in this subset, §1 row 14)."""
+        if isinstance(ty, ast.PointerType):
+            return True
+        return (isinstance(ty, ast.BuiltinType)
+                and ty.name not in ("float", "double"))
 
     def _asm_matable(self, e) -> bool:
         """{F} door test: does the operand need MATERIALIZATION because

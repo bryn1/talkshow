@@ -29,6 +29,16 @@
 # wl24/wl25 LOOSE output face — gcc-rc1 side, input-scoped door neither
 # fixes nor widens).
 #
+# SUPERSEDED (COMMIT-2, MC 12404.2.159): the wl22 row's NAMED_SILENT pin
+# is RETARGETED BY NAME below — at the {W22} bytes the silent face LANDS
+# (the drop hands the operand to the COMMIT-1 door and the placement law
+# restores the parked value), so the leg now pins PAIR-7 and goes RED
+# for ANY re-opening of the source-answer (teeth INVERTED, never
+# dropped; the saturating twin wl23 was PAIR before and stays PAIR — the
+# PAIR is what proves the fix answers the CONVERSION, not
+# "zero-everything"). RED-first at the COMMIT-1 bytes: this leg fails
+# there (8 vs the pinned 7), logs/m4wam2-red-c1b.log.
+#
 # Probes embedded from the sims generators (wal_gen_law.py), blank-line-
 # compacted (law-neutral whitespace only — every exit code re-anchored by
 # THIS suite: each PAIR row re-runs BOTH sides and pins gcc off the sims
@@ -256,7 +266,7 @@ int answer(void) {
     return (d & 0xffffu) == 0x3344u ? ((d >> 16) == 0 ? 7 : 8) : 9;
 }
 """,
-        "NAMED_SILENT", 7, 8),
+        "PAIR", 7, None),
     "wl23_satur_trunc_fit": (
         """typedef unsigned char u8; typedef unsigned short u16;
 typedef unsigned int u32; typedef unsigned long ul;
@@ -459,19 +469,6 @@ def test_wam_frontier_law(name):
                           "oracle, not a fix" % (name, b))
         return
     brc, b = _side(name, src, "blcc")
-    if kind == "NAMED_SILENT":
-        # wl22 at {F}: the silent face of the SAME family answered at the
-        # address-site door — unchanged (sims §1: a fix that stops at the
-        # address site leaves the silent half open). COMMIT-2 retargets
-        # this leg BY NAME at the value-door width fix.
-        assert brc == 0, "%s: the silent face must stay ACCEPTED: %s" % (
-            name, str(b)[:200])
-        assert b == pin, ("%s: the NAMED SILENT moved (blcc %d, pinned %d) "
-                          "— the value-door half of the family has its own "
-                          "commit; if THIS commit fixed it, retarget by "
-                          "name and re-measure the saturating twin"
-                          % (name, b, pin))
-        return
     if kind == "NAMED_LOOSE":
         # wl24/wl25: the OUTPUT face — gcc REFUSES (rc1), blcc accepts
         # (pre-existing LOOSE, sims §1: "neither fixes nor widens").
