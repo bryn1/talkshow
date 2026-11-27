@@ -218,16 +218,17 @@ int answer(void){ int r = pick(1) + pick(0); return r % 251; }
         "the splice fell back to the CALL law: a `pick:` leaf survived"
 
 
-def test_wf_asm_rw_operand_on_packed_bitfield_loud_at_wai(tmp_path):
-    # RETARGETED BY NAME at M4 W-AI (card 12846, teeth INVERTED, never
-    # dropped — was `test_wf_asm_rw_operand_on_bitfield_is_silent_pinned`,
-    # the W-AH pin of the SILENT door at tip). The lead ruling on the sims
-    # decision pack LOUDIFIED the face PACKED-SCOPED (blast N=0 measured on
-    # all 591 accepted streams; the extract/mask/write-back FIX rides its
-    # own card). gcc's measured 50 STAYS the ground-truth receipt of the
-    # divergence: gcc still answers 50; blcc now REFUSES with the named
-    # sentence instead of answering a silent 0. A half-fix that starts
-    # answering without the real window law flips this leg.
+def test_wf_asm_rw_operand_on_packed_bitfield_lands_at_wak(tmp_path):
+    # RETARGETED BY NAME at M4 W-AK (MC 12404.2.156; teeth INVERTED,
+    # never dropped — was `test_wf_asm_rw_operand_on_packed_bitfield_
+    # loud_at_wai` (the W-AI pin of the LOUDIFY), and before that the
+    # W-AH pin of the SILENT door. The fix card LANDED: the pend-loop
+    # masked write-back rides the shipped packed RMW door, so this
+    # shape — the original W-AH pin, verbatim — now RUNS gcc's answer.
+    # The 50 stays the receipt: it was the SILENT divergence's ground
+    # truth (blcc 0), then the refusal (rc2), and is now the PAIR value.
+    # A raw-unit store (the sims §4.2 clobber class) or a died-back wall
+    # both flip this leg RED.
     src = PRE + """
 volatile u32 v;
 int answer(void)
@@ -252,11 +253,15 @@ int answer(void)
     b = subprocess.run([sys.executable, "-m", "blcc", "-c", str(p),
                         "-o", str(o)], capture_output=True, text=True,
                        env=dict(os.environ, PYTHONPATH=REPO), cwd=REPO)
-    assert b.returncode == 2, (
-        "the asmsub '+r'-on-packed-bitfield face is NOT loud (rc=%d) — "
-        "W-AI shipped the LOUDIFY; a silent answer (the pinned pre-W-AI "
-        "posture) or an unruled fix (the window law has its OWN card) "
-        "both flip this leg:\n%s" % (b.returncode, b.stderr[:300]))
-    assert "read-write '+' asm operand on a packed bitfield member is " \
-           "not modelled" in b.stderr, (
-        "the loudify moved off its sentence: " + b.stderr[:300])
+    assert b.returncode == 0, (
+        "the asmsub '+r'-on-packed-bitfield shape is NOT landing (rc=%d) "
+        "— the W-AK masked write-back died back into a wall:\n%s"
+        % (b.returncode, b.stderr[:300]))
+    lk = subprocess.run(["gcc", "-no-pie", str(o), "-o", str(o) + ".bin"],
+                        capture_output=True, text=True)
+    assert lk.returncode == 0, lk.stderr[:300]
+    v2 = subprocess.run([str(o) + ".bin"], capture_output=True,
+                        timeout=60).returncode
+    assert v2 == gx, (
+        "SILENT DOOR RE-OPENED: blcc %d vs gcc %d — the masked write-back "
+        "clobbered neighbours or forgot the window (sims §4.2)" % (v2, gx))

@@ -48,7 +48,7 @@ class _Op:
     """One operand's codegen record (built per statement, never shared)."""
     __slots__ = ("idx", "sec", "ci", "expr", "ty", "w", "form", "reg",
                  "mem", "imm", "vslot", "aslot", "bind", "stable", "shadow",
-                 "match", "node")
+                 "match", "node", "bf")
 
     def __init__(self, idx, sec, node):
         self.idx = idx
@@ -68,6 +68,9 @@ class _Op:
         self.stable = False
         self.shadow = None               # bind shadow rbp offset (int)
         self.match = None                # matched target _Op
+        self.bf = None                   # M4 W-AK {C}: (Select, layout) for
+        #   a read-write '+r' on a MODELLED packed bitfield — the masked
+        #   write-back pend record; None for every other operand.
 
 
 class AsmGenMixin(AsmSubMixin):
@@ -210,7 +213,23 @@ class AsmGenMixin(AsmSubMixin):
         for o, t in pend:
             live.discard(o.reg)
             self._load(o.ty, t, at=o.node)         # width+sign re-intern
-            if o.mem is not None:
+            if getattr(o, "bf", None) is not None:
+                # M4 W-AK LEVER-C: the MASKED write-back, riding the door
+                # `_bf_incdec` rides. PARK the re-interned value FIRST —
+                # `_bf_addr` answers in %rax and would clobber it (the
+                # measured first-cut ordering bug, sims as01 122-vs-50;
+                # the p6 plant keeps this law's teeth sharp).
+                _sel, _d = o.bf
+                _tv = self._t()
+                self._e("movq %rax, {}".format(_tv))
+                _tb = self._t()
+                self._bf_addr(_sel)                # %rax = object base
+                self._e("movq %rax, {}".format(_tb))
+                self._e("movq {}, %rax".format(_tv))
+                self._bf_store(_sel, _d, value_ready=True,
+                               base_slot=_tb)
+                self._unt(2)
+            elif o.mem is not None:
                 self._store(o.ty, o.mem, at=o.node)
             else:
                 sc = self._asm_scratch(live, n)
@@ -256,8 +275,10 @@ class AsmGenMixin(AsmSubMixin):
             # writes back MASKED (clobber class measured: neighbours and
             # tail bytes die, sims §4.2 as01-as08). The blast screen over
             # all 591 accepted streams flipped N=0, so the refusal prices
-            # ZERO corpus accepts; the extract/mask/write-back FIX is a
-            # law of its own and rides its own card. Unpacked members are
+            # ZERO corpus accepts; the extract/mask/write-back FIX LANDED
+            # at M4 W-AK (card 12873) — the pend-loop masked write-back
+            # below; this gate now refuses ONLY shapes with no layout
+            # answer. Unpacked members are
             # NOT in scope — blcc answers CORRECT there (as02 PAIR 50/50).
             # The gate REUSES the shipped packed law key `_bf_owner_packed`
             # (types.py, owner-through-nesting incl. the W-G anon hoist):
@@ -267,11 +288,27 @@ class AsmGenMixin(AsmSubMixin):
             except Exception:
                 _pk = False              # unproven shape stays as-is
             if _pk:
-                self._err(node, "read-write '+' asm operand on a packed "
-                          "bitfield member is not modelled (W-AI: gcc's "
-                          "window write-back law has its OWN card; the "
-                          "raw-unit store clobbers neighbours)",
-                          "+bf", "asm")
+                # M4 W-AK LEVER-C (MC 12404.2.156, sims card 12849 §4):
+                # THE FIX, not the refusal — gcc's extract -> operate ->
+                # MASKED write-back. The INPUT side is already the shipped
+                # W-X packed READ (as01 read the right value); the
+                # WRITE-BACK in the pend loop below re-rides the shipped
+                # packed RMW door `_bf_store(value_ready=True,
+                # base_slot=..)` that `_bf_incdec` (X++ on a packed field)
+                # already rides. REUSE: no new store law, no new window.
+                # The W-AI gate STANDS for shapes with no layout answer
+                # (`_bitfield` refuses): an un-modelled '+r'-packed operand
+                # stays REFUSED LOUD — never a raw-unit store (the clobber
+                # class sims §4.2 measured: neighbours and tail bytes die).
+                _d = self._bitfield(o.expr)
+                if _d is not None:
+                    o.bf = (o.expr, _d)
+                else:
+                    self._err(node, "read-write '+' asm operand on a packed "
+                              "bitfield member is not modelled (W-AK: no "
+                              "layout answer — the masked RMW door needs "
+                              "one; the raw-unit store clobbers "
+                              "neighbours)", "+bf", "asm")
         if ci.cls == "match":
             o.form = "match"
             return o

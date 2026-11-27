@@ -24,6 +24,17 @@ idiom). Measured postures (sims §4.2 + this card's screen): the 7 packed
 rows go WALL rc2 with the named sentence; the unpacked twin stays PAIR
 50/50 — that row is ALSO the scope witness (a loudify smuggled to unpacked
 scope flips it RED: the LOUDIFY-SCOPE plant rides it).
+
+SUPERSEDED (the WALL posture) at M4 W-AK (MC 12404.2.156): the fix
+LANDED — the pend-loop masked write-back rides the SHIPPED packed RMW
+door `_bf_store(value_ready=True, base_slot=..)` (`_bf_incdec`'s door),
+one window law, one home. The 7 packed rows RETARGETED BY NAME to
+RUN-PAIR (teeth inverted: a raw-unit store answers WRONG here and flips
+them RED); as03 rides the sims-§4 NAMED divergence (gcc register-
+forwarding 220 vs blcc memory-law 1 — the memory identity is as03b,
+m4wak3). THE SCOPE LAW STANDS: the gate keeps refusing, with the W-AK
+sentence, shapes with no layout answer (m4wak3 sentence pin); as02
+unpacks through both postures.
 """
 import os
 import subprocess
@@ -40,9 +51,6 @@ TMP = "/dev/shm/m4wai0_%s_%d" % (os.environ.get("M4WAI_TAG", "x"),
 GCC_REC = ["-std=gnu89", "-Os", "-mno-sse", "-mno-sse2", "-mno-80387",
            "-fno-stack-protector", "-fno-pic"]
 MAIN = "\nint answer(void);\nint main(void) { return answer(); }\n"
-
-LOUD = "read-write '+' asm operand on a packed bitfield member is not " \
-       "modelled"
 
 PRE = """typedef unsigned int u32; typedef unsigned char u8; typedef unsigned long ul;
 struct cx  { u32 a:4, b:30; } __attribute__((packed));
@@ -61,7 +69,7 @@ AS_ROWS = {
 \t__asm__ volatile("" : "+r"(s.a));
 \t__asm__ volatile("" : "+r"(s.b));
 \treturn (int)(s.a * 3 + (s.b & 255u) * 7 + ((s.b >> 22) & 255u) * 11);
-""", 50, "WALL"),
+""", 50, "PAIR"),
     # UNPACKED twin: blcc CORRECT (PAIR 50) — loudify must NOT fire here
     "as02_unpacked_pair": (PRE.replace(
         "struct cx  { u32 a:4, b:30; } __attribute__((packed));",
@@ -83,32 +91,32 @@ int answer(void)
 \ts.a = 4; s.b = 0x3FFFFFFFu;      /* span-filling: 30 bits all ones */
 \t__asm__ volatile("inc %0" : "+r"(s.b));
 \treturn (int)(s.b % 251u) + 1;
-""", 220, "WALL"),
+""", 220, "NAMED"),
     "as04_inc30_nonsaturating": ("""
 \tstruct cx s;
 \ts.a = 4; s.b = 0x1234567u;       /* mid value: same law, other face */
 \t__asm__ volatile("inc %0" : "+r"(s.b));
 \treturn (int)(s.b % 251u) + 1;
-""", 195, "WALL"),
+""", 195, "PAIR"),
     "as05_w9_inc_saturating": ("""
 \tstruct w9 t;
 \tt.x = 511u;                      /* span-filling: the 9-bit window */
 \t__asm__ volatile("inc %0" : "+r"(t.x));
 \treturn (int)(t.x & 511u) + 1;
-""", 1, "WALL"),
+""", 1, "PAIR"),
     "as06_w9_inc_nonsaturating": ("""
 \tstruct w9 t;
 \tt.x = 257u;                      /* non-filling twin */
 \t__asm__ volatile("inc %0" : "+r"(t.x));
 \treturn (int)(t.x & 511u) + 1;
-""", 3, "WALL"),
+""", 3, "PAIR"),
     # NEIGHBOUR survival: gcc 19 vs blcc 2 at tip (blcc lost s.a)
     "as07_window_neighbours_packed": ("""
 \tstruct cx s;
 \ts.a = 9; s.b = 0x100u;
 \t__asm__ volatile("inc %0" : "+r"(s.b));
 \treturn (int)(s.a * 2 + (s.b & 1u));
-""", 19, "WALL"),
+""", 19, "PAIR"),
     # TAIL survival: gcc 51 vs blcc 50 at tip (blcc lost z.tail)
     "as08_window_neighbours_w9": ("""
 struct two { struct w9 p; u8 tail; } __attribute__((packed));
@@ -119,7 +127,7 @@ int answer(void)
 \t__asm__ volatile("inc %0" : "+r"(z.p.x));
 \treturn (int)(z.p.x % 251u) + (int)(z.tail == 77u);
 }
-""", 51, "WALL"),
+""", 51, "PAIR"),
 }
 
 
@@ -159,9 +167,18 @@ def _blcc(src, tag):
 
 
 @pytest.mark.parametrize("name", sorted(AS_ROWS))
-def test_wai_asm_rw_packed_bitfield_loudify(name):
-    # rows ride the sims asmsub probes VERBATIM; the EXIT/posture is the
-    # answer (RED FIRST at tip: the 7 packed rows were SILENT rc0 there)
+def test_wai_asm_rw_packed_bitfield_lands_at_wak(name):
+    # RETARGETED BY NAME at M4 W-AK (MC 12404.2.156; teeth INVERTED,
+    # never dropped — was `test_wai_asm_rw_packed_bitfield_loudify`, the
+    # W-AI pin that the '+r'-on-packed-bitfield face REFUSES LOUD while
+    # the fix rode its card. The card LANDED: the pend-loop masked
+    # write-back answers AT THE SHIPPED RMW DOOR, so the rows RUN-PAIR.
+    # as02 (the UNPACKED scope witness) rode PAIR through BOTH postures:
+    # the gate scope law (PACKED-only) holds under the fix — that is the
+    # row's whole purpose. as03 is the sims-§4 NAMED DIVERGENCE: gcc's
+    # 220 is REGISTER FORWARDING of the un-truncated result to a
+    # same-expression readback; blcc answers the MEMORY law 1, the
+    # identical memory (as03b twin PAIR exit=1, m4wak3 battery).
     src, gcc_exit, posture = _src(name), AS_ROWS[name][1], AS_ROWS[name][2]
     gx = _gcc(src, name)
     assert gx == gcc_exit, (
@@ -169,29 +186,25 @@ def test_wai_asm_rw_packed_bitfield_loudify(name):
         "fix-law ground truth of card 12845 §4.2 changed; re-measure "
         "before believing this row" % (name, gcc_exit, gx))
     r, o = _blcc(src, name)
-    if posture == "PAIR":
-        assert r.returncode == 0, (
-            "%s: the UNPACKED scope witness went LOUD (rc=%d) — the "
-            "loudify over-fired into unpacked scope, where blcc is "
-            "CORRECT (sims as02 PAIR 50/50; ship law is PACKED-scoped "
-            "only):\n%s" % (name, r.returncode,
-                            (r.stdout + r.stderr)[:300]))
-        b = subprocess.run(["gcc", "-no-pie", "-o", o + ".bin", o],
-                           capture_output=True, text=True)
-        assert b.returncode == 0, b.stderr
-        bx = subprocess.run([o + ".bin"], capture_output=True,
-                            timeout=60).returncode
-        assert bx == gx, ("%s: unpacked twin diverged blcc %d vs gcc %d"
-                          % (name, bx, gx))
+    assert r.returncode == 0, (
+        "%s: rc=%d — the FIX died back into a wall (the gate must "
+        "refuse ONLY shapes with no layout answer; the modelled class "
+        "answers now):\n%s" % (name, r.returncode,
+                               (r.stdout + r.stderr)[:300]))
+    b = subprocess.run(["gcc", "-no-pie", "-o", o + ".bin", o],
+                       capture_output=True, text=True)
+    assert b.returncode == 0, b.stderr
+    bx = subprocess.run([o + ".bin"], capture_output=True,
+                        timeout=60).returncode
+    if posture == "NAMED":
+        assert bx == 1, (
+            "%s: the NAMED divergence moved — gcc %d, blcc %d (memory-law "
+            "1 was the sims §4 measurement; register-forwarding has NO "
+            "card — re-measure before touching this door)" % (name, gx, bx))
         return
-    assert r.returncode == 2, (
-        "%s: the NAMED SILENT face is silent again (rc=%d) — gcc exits "
-        "%d, blcc answers differently (sims §4.2 clobber class): the "
-        "loudify arm died\n%s" % (name, r.returncode, gcc_exit,
-                                  (r.stdout + r.stderr)[:300]))
-    assert LOUD in (r.stdout + r.stderr), (
-        "%s: rc2 but NOT the named sentence — a different wall arrived:\n%s"
-        % (name, (r.stdout + r.stderr)[:300]))
+    assert bx == gx, ("%s: SILENT — blcc %d vs gcc %d (sims §4.2 clobber "
+                      "class: a raw-unit store would answer HERE)"
+                      % (name, bx, gx))
 
 
 from test_core_m4w1 import STREAMS                       # noqa: E402
