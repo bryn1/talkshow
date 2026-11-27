@@ -285,7 +285,13 @@ MOVED_18 = {
     "arch_x86_entry_syscall_32.c.i": "no member 'r9' in struct 'pt_regs'",
     "arch_x86_entry_vdso_vdso-image-32.c.i": "Assembler messages",
     "arch_x86_entry_vdso_vdso32-setup.c.i": "no member 'r9' in struct 'pt_regs'",
-    "arch_x86_entry_vdso_vdso32_vclock_gettime.c.i": "not an address",
+    # SUPERSEDED (M4 W-AM, MC 12404.2.159 / card 12885): the {F} door
+    # ANSWERS vdso32's addressable-l-value face (it is the frontier family
+    # third member); the stream's first wall MOVES to the NAMED next wall,
+    # the M3-support sentence — retargeted BY VALUE here, the leg name and
+    # its teeth (the wall MUST have moved and be exactly this one) stand.
+    "arch_x86_entry_vdso_vdso32_vclock_gettime.c.i":
+        "are not in the M3 SUPPORT set",
     "arch_x86_kernel_cpu_cyrix.c.i": "unbraced",
     "arch_x86_kernel_cpu_transmeta.c.i": "Assembler messages",
     "arch_x86_kernel_doublefault_32.c.i": "control is not a compile-time constant expression",
