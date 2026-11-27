@@ -408,9 +408,6 @@ class AsmGenMixin(AsmSubMixin):
                 # drop the address answer and let the operand ride the
                 # {F} door (one materialize law, no second mechanism).
                 o.mem = None
-            if (o.mem is not None and o.sec == "in"
-                    and isinstance(o.expr, ast.Cast)):
-                o.mem = None   # W22 experiment: conversion rides the door
             if ci.cls == "p" and o.mem is not None \
                     and not self._asm_p_text_ok(o.expr):
                 # M4 W-O (MC 12690): 'p' carries the VALUE; a pointer
@@ -623,10 +620,14 @@ class AsmGenMixin(AsmSubMixin):
     def _asm_int_side(self, ty) -> bool:
         """Integer-side = not a float conversion (float arith is
         DEFERRED/storage-only in this subset, §1 row 14)."""
-        if isinstance(ty, ast.PointerType):
-            return True
+        if isinstance(ty, ast.PtrType):   # (AMENDED: ast has PtrType, not
+            return True                   # PointerType — the except-guard
+                                          # made every cast materialize,
+                                          # breaking the bit-preserving
+                                          # static law; x4 text caught it)
         return (isinstance(ty, ast.BuiltinType)
-                and ty.name not in ("float", "double"))
+                and not ty.name.startswith("float")
+                and "double" not in ty.name)
 
     def _asm_matable(self, e) -> bool:
         """{F} door test: does the operand need MATERIALIZATION because
