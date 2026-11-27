@@ -554,6 +554,28 @@ class AsmSubMixin:
                 m = _DIGRUN.match(t, j)
                 ref = ("num", int(m.group()))
                 j = m.end()
+            elif not ops:
+                # M4 W-AO {A2} (MC 12404.2.162 / card 12889): a not-in-table
+                # '%'+letter prints VERBATIM iff the statement has NO
+                # OPERANDS. W-AN sims measured gcc's scan scope (a13
+                # verbatim): with operands present "%eax" is gcc's `operand
+                # number missing after %-letter` rc1, while the zero-operand
+                # templates a01/a02/a03/a12/a16/a17 print RAW and reach gas
+                # rc0. So a zero-operand '%a' is not a modifier demand at
+                # all — it is a register mnemonic under a scanner that never
+                # ran (io_delay.c:43 `outb %al, $0x80`). This is the SHIPPED
+                # `%%` arm above extended to the not-in-table case (print
+                # `%`+char, consume no operand) — NOT a new table letter and
+                # not a new mechanism; gas still decides the fate of the
+                # text (a11 `nop %al`, a18 `%ae` stay BOTH-REFUSE, so the
+                # arm adds no acceptance beyond gcc's own). WITH OPERANDS
+                # the shipped §3.5 L3 LOUD below stands UNCHANGED: the GATE
+                # is the finding, and its absence measured LOOSE at
+                # a13/a19 (plant_a_ungate).
+                out.append(t[i])
+                out.append(t[i + 1])
+                i += 2
+                continue
             else:
                 self._err(n, "template escape '%{}' is not in the §3.5 "
                           "modifier table (L3: unknown modifier LOUD names "
