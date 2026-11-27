@@ -1317,6 +1317,12 @@ class TypeMap(CompatLawMixin):
             # §2.1 (M2): the literal's TYPE is the lexer's typed suffix/range
             # answer (hex may take unsigned early; decimal signed-first).
             return self._bt(n, n.itype)
+        if isinstance(n, ast.BcpDeferred):
+            # M4 W-AK (MC 12404.2.156): the deferred bcp answers int —
+            # the SAME §2.11 table answer as the shipped parse-time 0/1
+            # IntLit it replaces (the value is the ONLY difference, and
+            # codegen answers it where the choose arm is typed).
+            return self._bt(n, "int")
         if isinstance(n, ast.CharLit):
             return self._int(n)
         if isinstance(n, ast.FloatLit):

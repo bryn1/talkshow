@@ -14,6 +14,15 @@ choose-wall to the C0 LOUD refusal and MUST NOT accept — disarming the C0
 guard is the y27 silent re-armed (sims plant p2: ch05/ch09 go SILENT the
 moment the guard dies). These pins hold both halves: the accepts PAIR and
 the refusals STAY LOUD with the SHIFTED sentence.
+
+SUPERSEDED (the guard half) at M4 W-AK (MC 12404.2.156): the C0 refusal
+is REPLACED by the DEFERRAL (the parser hands codegen a BcpDeferred; the
+answer comes where the choose arm IS typed, guarded by the NEVER-ASSIGNED
++ CONST-INIT + NON-VOLATILE pairing guards — W-AJ sims card 12849 bj-
+family measured the SILENT-WRONG-BRANCH face of answering without them).
+The A-shapes t09/t10 RETARGETED BY NAME to run-PAIR; disarming the GUARDS
+is the new y27-class silent (the p4 plant pays it in the W-AK battery).
+The choose-control refusal (bj09 class) STAYS LOUD — the ceiling.
 """
 import os
 import subprocess
@@ -110,11 +119,14 @@ int main(void) {
 	       == 1 ? 25 : 24;
 }
 """, 25),
-    # --- THE GUARD LANE: the A shapes and y27 — LOUD, never silent ---
-    # y27 VERBATIM (sims ch05): gcc answers 3; blcc REFUSES LOUD (§2.11 x
-    # §2.6). The sims' plant p2 turned this row SILENT the moment the C0
-    # guard was disarmed — the row's whole purpose is to scream.
-    "t09-y27-c0-loud": ("""
+    # --- THE DEFERRAL LANE: y27 and the A-shape — RUN-PAIRED at W-AK ---
+    # RETARGETED BY NAME at M4 W-AK (MC 12404.2.156; teeth INVERTED,
+    # never dropped): these two rows pinned the C0 LOUD refusal — the
+    # deferred bcp answers AT CODEGEN now (the const-init never-assigned
+    # propagation; the W-Z "loud, never silent" posture was the STANDING
+    # posture until the typing-order answer shipped), so both RUN-PAIR.
+    # y27 VERBATIM (sims ch05): gcc answers 3.
+    "t09-y27-lands-at-wak": ("""
 int main(void) {
 	__auto_type x_1 = (unsigned long long)4;
 	int r = 0;
@@ -124,12 +136,11 @@ int main(void) {
 	if (sizeof(x_1) > 4) r += 2;
 	return r % 97;
 }
-""", ("loud", "constant only after")),
-    # the A-stream core (the jiffies.h:427 max-gate shape, sims ch09):
-    # under THIS commit the choose FOLDS (the wall MOVED) and the sentence
-    # SHIFTS to the C0 refusal — that SHIFT is the commit's own proof:
-    # typing landed, the bcp-constancy question remains the guard's.
-    "t10-a-shape-sentence-shift": ("""
+""", 3),
+    # the A-stream core (the jiffies.h:427 max-gate shape, sims ch09): the
+    # const __UNIQUE_ID folds through the pairing guards — gcc's r=9; the
+    # 400+9 exit truncates to 8 bits = 153 (the exit IS the answer).
+    "t10-a-shape-lands-at-wak": ("""
 int main(void) {
 	long delta = 23;
 	int r = ({ __auto_type __UNIQUE_ID_x_1 = (0L);
@@ -139,7 +150,7 @@ int main(void) {
 		? 9 : 8; });
 	return 400 + r;
 }
-""", ("loud", "constant only after")),
+""", 153),
 }
 
 

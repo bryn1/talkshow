@@ -22,6 +22,15 @@ typing-order law turns a loud wall into a wrong value"), so the honest
 repair-first move is the wall. The typing-order fold that answers the
 shape truthfully is the named W-Z lever.
 
+SUPERSEDED (the refusal posture) at M4 W-AK (MC 12404.2.156): the named
+typing-order law LANDED — the parse-time refusal became a DEFERRAL to
+codegen (a BcpDeferred node; the answer asked of the shipped `_fold_const`
+where the arm IS typed, plus the NEVER-ASSIGNED + CONST-INIT +
+NON-VOLATILE pairing guards). The y27 leg below RETARGETED BY NAME to the
+honest PAIR (blcc RUNS gcc's 3); the wrong-1/wrong-0 silences this file
+priced stay refused, now by the GUARDS (W-AJ card 12849 bj-family; the
+p4 guard-removal plant is their receipt).
+
 Accept cost measured, not hoped: 0 of the 466 accepted streams carry a
 `__builtin_choose_expr` inside a `__builtin_constant_p` argument (the
 294 corpus-wide sites all live in streams the §2.6 choose wall already
@@ -150,12 +159,18 @@ def test_bcp_folded_choose_arm_still_answers_1():
     assert brc == 0 and b == "3", (brc, b)
 
 
-def test_y27_typing_order_bcp_refuses_loud():
-    """The sims' y27 row: gcc rc0 exit=3; blcc must NOT rc0-exit-2
-    (that was the silent) — it refuses with the named seam."""
-    brc, err = _side(Y27, "wy0y27", "blcc")
-    assert brc != 0, "SILENT: compiled rc0 with no wall (tip behaviour)"
-    assert "__builtin_constant_p" in err and "typing-order" in err, err
-    assert "§2.11" in err and "§2.6" in err, err
+def test_y27_typing_order_bcp_lands_at_wak():
+    """The sims' y27 row, RETARGETED BY NAME at M4 W-AK (MC 12404.2.156;
+    teeth INVERTED, never dropped — the W-Y leg pinned the LOUD refusal
+    while the typing-order answer lived on another card): the deferred
+    bcp now answers AT CODEGEN where the arm IS typed (the const-init
+    never-assigned propagation, the honest pairing guard), so blcc RUNS
+    the gcc answer. The W-Y crime this shape priced — silent rc0 exit=2 —
+    stays refused, now by ANSWERING 3."""
+    brc, b = _side(Y27, "wy0y27", "blcc")
+    assert brc == 0, ("y27 must LAND at W-AK — rc=%d wall: %s"
+                      % (brc, b[:200]))
     grc, g = _side(Y27, "wy0y27", "gcc")
-    assert grc == 0 and g == "3", (grc, g)     # gcc's answer, recorded
+    assert grc == 0 and g == "3", (grc, g)
+    assert b == "3", ("SILENT divergence blcc %s vs gcc %s — the deferred "
+                      "answer or the propagation guard broke" % (b, g))

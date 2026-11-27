@@ -329,6 +329,16 @@ class LabelAddr(Node):
 
 
 @dataclass(frozen=True)
+class BcpDeferred(Node):
+    arg: Node                      # M4 W-AK (MC 12404.2.156): a
+    # '__builtin_constant_p' whose answer HANGS on a choose arm the
+    # parser could not type (§2.11 x §2.6 seam). The parser DEFERS —
+    # answers neither 0 nor 1; expr_codegen `_ex_bcpdeferred` asks the
+    # SHIPPED `_fold_const` where the arm IS typed (fold answers -> 1,
+    # fold refuses -> the honest 0). types.py answers int (§2.11 table).
+
+
+@dataclass(frozen=True)
 class Case(Node):
     value: int               # compile-time constant (§4)
     stmt: Optional[Node]

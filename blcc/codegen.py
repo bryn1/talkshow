@@ -547,7 +547,9 @@ class Codegen(TypeMap, ExprEmitter, DataEmitter, AsmGenMixin, InlinerMixin):
             self._inl_defer_fd = (
                 {p.name for p in fd.params if getattr(p, "name", "")}
                 if name in getattr(self, "_inl_defer", ()) else None)
-            lines = self._emit_func(fd)
+            self._wak_fd = fd                  # M4 W-AK BP (MC 12404.2.156):
+            lines = self._emit_func(fd)        #   the deferred bcp fold's
+            self._wak_fd = None                #   function view (write-walk)
             self._inl_defer_fd = _ai_saved
             if fd.inline_kind == "extern-inline":
                 # §2.8 gnu89: `extern inline` is an INLINE-ONLY

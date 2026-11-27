@@ -94,6 +94,126 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
     def _ex_intlit(self, n) -> None:
         self._imm(n.value)
 
+    def _ex_bcpdeferred(self, n) -> None:
+        # M4 W-AK LEVER-BP (MC 12404.2.156, sims bj-family): the DEFERRED
+        # bcp answer at CODEGEN, where the choose arm IS typed. A fold
+        # that ANSWERS means the expression IS a compile-time constant
+        # (bcp=1); a fold that REFUSES is gcc's own answer for
+        # non-constant expressions (bcp=0) — with the arm typed this is
+        # the HONEST 0, never the parse-time guess the shipped C0 guard
+        # refuses to make (the y27 wrong-0 twin row bj01 answers 2).
+        import dataclasses
+        from blcc.lexer import DiagError as _DE
+        v = None
+        try:
+            v = self._fold_const(n.arg, n)
+        except _DE:
+            v = None
+        if v is None:
+            # THE PROPAGATION HALF (W-Z's named "sema-re-order / bcp-
+            # PROPAGATION" family): a never-written const-init local
+            # substitutes into a DEFERRED COMPARISON SIDE and re-folds.
+            # The corpus shape is max_t's `(__UNIQUE_ID >= 0)`; bj02 is
+            # the pairing row: WITHOUT this half the corpus const shape
+            # answers the WRONG BRANCH SILENT (11/22) — WITH it, PAIR.
+            fd = getattr(self, "_wak_fd", None)
+            arg = n.arg
+            if fd is not None and isinstance(arg, ast.Binary) \
+                    and arg.op in ("<", ">", "<=", ">=", "==", "!="):
+                import blcc.ast as _A
+                subs = []
+                for side in (arg.left, arg.right):
+                    e = side
+                    while isinstance(e, ast.Cast):
+                        e = e.operand
+                    if isinstance(e, ast.Ident):
+                        c = self._wak_lconst(fd, e.name)
+                        if c is not None:
+                            subs.append((side, _A.IntLit(e.file,
+                                                          e.line, e.col,
+                                                          c, "int")))
+                if subs:
+                    rep = arg
+                    for side, lit in subs:
+                        for fld in dataclasses.fields(rep):
+                            if getattr(rep, fld.name) is side:
+                                rep = dataclasses.replace(rep, **{
+                                    fld.name: lit})
+                                break
+                    try:
+                        v = self._fold_const(rep, n)
+                    except _DE:
+                        v = None
+        self._imm(1 if v is not None else 0)
+
+    def _wak_lconst(self, fd, name):
+        # M4 W-AK LEVER-BP PAIRING GUARDS (load-bearing — {B}-alone is
+        # SILENT-WRONG-BRANCH; bj17 is the receipt): a name qualifies for
+        # the deferred substitution iff it has EXACTLY ONE Decl with a
+        # constant-foldable scalar init in THIS function, is NEVER
+        # WRITTEN again (no Assign/AssignOp/IncDec target — an assigned
+        # local's init is not its value: bj10/bj18 answer the honest 0),
+        # and is NOT VOLATILE-qualified:
+        #   VOLATILE GUARD (bj17 measured own hands) — a volatile-
+        #   qualified local with a constant init is NOT a compile-time
+        #   constant; gcc's bcp answers 0, answering 1 is the WRONG-1
+        #   crime the shipped C0 guard exists to refuse (the pre-guard
+        #   stub answered 4/3 SILENT — sims plant-hunting caught it).
+        # Never-assigned + const-init is what the ({ typeof(T) x = (K);
+        # ... }) statement-expr idiom guarantees; anything looser stays 0.
+        import dataclasses
+        from blcc.lexer import DiagError as _DE
+        cache = getattr(self, "_wak_lc", None)
+        if cache is None:
+            cache = self._wak_lc = {}
+        per = cache.get(id(fd))
+        if per is None:
+            per = cache[id(fd)] = {}
+        if name in per:
+            return per[name]
+        decls = []
+        writes = set()
+        stack = [fd.body]
+        while stack:
+            x = stack.pop()
+            if not dataclasses.is_dataclass(x):
+                continue
+            if isinstance(x, ast.VarDecl):
+                decls.append((x.name, x))
+            if isinstance(x, (ast.Assign, ast.AssignOp)) \
+                    and isinstance(getattr(x, "target", None),
+                                   ast.Ident):
+                writes.add(x.target.name)
+            if isinstance(x, ast.IncDec) \
+                    and isinstance(getattr(x, "operand", None),
+                                   ast.Ident):
+                writes.add(x.operand.name)
+            for f in dataclasses.fields(x):
+                val = getattr(x, f.name, None)
+                for y in (val if isinstance(val, (tuple, list))
+                          else (val,)):
+                    if dataclasses.is_dataclass(y):
+                        stack.append(y)
+        ans = None
+        hits = [vd for nm, vd in decls if nm == name]
+        if len(hits) == 1 and name not in writes \
+                and hits[0].init is not None:
+            _ty0 = getattr(hits[0], "type", None)
+            _vol = False
+            while isinstance(_ty0, ast.Qualified):
+                if _ty0.qual == "volatile":
+                    _vol = True
+                _ty0 = _ty0.inner
+            if not _vol:
+                try:
+                    v = self._fold_const(hits[0].init, hits[0])
+                    if isinstance(v, int):
+                        ans = v
+                except _DE:
+                    ans = None
+        per[name] = ans
+        return ans
+
     def _ex_charlit(self, n) -> None:
         self._imm(n.value - 256 if n.value > 127 else n.value)
 

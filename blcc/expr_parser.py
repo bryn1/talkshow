@@ -426,14 +426,20 @@ class ExprParser:
                         self.fold_truthy is not None
                         and self.fold_truthy(args[0]) is not None)
                     if not known and saw_choose:
-                        raise DiagError(
-                            "sema", t.file, t.line, t.col,
-                            "'__builtin_constant_p' control is constant "
-                            "only after a '__builtin_choose_expr' arm is "
-                            "typed, which the parse-time fold cannot do "
-                            "(§2.11 x §2.6 — the typing-order seam; "
-                            "REFUSING LOUD, not answering 0)",
-                            "__builtin_constant_p")
+                        # M4 W-AK LEVER-B (MC 12404.2.156; sims card
+                        # 12849 law rows bj01-bj18): DEFER, do not answer
+                        # here. The C0 refusal's OWN reason is that a
+                        # PARSE-time answer hangs on an UNTYPED arm (the
+                        # y27 wrong-0). At codegen the arm IS typed —
+                        # the answer moves to where the fold can happen
+                        # (one deferred node, one handler; NOT a second
+                        # constant-propagation engine beside `_fold_const`
+                        # — sims §3 reuse law). The parse-time wrong-0
+                        # and the parse-time guess both stay REFUSED: this
+                        # arm answers NOTHING at parse.
+                        node = ast.BcpDeferred(t.file, t.line, t.col,
+                                               args[0])
+                        continue
                     node = ast.IntLit(t.file, t.line, t.col, 1 if known
                                       else 0, "int")
                     continue
