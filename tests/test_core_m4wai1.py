@@ -276,26 +276,23 @@ def test_wai_door_lands_the_gained_13(stream, tmp_path):
 @pytest.mark.skipif(not (os.environ.get("KERNEL_510")
                          and os.path.isdir(STREAMS)),
                     reason="kernel tier + pinned streams corpus required")
-def test_wai_defkeymap_rewalls_at_new_sentence(tmp_path):
-    # the 14th family stream: the asm-'i' wall DIES and the stream re-walls
-    # ONE door later — the door does NOT own the §4 globals-initializer
-    # law (brief: NAMED, not closable here). The leg pins the NEW sentence
-    # VERBATIM; if the §4 door ever opens, this leg flips and the sentence
-    # is the retarget point.
+def test_wai_defkeymap_lands_at_wak(tmp_path):
+    # RETARGETED BY NAME at M4 W-AK (teeth INVERTED, never dropped — the
+    # W-AI leg pre-named this exact flip: "if the §4 door ever opens, this
+    # leg flips"). The §4 globals-initializer door (W-AK lever A, card
+    # 12873) opens AT :11592:11 and defkeymap now LANDS: the 14th family
+    # stream of the W-AI walk is CLOSED. If the §4 door ever REGRESSES the
+    # rc0 assertion goes red and the first wall names the regression.
     clean = _clean_i(
         os.path.join(STREAMS, "drivers_tty_vt_defkeymap.c.i"), tmp_path,
         "waikey")
+    o = tmp_path / "waikey.o"
     r = subprocess.run([sys.executable, "-m", "blcc", "-c", str(clean),
-                        "-o", str(tmp_path / "waikey.o")],
+                        "-o", str(o)],
                        capture_output=True, text=True,
                        env=dict(os.environ, PYTHONPATH=REPO), cwd=REPO)
     first = next((ln for ln in (r.stdout + r.stderr).splitlines()
                   if ln.strip()), "(no output)")
-    assert r.returncode != 0, "defkeymap must NOT accept (the §4 wall is " \
-                              "another card's law)"
-    assert "global initializer must be an integer/char constant or " \
-           "address-of-global" in first, \
-        "defkeymap moved off its NEW re-wall sentence: " + first[:200]
-    assert "constraint 'i' operand" not in first, \
-        "the asm-'i' wall survived at defkeymap — the door missed it: " \
-        + first[:200]
+    assert r.returncode == 0, \
+        "defkeymap must LAND at W-AK (the §4 door); first wall: " + first[:200]
+    assert o.exists() and o.stat().st_size > 0, "empty object"

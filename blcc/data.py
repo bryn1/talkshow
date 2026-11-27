@@ -176,6 +176,104 @@ class DataEmitter:
                 return v
         except _DE:
             pass
+        # M4 W-AK LEVER-A (MC 12404.2.156, sims card 12849 law rows
+        # aj01-aj18): the §4 address-constant CLOSURE under +- and the
+        # DECAY half, at THIS one home and AFTER every shipped fold above
+        # answered (zero collateral: streams that already fold never reach
+        # an arm). Corpus shapes: the defkeymap `func_buf + 0`
+        # (drivers_tty_vt_defkeymap.c.i:11592:11), `k8nops + 1`
+        # (alternative.c), `(unsigned long)&init_stack + sizeof(init_stack)
+        # - 0` (process.c .sp1), the array-decay `units_10[1]`
+        # (string_helpers) and `init_files.close_on_exec_init` (fs_file —
+        # an unsigned long[] member). Produced value = the SAME
+        # ("lab", sym[+off]) the shipped W-V _fold_addr_member law
+        # (e25/e26) emits — NO new representation, NO new pass. Scalar
+        # rvalues, struct rvalues, lab+lab and lab+var keep the §4 LOUD
+        # (gcc's own not-constant twins, measured aj05/aj09/aj11).
+        from blcc.lexer import DiagError as _DE
+
+        def _aj_cv(x):
+            try:
+                return self._const(x, ctx)
+            except _DE:
+                return None
+        if isinstance(n, ast.Binary) and n.op in ("+", "-"):
+            lv, rv = _aj_cv(n.left), _aj_cv(n.right)
+            if n.op == "-" and isinstance(lv, tuple) \
+                    and isinstance(rv, tuple):
+                # gcc law (aj10/aj10b/aj10c measured own hands): the
+                # DIFFERENCE of two address constants IS constant when
+                # SAME-SYMBOL and is NOT when crossing symbols (gcc rc1 —
+                # stays LOUD, the arm does not fire).
+                s1, _, o1 = lv[1].partition("+")
+                s2, _, o2 = rv[1].partition("+")
+                if s1.isidentifier() and s1 == s2:
+                    try:
+                        return int(o1 or 0) - int(o2 or 0)
+                    except ValueError:
+                        pass
+            lab, delta, labx = None, 0, None
+            if isinstance(lv, tuple) and isinstance(rv, int):
+                lab, delta = lv, (rv if n.op == "+" else -rv)
+                labx = n.left
+            elif n.op == "+" and isinstance(rv, tuple) \
+                    and isinstance(lv, int):
+                lab, delta = rv, lv
+                labx = n.right
+            if lab is not None:
+                # ELEMENT-SIZE SCALE (the SATURATING-PAIR law, sims p1):
+                # `tab + 1` on an 8-byte-element array means +8 BYTES.
+                # The +0 twins (aj01) HIDE a missing scale; the +N twins
+                # (aj03/aj15) EXPOSE it as a SILENT, never a wall.
+                # Integer-typed lab views (the .sp1 `(unsigned long)`
+                # idiom) are BYTES already — scale 1. An unproven type
+                # keeps the §4 LOUD (safe direction).
+                try:
+                    ety = self._ty(labx)
+                    while isinstance(ety, ast.Qualified):
+                        ety = ety.inner
+                    if isinstance(ety, ast.ArrayType):
+                        scale = self._size(ety.inner, labx)
+                    elif isinstance(ety, ast.PtrType):
+                        scale = self._size(ety.inner, labx)
+                    elif isinstance(ety, ast.FuncType):
+                        scale = 1        # gnu89 sizeof(function)=1
+                    elif isinstance(ety, ast.BuiltinType):
+                        scale = 1        # integer byte-view idiom
+                    else:
+                        scale = None
+                except Exception:
+                    scale = None
+                if scale:
+                    sym, _sep, extra = lab[1].partition("+")
+                    if sym.isidentifier():
+                        try:
+                            cur = (int(extra) if extra else 0) + \
+                                delta * scale
+                        except ValueError:
+                            cur = None
+                        if cur is not None:
+                            return ("lab", sym if cur == 0
+                                    else "{}+{}".format(sym, cur))
+        if isinstance(n, (ast.Ident, ast.Select, ast.Index)):
+            # DECAY half: an ARRAY-typed rvalue of a global object IS an
+            # address constant (array-to-pointer in a constant expr). A
+            # SCALAR or STRUCT rvalue does not fold — the §4 LOUD stands
+            # (gcc's own 'initializer element is not constant' twin, aj05).
+            try:
+                ty = self._ty(n)
+                while isinstance(ty, ast.Qualified):
+                    ty = ty.inner
+                if isinstance(ty, ast.ArrayType):
+                    if isinstance(n, ast.Ident):
+                        if n.name in self.globals:
+                            return ("lab", n.name)
+                    else:
+                        v = self._fold_addr_member(n)
+                        if v is not None:
+                            return v
+            except Exception:
+                pass                     # unproven shape: LOUD stands
         if _has_stmtexpr(n):
             self._err(n, "braced-group within expression allowed only "
                       "inside a function (§2.4d)", "statement expression")
