@@ -37,9 +37,17 @@ F-a-pair     (MISPIN fixed): bare fixed a-pair is SUPPORTED both sides
   div64 shape). The REAL wall the orchestrator reproduced is an IMMEDIATE
   under a memory-capable input constraint: `idivq %4` + "rm"(3L) → blcc
   'sema: not an addressable l-value (§4)' while gcc rc0 (materializes).
-  Census: 0 such sites in 369/369 .i streams (input constraint with 'm'
-  + constant operand) — so the posture is LOUD-pinned, with the census
-  named, per the work order.
+  Census AT THAT CARD: 0 such sites in 369/369 .i streams (input
+  constraint with 'm' + constant operand) — the posture was
+  LOUD-pinned on the ZERO-REACH branch, with the census named, per the
+  work order. SUPERSEDED (M4 W-AM, MC 12404.2.159 / card 12885): the
+  zero-reach premise FALSIFIED at the 706-stream era — the frontier
+  family census found a LIVE site (arch/x86/mm/extable.c, the fold face
+  `(5*8+3)` in a memory-constraint slot; family EXACTLY {signal,
+  extable, vdso32}), and gcc's materialize posture is the LAW the door
+  now answers (run-pair leg retargeted BY NAME below; the old
+  loud-pinned leg retired with this paragraph — grep-zero for its
+  name).
 
 FIX-F2 (MC 12506, gate m3-test-verdict-c2 back-edge, all re-measured
   gcc-11.4 gnu89 -O0 AND -Os this card):
@@ -287,17 +295,21 @@ asm("idivq %4" : "=a" (q), "=d" (rem) : "a" (100L), "d" (0L), "rm" (n));
 """, "q == 14 && rem == 2")
 
 
-def test_immediate_in_rm_is_loud_with_census_pinned():
-    # The orchestrator's repro, LOUD-PINNED (census: 0 live sites over
-    # 369/369 .i streams — inputs with an 'm'-capable constraint AND a
-    # constant operand; see the parse in evidence m3-fix-f1.log). gcc
-    # rc0 (materializes $3 into a reg/memory); blcc stays LOUD per the
-    # work order's zero-reach branch — this leg pins the WALL and the
-    # message, never a silent wrong answer.
-    loud('int main(void){unsigned long q, rem;'
-         'asm("idivq %4" : "=a" (q), "=d" (rem) : "a" (100L), "d" (0L),'
-         ' "rm" (3L));return 0;}',
-         "f1rim", "not an addressable l-value", "sema")
+def test_immediate_in_rm_materializes_with_census_pinned():
+    # RETARGETED BY NAME at M4 W-AM (card 12885; SUPERSEDED paragraph in
+    # this file's header): the zero-reach census premise is DEAD — the
+    # 706-era family census found the LIVE extable.c site and the door
+    # (asmgen._asm_addr_emit, ONE hunk) answers the shape the way gcc
+    # does: MATERIALIZED converted value (park + lea of the temp, the
+    # shipped L3 `_slot` idiom). This leg is now a RUN-PAIR witness of
+    # that law — "rm" + constant runs q==3 on BOTH sides; it goes RED
+    # if the door dies back into the wall (rc2) OR answers the wrong
+    # bits (q!=3). The census stays named: family EXACTLY {signal,
+    # extable, vdso32} at card 12885, gained EXACT-2, vdso32 re-walls
+    # at the M3-support sentence (NAMED, not chased).
+    _cc_run("f1rim", """unsigned long q = 0;
+asm("movq %1, %0" : "=r" (q) : "rm" (3L));
+""", "q == 3")
 
 
 # ------------------------------------------ FIX-F2: digit-tied OUTPUTS --

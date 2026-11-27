@@ -543,8 +543,53 @@ class AsmGenMixin(AsmSubMixin):
         if o.ci.cls == "p" and not (isinstance(e, ast.Unary)
                                     and e.op == "&"):
             self._emit_expr(o.expr)      # the VALUE is the address (S2 p)
+        elif o.sec == "in" and self._asm_matable(o.expr):
+            # M4 W-AM {F} THE FRONTIER (MC 12404.2.159 / card 12885; sims
+            # law 12879 §1): the inspect-vs-emit asymmetry WAS the bug —
+            # the casts were stripped to CHOOSE the route, then _emit_addr
+            # was called with the cast ON. A memory operand on a
+            # NON-addressable INPUT (a cast of any width — (u16)regs->ss,
+            # signal.c:64 — or a constant-foldable rvalue — -1, (5*8+3))
+            # is answered by gcc with a MATERIALIZED value: the operand's
+            # memory IS the temp holding the converted value, NOT the
+            # source object's address (the widening twin wl12 measures
+            # why: the object leaks live bytes beside the window,
+            # 77-vs-52 SILENT — plant p2). The door rides the SHIPPED L3
+            # materialize idiom — the same `_slot` + park that
+            # `_asm_eval_in` uses for reg-class inputs (REUSE: no second
+            # store engine, no new label machinery). Addressable operands
+            # keep riding `_emit_addr` UNTOUCHED (zero collateral by
+            # construction). Non-inputs never take the door: a temp
+            # cannot be a store target (the output face wl24/wl25 is the
+            # NAMED pre-existing LOOSE gap — neither fixed nor widened
+            # here).
+            self._emit_expr(o.expr)
+            off = self._slot(self._longty(n), n)
+            self._e("movq %rax, {}(%rbp)".format(off))
+            self._e("leaq {}(%rbp), %rax".format(off))
         else:
             self._emit_addr(o.expr)      # address of the lvalue
+
+    def _asm_matable(self, e) -> bool:
+        """{F} door test: does the operand need MATERIALIZATION because
+        the shipped address law refuses it? A Cast (any operand — the
+        conversion is the answer) or a constant-foldable rvalue (the
+        '-'/'+'/literal face) answers True; the addressable shapes and the
+        value-as-address family `_emit_addr` already serves answer False
+        and stay UNTOUCHED (wl06: `&(int)x` is gcc-REFUSED — widening
+        _emit_addr there would be LOOSE by the oracle, not a fix)."""
+        if isinstance(e, ast.Cast):
+            return True
+        if isinstance(e, (ast.Ident, ast.Select, ast.Index, ast.CompoundLit,
+                          ast.Assign, ast.StmtExpr, ast.Call, ast.StrLit,
+                          ast.Cond, ast.Sizeof)):
+            return False
+        if isinstance(e, ast.Unary):
+            return e.op != "*"
+        if isinstance(e, (ast.Binary, ast.IntLit, ast.CharLit,
+                          ast.BcpDeferred)):
+            return True
+        return False
 
     def _asm_scratch(self, live, at) -> str:
         for r in _SCRATCH:
