@@ -191,7 +191,7 @@ def _side(name, src, which):
                              timeout=60).returncode
 
 
-def _asm_text(name, src):
+def _asm_text(name, src, want_rc=0):
     os.makedirs(TMP, exist_ok=True)
     c = os.path.join(TMP, "text_%s_%d.c" % (name, os.getpid()))
     with open(c, "w") as fh:
@@ -199,7 +199,7 @@ def _asm_text(name, src):
     r = subprocess.run(["python3", "-m", "blcc", "-c", "--emit-asm", c,
                         "-o", c + ".o"], capture_output=True, text=True,
                        env=dict(os.environ, PYTHONPATH=REPO), cwd=REPO)
-    assert r.returncode == 0, str(r.stderr)[:300]
+    assert r.returncode == want_rc, str(r.stderr)[:300]
     return r.stdout
 
 
@@ -270,13 +270,20 @@ COEXIST_SRC = '''int answer(void) {
 
 
 def test_wao_pct_arm_coexists_with_the_raw_arm():
-    # ONE zero-operand template carrying BOTH arms: `%%al` prints `%al` (the
-    # shipped `%%` arm) and `%cl` prints raw (the gated arm). TEXT law — the
-    # oracle side of this compound shape is the NAMED pre-existing face in the
-    # header, so this leg pins the text, never an exit code.
-    text = _asm_text("coexist", COEXIST_SRC)
-    assert "movb $15, %al" in text, ("the shipped `%%` arm moved:\n"
-                                     + text[:600])
+    # ONE zero-operand template carrying BOTH arms.
+    # SUPERSEDED paragraph (M4 W-AQ {C-SCAN}, MC 12404.2.165 / card 12898):
+    # this leg was authored when a zero-operand `%%` still TRANSLATED (print
+    # `%al`); the sims' c-table measured that posture LOOSE (b05/c04: gcc
+    # rc1 vs blcc rc0) and the scan-scope law moved it — an EMPTY constraint
+    # list prints the template RAW and gas owns the verdict, so the compound
+    # now prints `%%al` verbatim too and the statement ends at gas (rc3;
+    # tests/test_core_m4waq2.py rows c04 + coexistence pin the posture and
+    # this same text). Retargeted BY VALUE, same TEXT-law doctrine: both
+    # arms print VERBATIM, the leg still pins text, never an exit code.
+    text = _asm_text("coexist", COEXIST_SRC, want_rc=3)
+    assert "movb $15, %%al" in text, ("the zero-operand `%%` arm no longer "
+                                      "prints raw (card 12898 law):\n"
+                                      + text[:600])
     assert "addb %cl, %al" in text, ("the gated raw arm did not print `%cl` "
                                      "verbatim:\n" + text[:600])
 
@@ -305,10 +312,20 @@ def test_wao_with_operand_text_golden_untouched():
 def test_wao_one_home_the_gate_is_one_site():
     src = open(os.path.join(REPO, "blcc", "asmsub.py")).read()
     assert src.count("def _asm_sub") == 1, "two substitution machines"
-    assert src.count("elif not ops:") == 1, (
-        "the zero-operand gate is not ONE site — a second gate is the second "
-        "mechanism this law forbids")
+    # SUPERSEDED paragraph (M4 W-AQ {C-SCAN}, MC 12404.2.165 / card 12898):
+    # the ONE-site law never changed IN KIND — only WHICH site is the one
+    # gate: the W-AO ops-only `elif not ops:` was RETARGETED (not twinned)
+    # to the whole-constraint-list scan gate `_scan`, so the one-site
+    # assertions below now count THAT token. The count-law stands; the
+    # token it counts was retargeted BY VALUE.
+    assert src.count("_scan = bool(ops)") == 1, (
+        "the scan-scope gate is not ONE site — a second scan computation is "
+        "the second mechanism this law forbids")
+    assert src.count("elif not _scan:") == 1, (
+        "the never-scanned arm is not ONE site")
+    assert "elif not ops:" not in src, (
+        "the retired ops-only gate token is alive beside the scan gate")
     assert 'if nx in "bwqhkclPs":' in src, (
         "the §3.5 modifier table changed: this fix adds NO new letter")
-    assert src.count('out.append("%")') == 1, (
-        "the shipped `%%` verbatim arm must stay the one arm this fix mirrors")
+    assert src.count("if _scan:") == 1, (
+        "the `%%` arm must ride the ONE scan gate, not a second condition")

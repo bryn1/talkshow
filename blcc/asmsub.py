@@ -511,6 +511,17 @@ class AsmSubMixin:
         i = 0
         nops = len(ops)
         t = tmpl
+        # M4 W-AQ {C-SCAN} (MC 12404.2.165 / card 12898): ONE scan-scope
+        # gate for the WHOLE constraint list. gcc 11.4 REC measured at the
+        # tip bytes (sims §4, census-paid): CLOBBERS open the %-machinery
+        # (c10 PAIR; c15 `%al`+memory LOOSE under the ops-only gate) and
+        # asm-goto LABELS open it (c17 PAIR; c18 LOOSE). EMPTY list = NO
+        # machinery: the template prints RAW and gas decides (c01/c03/c04/
+        # c06 `%%al` raw -> gas refuses; c07 `%al` raw PAIR). This gate
+        # REPLACES the W-AO ops-only gate on BOTH shipped arms — two hunks,
+        # one law, one scan-site (the SCOPE plant legislates the law).
+        _scan = bool(ops) or bool(getattr(n, "clobbers", None)) \
+            or bool(getattr(n, "labels", None))
         by_name = {o.node.name: o for o in ops if o.node.name}
         pct_id = None                    # %=: ONE id per asm STATEMENT
         while i < len(t):
@@ -521,7 +532,16 @@ class AsmSubMixin:
                 continue
             nx = t[i + 1] if i + 1 < len(t) else ""
             if nx == "%":                # §3.5: %% → % (0 $-escapes needed)
-                out.append("%")
+                # M4 W-AQ {C-SCAN}: the shipped %% translation rides the
+                # SAME scan-scope law as the stray-letter arm — with an
+                # EMPTY constraint list gcc prints `%%` RAW and gas
+                # decides (b05/c01 family: unconditional translation there
+                # was LOOSE, blcc rc0 vs gcc rc1 `bad register name`).
+                if _scan:
+                    out.append("%")
+                else:
+                    out.append("%")
+                    out.append("%")
                 i += 2
                 continue
             if nx == "=":                # §3.5 %= — gcc-11.4 law, measured
@@ -554,24 +574,30 @@ class AsmSubMixin:
                 m = _DIGRUN.match(t, j)
                 ref = ("num", int(m.group()))
                 j = m.end()
-            elif not ops:
+            elif not _scan:
                 # M4 W-AO {A2} (MC 12404.2.162 / card 12889): a not-in-table
-                # '%'+letter prints VERBATIM iff the statement has NO
-                # OPERANDS. W-AN sims measured gcc's scan scope (a13
-                # verbatim): with operands present "%eax" is gcc's `operand
-                # number missing after %-letter` rc1, while the zero-operand
-                # templates a01/a02/a03/a12/a16/a17 print RAW and reach gas
-                # rc0. So a zero-operand '%a' is not a modifier demand at
-                # all — it is a register mnemonic under a scanner that never
-                # ran (io_delay.c:43 `outb %al, $0x80`). This is the SHIPPED
+                # '%'+letter prints VERBATIM iff the scanner never ran. W-AN
+                # sims measured gcc's scan scope (a13 verbatim): with the
+                # machinery RUNNING "%eax" is gcc's `operand number missing
+                # after %-letter` rc1, while the never-scanned templates
+                # a01/a02/a03/a12/a16/a17 print RAW and reach gas rc0. So a
+                # never-scanned '%a' is not a modifier demand at all — it
+                # is a register mnemonic under a scanner that never ran
+                # (io_delay.c:43 `outb %al, $0x80`). This is the SHIPPED
                 # `%%` arm above extended to the not-in-table case (print
-                # `%`+char, consume no operand) — NOT a new table letter and
-                # not a new mechanism; gas still decides the fate of the
-                # text (a11 `nop %al`, a18 `%ae` stay BOTH-REFUSE, so the
-                # arm adds no acceptance beyond gcc's own). WITH OPERANDS
-                # the shipped §3.5 L3 LOUD below stands UNCHANGED: the GATE
-                # is the finding, and its absence measured LOOSE at
-                # a13/a19 (plant_a_ungate).
+                # `%`+char, consume no operand) — NOT a new table letter
+                # and not a new mechanism; gas still decides the fate of
+                # the text (a11 `nop %al`, a18 `%ae` stay BOTH-REFUSE, so
+                # the arm adds no acceptance beyond gcc's own).
+                # SUPERSEDED paragraph (M4 W-AQ {C-SCAN}, MC 12404.2.165 /
+                # card 12898): "iff the statement has NO OPERANDS" was the
+                # ops-only reading of the scan scope; the sims' c-table
+                # measured it FALSE TWICE (c15 raw letter + memory clobber
+                # LOOSE, c18 + asm-goto LABELS LOOSE): the scope is the
+                # WHOLE constraint list, so this arm now rides `_scan` (the
+                # ONE gate computed above). WITH-list the shipped §3.5 L3
+                # LOUD below stands UNCHANGED: the GATE is still the
+                # finding (plants a_ungate/c_ungate/scope_labels NAMED RED).
                 out.append(t[i])
                 out.append(t[i + 1])
                 i += 2
