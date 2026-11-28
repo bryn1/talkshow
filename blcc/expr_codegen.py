@@ -2033,6 +2033,19 @@ class ExprEmitter(MemFoldMixin, I128Mixin):
         scalar wrap, as _ex_binary's pointer path does). GNU `a ?: b`
         keeps TEST's own value — never re-evaluated."""
         ty = self._decay(self._ty(n))
+        if (isinstance(ty, ast.BuiltinType) and ty.name == "void"
+                and not self._discarded_parent):
+            # M4 W-AQ {A2-TERN} USE-HOME (MC 12404.2.165 / card 12898): a
+            # VOID-typed conditional used AS A VALUE speaks the SHIPPED
+            # §2.4c sentence — the SAME law `_ex_stmtexpr` speaks for
+            # `({;})` — keyed on the ONE W-V discard view: only the
+            # statement dispatch and the comma inheritance law drop a
+            # value. Named honest over-refusals vs gcc (sims t07/t16;
+            # corpus volume 1 = lib_iov_iter, NAMED): return of a void
+            # ternary; a void ternary discarded in a statement-expression
+            # group body.
+            self._err(n, "void value not ignored as it ought to be (§1c)",
+                      "?:")
         if is_i128(ty):
             self._err(n, "a 128-bit conditional arm is not in the subset "
                       "(§5 — mirrors the struct-arm wall)", "?:")

@@ -1497,9 +1497,14 @@ class TypeMap(CompatLawMixin):
         * both arms the same type -> that type (scalars, pointers,
           structs — sizeof(c?s1:s2)==4 folds; the §5 struct-VALUE wall
           stops only the RUNTIME arm in codegen);
-        * void arms: BOTH void -> void (statement shape, gcc rc0); a void
-          arm mixed with a value arm -> LOUD BOTH sides (gcc: "'void'
-          value not ignored as it ought to be", rc1);
+        * void arms (M4 W-AQ {A2-TERN} retarget, MC 12404.2.165 / card
+          12898): ANY void arm -> the conditional answers `void`. BOTH
+          void is the statement shape (gcc rc0); a MIXED void arm is RUN
+          where the value is DISCARDED (t01/t02/t08/t09/t17 exit-encoded
+          at gcc 11.4 REC) and REFUSED AT THE USE — the shipped §2.4c
+          sentence at the `_ex_cond` use-home (t04/t05/t06/t15/t18/t20
+          BOTH-REFUSE, gcc rc1 "void value not ignored as it ought to
+          be"); the refusal moved homes, it did not double;
         * pointer arms: void* + T* -> void* (C11 6.5.15p6); T* + a NULL
           POINTER CONSTANT (folded 0) -> T*; two pointers -> the FIRST
           arm's type (gcc WARNS on incompatibility, rc0, and the
@@ -1516,9 +1521,16 @@ class TypeMap(CompatLawMixin):
         lv = isinstance(lt, ast.BuiltinType) and lt.name == "void"
         rv = isinstance(rt, ast.BuiltinType) and rt.name == "void"
         if lv or rv:
-            if not (lv and rv):
-                self._err(n, "'?:' with one void operand is 'void value "
-                          "not ignored' (§1c measured: gcc rc1)", "?:")
+            # M4 W-AQ {A2-TERN} (MC 12404.2.165 / card 12898): the SHIPPED
+            # both-void home EXTENDS to a MIXED void arm — the conditional
+            # answers `void` (design truth .tmp/evidence/m4-wap-sims.md §2,
+            # census-paid: gcc 11.4 REC RUNS the one-void `?:` in
+            # discardable positions — t01/t02/t08/t09/t13/t14/t17 — and
+            # refuses the VALUE at the USE, t04/t05/t06/t15/t18/t20
+            # BOTH-REFUSE). The old LOUD here sat at the WRONG HOME; the
+            # refusal is the shipped §2.4c sentence at the `_ex_cond`
+            # use-home — NOT a new error family, NOT a second cond-path
+            # (the HOME plant legislates that).
             return self._bt(n, "void")
         ls = isinstance(lt, ast.StructType)
         rs = isinstance(rt, ast.StructType)
