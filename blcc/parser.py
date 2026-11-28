@@ -2701,6 +2701,25 @@ class Parser(ParseFoldMixin, AsmParseMixin, CompatLawMixin):
                 if comma:
                     continue
                 break
+            if (not at_file and not is_static and not is_extern
+                    and not isinstance(ty, ast.ArrayType)):
+                # M4 W-AS COMMIT-1 (MC 12404.2.168 / card 12901): C 6.2.1p6 —
+                # the scope of an identifier begins JUST AFTER its
+                # declarator, so a plain local object name IS visible in its
+                # own initializer. The timer.c:1832 §2.13 frontier is the
+                # from_timer/container_of family spelling
+                # __builtin_offsetof(typeof(*VAR), m) inside VAR's OWN
+                # initializer: W-K's typeof materialize in resolve_offsetof
+                # cannot see VAR while the define() home below runs AFTER
+                # this parse. ONE hunk at the EXISTING define() home; the
+                # shipped resolve_offsetof fold needs NOTHING (a second
+                # offsetof path is the HOME plant's RED). The gate EXCLUDES
+                # static locals (the shipped collision law at the define
+                # home READS the scope before the name exists), externs
+                # (the §2.8 W-U defer seam asks lookup(name) is None), file
+                # scope and array declarators (the unsized-[] §4 posture
+                # stands) — every exclusion rides a RED plant.
+                self.define(name, ("var", ty), pos)
             init = self.parse_initializer() if self.s.accept_punct("=") else None
             if init is not None:
                 # M4 W-T COMMIT-1: the §1 row 11 decl-position unwrap
